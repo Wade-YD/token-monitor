@@ -1,0 +1,8 @@
+48ac2b8 fix(zai): hide the idle cash row behind an active coding plan
+ec477de fix(edge): keep a docked window revealed while the user resizes it
+4688fee fix(edge): finalize edge auto-hide (startup, strip width, resize sync, opt-in debug)
+6488c3b fix(edge): contain a native setPosition rejection instead of crashing
+c229c3f fix(edge): guard geometry, expire the in-flight marker, single reconciler
+9da4de1 fix(edge): add a slow watchdog so the window can always re-hide
+56bd66d fix(edge): keep the cursor poll alive so the window can re-hide
+11a3e6e feat(edge): add edge auto-hide window mode (rebased onto v0.57.0)
