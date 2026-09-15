@@ -1465,7 +1465,7 @@ function restoredBounds() {
 let persistBoundsTimer = null;
 let floatingBubbleAutoCollapseTimer = null;
 const floatingBubbleState = { collapsed: false, side: null, collapsedBounds: null, expandedBounds: null, suppressNextCollapse: false, contentSize: null };
-const edgeAutoHideState = { hidden: false, side: null, expandedBounds: null, hiddenBounds: null, animatingUntil: 0, desired: null, guardTripped: false, geometryReady: false, nativeRejectStreak: 0, collapseTimer: null, pollTimer: null };
+const edgeAutoHideState = { hidden: false, side: null, expandedBounds: null, hiddenBounds: null, animatingUntil: 0, desired: null, guardTripped: false, geometryReady: false, nativeRejectStreak: 0, lastResizeAt: 0, collapseTimer: null, pollTimer: null };
 let mainWindowChrome = { collapsedFloatingBubble: false };
 let mainWindowReplacementEpoch = 0;
 let mainWindowReplacementTask = Promise.resolve();
@@ -1729,6 +1729,16 @@ function stopEdgeAutoHideTimers() {
 
 function edgeReducedMotion() {
   return motionPreferenceApi.shouldReduceMotion(settings?.reduceMotion, nativeTheme.shouldReduceMotion);
+}
+
+// While the user is grabbing an edge to resize, the window must never fold
+// back under their hand. Electron exposes no "a native resize drag is active"
+// API, so resize activity is observed through the resize events: a grace window
+// after the last one vetoed every collapse arming/firing.
+const EDGE_RESIZE_GRACE_MS = 700;
+
+function edgeResizeGraceActive() {
+  return Date.now() - edgeAutoHideState.lastResizeAt < EDGE_RESIZE_GRACE_MS;
 }
 
 // ---- Edge geometry guard -------------------------------------------------
@@ -2031,9 +2041,18 @@ function startEdgeCursorPolling() {
     const dockSide = side || edgeAutoHideApi.edgeSide(bounds, display, process.platform);
     if (!dockSide) { clearEdgeCollapseTimer(); return; }
     const docked = edgeAutoHideApi.edgeSnapToBounds(bounds, dockSide, display, process.platform);
-    if (edgeAutoHideApi.edgeCursorInExpandedBounds(cursor, docked)) {
+    // A cursor grabbing a resize border sits on the Win32 outer frame, OUTSIDE
+    // the Electron rect — without the interaction margin the window folded
+    // back up mid-resize, every single time.
+    if (edgeAutoHideApi.edgeCursorInExpandedBounds(cursor, docked, edgeAutoHideApi.EDGE_INTERACTION_MARGIN_PX)) {
       clearEdgeCollapseTimer();
       edgeAutoHideState.desired = 'revealed';
+      return;
+    }
+    if (edgeResizeGraceActive()) {
+      // Resizing was seen moments ago: the cursor may have drifted past the
+      // margin while the user still holds an edge. Never arm a collapse here.
+      clearEdgeCollapseTimer();
       return;
     }
     if (!edgeAutoHideState.collapseTimer) {
@@ -2041,6 +2060,10 @@ function startEdgeCursorPolling() {
       edgeAutoHideState.collapseTimer = setTimeout(() => {
         edgeAutoHideState.collapseTimer = null;
         if (!canUseEdgeAutoHide(settings)) return;
+        // The user may have grabbed an edge after this timer was armed; a
+        // collapse firing into an active resize is both a UX betrayal and a
+        // known source of transient native rejections.
+        if (edgeResizeGraceActive()) return;
         // The grace period only flips the desired state; the move itself stays
         // with the single executor, so it remains subject to the geometry guard.
         edgeAutoHideState.desired = 'hidden';
