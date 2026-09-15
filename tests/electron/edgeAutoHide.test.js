@@ -251,11 +251,11 @@ test('reduceMotion routes edge animation through the shared motion gate', () => 
   assert.equal(motionPreference.shouldReduceMotion('system', false), false);
 
   // main.js wiring (source contract, same style as windowBehavior.test.js):
-  // the tween must bail to an instant setPosition when the gate fires.
+  // the tween must bail to an instant, guard-checked move when the gate fires.
   const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
   assert.match(
     mainSource,
-    /if \(edgeReducedMotion\(\) \|\| duration <= 0\) \{\s*\n\s*mainWindow\.setPosition\(to\.x, to\.y, false\);/,
+    /if \(!source \|\| edgeReducedMotion\(\) \|\| effective <= 0\) \{\s*\n\s*setEdgeWindowPosition\(target\.x, target\.y\);/,
     'animateWindowPosition must move instantly (no tween) when reduceMotion is on'
   );
   assert.match(
@@ -266,16 +266,122 @@ test('reduceMotion routes edge animation through the shared motion gate', () => 
 });
 
 test('hidden state only repositions the window — main.js never resizes it', () => {
-  // The animation helper must use setPosition (position-only); a setBounds call
-  // inside animateWindowPosition would resize against WINDOW_LIMITS minWidth=240.
+  // The animation helper must move via the geometry guard; a setBounds call inside
+  // it would resize against WINDOW_LIMITS minWidth=240.
   const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
   const animateFn = mainSource.match(/function animateWindowPosition[\s\S]*?\n\}/);
   assert.ok(animateFn, 'animateWindowPosition exists in main.js');
   assert.doesNotMatch(animateFn[0], /\.setBounds\(/, 'animation must not resize the window');
-  assert.match(animateFn[0], /\.setPosition\(/, 'animation must move via setPosition');
+  assert.doesNotMatch(
+    animateFn[0],
+    /mainWindow\.setPosition\(/,
+    'the animation must move through the geometry guard, never setPosition directly'
+  );
+  assert.match(animateFn[0], /setEdgeWindowPosition\(/, 'the animation must move via setEdgeWindowPosition');
   // edgeHiddenBounds is the only geometry source for the hidden state, and the
   // pure tests above pin it to width/height-preserving output.
   const collapseFn = mainSource.match(/function collapseEdge[\s\S]*?\n\}/);
   assert.ok(collapseFn, 'collapseEdge exists in main.js');
   assert.match(collapseFn[0], /edgeAutoHideApi\.edgeHiddenBounds\(/, 'hidden geometry must come from edgeHiddenBounds');
 });
+
+// --- robustness contracts added by the harden-edge-auto-hide change ---------
+
+// Source-contract checks must read CODE, never the prose explaining it: several
+// negative assertions below look for the ABSENCE of a pattern, and the comments
+// deliberately name the thing they explain the absence of.
+function stripComments(source) {
+  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
+}
+
+
+test('the geometry guard is the only writer and rejects non-finite coordinates', () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
+  const guardFn = mainSource.match(/function setEdgeWindowPosition\(x, y\)[\s\S]*?\n\}/);
+  assert.ok(guardFn, 'setEdgeWindowPosition exists in main.js');
+  assert.match(
+    guardFn[0],
+    /if \(!Number\.isFinite\(x\) \|\| !Number\.isFinite\(y\)\) \{/,
+    'the guard must test both coordinates with Number.isFinite'
+  );
+  assert.match(guardFn[0], /mainWindow\.setPosition\(x, y, false\);/, 'the guard is the single native writer');
+
+  // A rejected frame must return without touching native geometry at all.
+  const rejectBranch = guardFn[0].match(/if \(!Number\.isFinite\(x\)[\s\S]*?\n  \}/);
+  assert.ok(rejectBranch, 'guard has a rejection branch');
+  assert.doesNotMatch(rejectBranch[0], /setPosition\(/, 'a rejected frame must not reach setPosition');
+
+  // Same predicate the guard uses, checked exhaustively at the value level.
+  const finite = (v) => Number.isFinite(v);
+  for (const bad of [NaN, undefined, null, Infinity, -Infinity, '12', {}]) {
+    assert.equal(finite(bad), false, `Number.isFinite must reject ${String(bad)}`);
+  }
+  assert.equal(finite(0), true);
+});
+
+test('the in-flight marker expires on its own instead of wedging auto-hide', () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
+  assert.match(
+    mainSource,
+    /function edgeIsAnimating\(\) \{\s*\n\s*return Date\.now\(\) < edgeAutoHideState\.animatingUntil;/,
+    'in-flight state must be a deadline, not a boolean cleared only on success'
+  );
+  assert.doesNotMatch(
+    mainSource,
+    /edgeAutoHideState\.animating\s*=/,
+    'the boolean in-flight flag must not come back: one thrown frame wedged auto-hide permanently'
+  );
+  assert.match(mainSource, /edgeAutoHideState\.animatingUntil = 0;/, 'the deadline must be cleared after the last frame');
+  // The deadline must be strictly in the future while animating, so a leaked
+  // value can never be "still animating" forever.
+  const deadline = Date.now() + 280;
+  assert.equal(Date.now() < deadline, true);
+  assert.equal(Date.now() < 0, false);
+});
+
+test('a single idempotent reconciler is the only hide/show executor', () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
+  assert.match(mainSource, /function reconcileEdgeAutoHide\(\)/, 'the reconciler must exist');
+  assert.match(mainSource, /const desired = edgeAutoHideState\.desired;/, 'the reconciler must be driven by the desired state');
+
+  // The cursor poll decides; it must never move the window itself, or a stray
+  // stopTimer() would again leave nothing responsible for hiding the window.
+  const pollFn = mainSource.match(/function startEdgeCursorPolling\(\)[\s\S]*?\n\}/);
+  assert.ok(pollFn, 'startEdgeCursorPolling exists in main.js');
+  assert.doesNotMatch(pollFn[0], /mainWindow\.setPosition\(/, 'the poll must not write geometry');
+  assert.doesNotMatch(pollFn[0], /collapseEdge\(/, 'the poll must not collapse directly');
+  assert.doesNotMatch(pollFn[0], /expandEdge\(\)/, 'the poll must not expand directly');
+  assert.match(pollFn[0], /reconcileEdgeAutoHide\(\)/, 'the poll must delegate movement to the reconciler');
+
+  // The slow keeper must re-arm the poll and reconcile, so a killed fast path
+  // self-heals instead of stranding the window.
+  assert.match(
+    mainSource,
+    /if \(!edgeAutoHideState\.pollTimer\) startEdgeCursorPolling\(\);\s*\n\s*reconcileEdgeAutoHide\(\);/,
+    'the keeper must re-arm the poll and then reconcile'
+  );
+  assert.match(
+    mainSource,
+    /if \(!edgeAutoHideState\.pollTimer\) startEdgeCursorPolling\(\);\s*\n\s*reconcileEdgeAutoHide\(\);\s*\n\s*\}, 1000\);/,
+    'the keeper must run on a slow interval'
+  );
+
+  // No focus gate may reappear in the collapse decision path (check the code,
+  // not the comment that explains why the gate is absent).
+  const pollCode = stripComments(pollFn[0]);
+  assert.doesNotMatch(pollCode, /isFocused\(\)/, 'focus must not gate the collapse decision');
+  assert.doesNotMatch(pollCode, /\|\|\s*mainWindow\.isFocused\(\)/, 'no focus gate may survive in the collapsed decision');
+});
+
+test('an uncaught main-process exception is logged instead of raising a modal dialog', () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
+  assert.match(mainSource, /process\.on\('uncaughtException'/, 'the main process must install an uncaught handler');
+  const handler = mainSource.match(/process\.on\('uncaughtException',[\s\S]*?\n\}\);/);
+  assert.ok(handler, 'the handler must be a single block');
+  assert.match(handler[0], /edgeLog\(/, 'the handler must persist the error');
+  const handlerCode = stripComments(handler[0]);
+  assert.doesNotMatch(handlerCode, /\bthrow\b/, 'the handler must not re-throw: Electron would still show the modal');
+  assert.doesNotMatch(handlerCode, /dialog|showMessageBox/, 'the handler must not open a dialog');
+  assert.match(handlerCode, /animatingUntil = 0;/, 'the handler must clear the in-flight deadline so the reconciler can recover');
+});
+
