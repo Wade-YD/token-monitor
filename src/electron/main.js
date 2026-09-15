@@ -8939,6 +8939,30 @@ app.whenReady().then(() => {
   });
   ipcMain.handle('floatingBubble:expand', () => expandFloatingBubble());
   ipcMain.handle('floatingBubble:peek', () => expandFloatingBubble({ focus: false }));
+  // Safety net. Two separate fragile chains can leave the window stranded in the
+  // expanded state: the 100ms cursor poll, and the 200ms collapse timer it arms.
+  // Both are torn down by stopEdgeAutoHideTimers() from several paths (focus,
+  // hide, collapse, expand), and a single missed re-arm used to mean the window
+  // never hid again. This slow watchdog deliberately does NOT depend on either
+  // chain: if we are in edge mode, expanded, and the cursor is clear of the
+  // docked rect, collapse regardless of what the fast paths did.
+  setInterval(() => {
+    if (!canUseEdgeAutoHide(settings)) return;
+    if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isVisible()) return;
+    if (edgeAutoHideState.animating || edgeAutoHideState.hidden) return;
+    if (edgeAutoHideState.collapseTimer) return;
+    let cursor;
+    try { cursor = screen.getCursorScreenPoint(); } catch (_) { return; }
+    const bounds = mainWindow.getBounds();
+    const display = displayForBounds(bounds);
+    if (!display) return;
+    const dockSide = edgeAutoHideState.side || edgeAutoHideApi.edgeSide(bounds, display, process.platform);
+    if (!dockSide) return;
+    const docked = edgeAutoHideApi.edgeSnapToBounds(bounds, dockSide, display, process.platform);
+    if (edgeAutoHideApi.edgeCursorInExpandedBounds(cursor, docked)) return;
+    maybeCollapseEdge(bounds);
+    if (!edgeAutoHideState.pollTimer) startEdgeCursorPolling();
+  }, 1000);
   ipcMain.handle('edgeAutoHide:expand', () => expandEdge());
   ipcMain.handle('edgeAutoHide:collapse', () => {
     if (!mainWindow || mainWindow.isDestroyed() || !canUseEdgeAutoHide(settings)) return false;
