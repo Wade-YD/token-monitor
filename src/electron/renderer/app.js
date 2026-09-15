@@ -200,8 +200,8 @@ const projectRowsApi = window.TokenMonitorProjectRows;
 const sessionDetailApi = window.TokenMonitorSessionDetail;
 const windowShortcutApi = window.TokenMonitorWindowShortcut;
 const LIMIT_REFRESH_OPTIONS = [60000, 120000, 300000, 900000, 1800000];
-const WINDOW_BEHAVIOR_VALUES = ['floating', 'normal', 'desktop'];
-const WINDOW_BEHAVIOR_ICONS = { floating: '⇧', normal: '○', desktop: '⇩' };
+const WINDOW_BEHAVIOR_VALUES = ['floating', 'normal', 'desktop', 'edge'];
+const WINDOW_BEHAVIOR_ICONS = { floating: '⇧', normal: '○', desktop: '⇩', edge: '⫰' };
 const LIMIT_CAPABILITY_TAG_KEYS = {
   CLI: 'settings.limits.sources.cli',
   OAuth: 'settings.limits.sources.oauth',

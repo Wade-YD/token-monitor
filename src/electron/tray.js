@@ -279,7 +279,8 @@ const WINDOW_PRESENTATION_MENU_ITEMS = [
   ['tray', 'trayMenu.presentation.tray'],
   ['floating', 'trayMenu.presentation.floating'],
   ['normal', 'trayMenu.presentation.normal'],
-  ['desktop', 'trayMenu.presentation.desktop']
+  ['desktop', 'trayMenu.presentation.desktop'],
+  ['edge', 'trayMenu.presentation.edge']
 ];
 
 const OPEN_VIEW_MENU_ITEMS = [

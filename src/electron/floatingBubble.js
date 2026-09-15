@@ -17,7 +17,8 @@ function clamp(value, min, max) {
 function canUseFloatingBubble(settings = {}) {
   return settings.floatingBubbleEnabled === true &&
     settings.trayMode !== true &&
-    settings.windowBehavior !== 'desktop';
+    settings.windowBehavior !== 'desktop' &&
+    settings.windowBehavior !== 'edge';
 }
 
 function floatingBubbleNativeGlassEnabled(settings = {}) {

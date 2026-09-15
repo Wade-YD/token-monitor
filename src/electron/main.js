@@ -29,6 +29,7 @@ const motionPreferenceApi = require('./motionPreference');
 const tokenNumberAnimationApi = require('./tokenNumberAnimation');
 const { createRepositoryStars } = require('./repositoryStars');
 const { clearBackgroundImage, getBackgroundImage, importBackgroundImage } = require('./backgroundImage');
+const edgeAutoHideApi = require('./edgeAutoHide');
 const { createClientSourceIpcHandlers } = require('./clientSourceIpc');
 const { createClaudeWebFetch } = require('./providers/claude/webFetch');
 const { createMimoExchangeFetch } = require('./providers/mimo/exchangeFetch');
@@ -1464,6 +1465,7 @@ function restoredBounds() {
 let persistBoundsTimer = null;
 let floatingBubbleAutoCollapseTimer = null;
 const floatingBubbleState = { collapsed: false, side: null, collapsedBounds: null, expandedBounds: null, suppressNextCollapse: false, contentSize: null };
+const edgeAutoHideState = { hidden: false, side: null, expandedBounds: null, hiddenBounds: null, animating: false, collapseTimer: null, pollTimer: null };
 let mainWindowChrome = { collapsedFloatingBubble: false };
 let mainWindowReplacementEpoch = 0;
 let mainWindowReplacementTask = Promise.resolve();
@@ -1719,6 +1721,204 @@ function syncFloatingBubbleAvailability() {
   sendFloatingBubbleState();
 }
 
+// Edge auto-hide: slide window off-screen when docked to an edge, slide back on hover.
+function stopEdgeAutoHideTimers() {
+  if (edgeAutoHideState.collapseTimer) { clearTimeout(edgeAutoHideState.collapseTimer); edgeAutoHideState.collapseTimer = null; }
+  if (edgeAutoHideState.pollTimer) { clearInterval(edgeAutoHideState.pollTimer); edgeAutoHideState.pollTimer = null; }
+}
+
+function edgeReducedMotion() {
+  return motionPreferenceApi.shouldReduceMotion(settings?.reduceMotion, nativeTheme.shouldReduceMotion);
+}
+
+function animateWindowPosition(from, to, duration, onComplete) {
+  if (!mainWindow || mainWindow.isDestroyed()) { if (onComplete) onComplete(); return; }
+  if (edgeReducedMotion() || duration <= 0) {
+    mainWindow.setPosition(to.x, to.y, false);
+    if (onComplete) onComplete();
+    return;
+  }
+  edgeAutoHideState.animating = true;
+  const startTime = Date.now();
+  const interval = 16; // ~60fps
+  function tick() {
+    if (!mainWindow || mainWindow.isDestroyed()) { edgeAutoHideState.animating = false; return; }
+    const elapsed = Date.now() - startTime;
+    const t = Math.min(1, elapsed / duration);
+    // Cubic ease-out: 1 - (1-t)^3
+    const eased = 1 - Math.pow(1 - t, 3);
+    const x = Math.round(from.x + (to.x - from.x) * eased);
+    const y = Math.round(from.y + (to.y - from.y) * eased);
+    mainWindow.setPosition(x, y, false);
+    if (t < 1) {
+      setTimeout(tick, interval);
+    } else {
+      edgeAutoHideState.animating = false;
+      if (onComplete) onComplete();
+    }
+  }
+  tick();
+}
+
+function collapseEdge(expandedBounds, side) {
+  if (!mainWindow || mainWindow.isDestroyed() || !expandedBounds || !side) return false;
+  stopEdgeAutoHideTimers();
+  const display = displayForBounds(expandedBounds);
+  if (!display) return false;
+  const hidden = edgeAutoHideApi.edgeHiddenBounds(expandedBounds, side, display, process.platform);
+  if (!hidden) return false;
+  edgeAutoHideState.hidden = true;
+  edgeAutoHideState.side = side;
+  edgeAutoHideState.expandedBounds = expandedBounds;
+  edgeAutoHideState.hiddenBounds = hidden;
+  settings.edgeAutoHideBounds = { side, expandedBounds, hiddenBounds: hidden };
+  saveSettings();
+  const current = mainWindow.getBounds();
+  animateWindowPosition(current, hidden, edgeAutoHideApi.EDGE_ANIMATION_DURATION_MS, () => {
+    startEdgeCursorPolling();
+  });
+  return true;
+}
+
+function expandEdge() {
+  if (!mainWindow || mainWindow.isDestroyed() || !edgeAutoHideState.hidden) return false;
+  stopEdgeAutoHideTimers();
+  const expanded = edgeAutoHideState.expandedBounds;
+  if (!expanded) return false;
+  edgeAutoHideState.hidden = false;
+  const current = mainWindow.getBounds();
+  animateWindowPosition(current, expanded, edgeAutoHideApi.EDGE_ANIMATION_DURATION_MS, () => {
+    // Persist whatever bounds the window actually ended at: the user may have
+    // resized while expanded, so state.expandedBounds alone can be stale.
+    if (mainWindow && !mainWindow.isDestroyed()) persistWindowBounds(mainWindow.getBounds());
+    scheduleEdgeAutoHide();
+  });
+  return true;
+}
+
+// The cursor poll owns every hide/show transition; this entry point just (re)arms
+// it, so blur/mode-switch/drag-release paths cannot race the poll into collapsing
+// the window underneath the user's cursor.
+function scheduleEdgeAutoHide() {
+  if (!canUseEdgeAutoHide(settings)) return;
+  startEdgeCursorPolling();
+}
+
+// Keep state.expandedBounds in sync while the window sits expanded and docked,
+// so re-hiding and re-expanding never animate to a stale size or position.
+function trackEdgeExpandedBounds() {
+  if (edgeAutoHideState.animating || edgeAutoHideState.hidden || !edgeAutoHideState.side) return;
+  if (!canUseEdgeAutoHide(settings) || !mainWindow || mainWindow.isDestroyed()) return;
+  edgeAutoHideState.expandedBounds = mainWindow.getBounds();
+}
+
+function startEdgeCursorPolling() {
+  stopEdgeAutoHideTimers();
+  if (!canUseEdgeAutoHide(settings)) return;
+  if (typeof screen.getCursorScreenPoint !== 'function') return;
+  edgeAutoHideState.pollTimer = setInterval(() => {
+    if (!mainWindow || mainWindow.isDestroyed() || edgeAutoHideState.animating) return;
+    if (!mainWindow.isVisible()) return;
+    if (!canUseEdgeAutoHide(settings) || !edgeAutoHideState.side && edgeAutoHideState.hidden) {
+      stopEdgeAutoHideTimers();
+      return;
+    }
+    let cursor;
+    try { cursor = screen.getCursorScreenPoint(); } catch (_) { return; }
+    const expanded = edgeAutoHideState.expandedBounds;
+    const side = edgeAutoHideState.side;
+    if (edgeAutoHideState.hidden) {
+      if (!expanded || !side) return;
+      const display = displayForBounds(expanded);
+      if (!display) return;
+      // Hidden state: only the slim strip zone (edge ± perpendicular tolerance,
+      // constrained along the window's own span) may reveal the window. The full
+      // expanded rect must NOT trigger, or sweeping the cursor across the middle
+      // of the screen would pull the window out.
+      if (edgeAutoHideApi.edgeTriggerHitTest(cursor, expanded, side, display, process.platform)) {
+        expandEdge();
+      }
+      return;
+    }
+    // Expanded state (docked, or merely parked near an edge): re-hide once the
+    // cursor leaves the docked area and the window is not focused. Collapsing
+    // never happens while the cursor rests on the window or inside its span.
+    const bounds = mainWindow.getBounds();
+    const display = displayForBounds(bounds);
+    if (!display) return;
+    const dockSide = side || edgeAutoHideApi.edgeSide(bounds, display, process.platform);
+    if (!dockSide) {
+      if (edgeAutoHideState.collapseTimer) {
+        clearTimeout(edgeAutoHideState.collapseTimer);
+        edgeAutoHideState.collapseTimer = null;
+      }
+      return;
+    }
+    const docked = edgeAutoHideApi.edgeSnapToBounds(bounds, dockSide, display, process.platform);
+    if (edgeAutoHideApi.edgeCursorInExpandedBounds(cursor, docked) || mainWindow.isFocused()) {
+      if (edgeAutoHideState.collapseTimer) {
+        clearTimeout(edgeAutoHideState.collapseTimer);
+        edgeAutoHideState.collapseTimer = null;
+      }
+      return;
+    }
+    if (!edgeAutoHideState.collapseTimer) {
+      edgeAutoHideState.collapseTimer = setTimeout(() => {
+        edgeAutoHideState.collapseTimer = null;
+        if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isFocused()) return;
+        if (edgeAutoHideState.hidden || edgeAutoHideState.animating || !canUseEdgeAutoHide(settings)) return;
+        // Re-detect the edge at fire time: the window may have been dragged
+        // away (or to another edge) during the grace period.
+        const hideBounds = mainWindow.getBounds();
+        const hideDisplay = displayForBounds(hideBounds);
+        if (!hideDisplay) return;
+        const hideSide = edgeAutoHideApi.edgeSide(hideBounds, hideDisplay, process.platform);
+        if (!hideSide) return;
+        const snapped = edgeAutoHideApi.edgeSnapToBounds(hideBounds, hideSide, hideDisplay, process.platform);
+        collapseEdge(snapped, hideSide);
+      }, edgeAutoHideApi.EDGE_COLLAPSE_DELAY_MS);
+    }
+  }, 100); // Poll every 100ms
+}
+
+function maybeCollapseEdge(bounds) {
+  if (!canUseEdgeAutoHide(settings) || edgeAutoHideState.hidden) return false;
+  const display = displayForBounds(bounds);
+  if (!display) return false;
+  const side = edgeAutoHideApi.edgeSide(bounds, display, process.platform);
+  if (!side) return false;
+  const snapped = edgeAutoHideApi.edgeSnapToBounds(bounds, side, display, process.platform);
+  return collapseEdge(snapped, side);
+}
+
+function canUseEdgeAutoHide(source = settings) {
+  return edgeAutoHideApi.canUseEdgeAutoHide(source);
+}
+
+function syncEdgeAutoHideAvailability() {
+  if (!canUseEdgeAutoHide(settings)) {
+    if (edgeAutoHideState.hidden) expandEdge();
+    else {
+      edgeAutoHideState.side = null;
+      edgeAutoHideState.expandedBounds = null;
+      edgeAutoHideState.hiddenBounds = null;
+      stopEdgeAutoHideTimers();
+    }
+    return;
+  }
+  // If switching to edge mode and window is near an edge, collapse it
+  if (mainWindow && !mainWindow.isDestroyed() && !edgeAutoHideState.hidden) {
+    const bounds = mainWindow.getBounds();
+    const display = displayForBounds(bounds);
+    if (display) {
+      const side = edgeAutoHideApi.edgeSide(bounds, display, process.platform);
+      if (side) {
+        scheduleEdgeAutoHide();
+      }
+    }
+  }
+}
+
 function persistBoundsSoon() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   if (!shouldPersistWindowBounds(mainWindow)) {
@@ -1736,6 +1936,10 @@ function persistBoundsSoon() {
       // Popover x/y is anchored to the tray icon each open; only the size carries over.
       if (prev.width === next.width && prev.height === next.height) return;
       settings.windowBounds = { ...prev, width: next.width, height: next.height };
+    } else if (edgeAutoHideState.hidden && edgeAutoHideState.expandedBounds) {
+      // Edge auto-hide: don't persist hidden bounds to windowBounds.
+      // The expanded bounds are already saved in settings.edgeAutoHideBounds.
+      return;
     } else if (floatingBubbleState.collapsed && floatingBubbleState.expandedBounds) {
       floatingBubbleState.collapsedBounds = next;
       const display = displayForBounds(next);
@@ -2369,6 +2573,49 @@ function applyWindowSettings() {
     applyCollapsedFloatingBubbleLimits(mainWindow.getBounds());
     return;
   }
+  // Edge auto-hide: restore a saved hidden dock exactly once per session, before
+  // any in-session edge state exists (edgeAutoHideState.side === null). Without
+  // that guard, every applyWindowSettings() call (e.g. any settings change made
+  // while the user is actively using the expanded window) would yank the window
+  // back off-screen. Saved bounds are validated against the current displays so
+  // an unplugged monitor cannot strand the window off-screen.
+  if (canUseEdgeAutoHide(settings) && edgeAutoHideState.side === null && !edgeAutoHideState.hidden && settings.edgeAutoHideBounds) {
+    const saved = settings.edgeAutoHideBounds;
+    if (saved.side && saved.expandedBounds && saved.hiddenBounds
+      && displayForBounds(saved.expandedBounds) && displayForBounds(saved.hiddenBounds)) {
+      edgeAutoHideState.hidden = true;
+      edgeAutoHideState.side = saved.side;
+      edgeAutoHideState.expandedBounds = saved.expandedBounds;
+      edgeAutoHideState.hiddenBounds = saved.hiddenBounds;
+      // Move window to hidden position immediately (no animation on startup)
+      mainWindow.setBounds(saved.hiddenBounds);
+      mainWindow.setAlwaysOnTop(true, floatingAlwaysOnTopLevel());
+      if (typeof mainWindow.setMovable === 'function') mainWindow.setMovable(true);
+      if (typeof mainWindow.setResizable === 'function') mainWindow.setResizable(true);
+      if (typeof mainWindow.setIgnoreMouseEvents === 'function') mainWindow.setIgnoreMouseEvents(false);
+      if (typeof mainWindow.setFocusable === 'function') mainWindow.setFocusable(true);
+      if (typeof mainWindow.setSkipTaskbar === 'function') mainWindow.setSkipTaskbar(skipTaskbarForSettings(settings));
+      syncTaskbarZOrder();
+      startEdgeCursorPolling();
+      return;
+    }
+  }
+  if (edgeAutoHideState.hidden && canUseEdgeAutoHide(settings)) {
+    // Edge auto-hide hidden state: keep window at hidden position. Mode-guarded
+    // so switching away from edge mode can never strand the window off-screen.
+    if (edgeAutoHideState.hiddenBounds) {
+      mainWindow.setBounds(edgeAutoHideState.hiddenBounds);
+    }
+    mainWindow.setAlwaysOnTop(true, floatingAlwaysOnTopLevel());
+    if (typeof mainWindow.setMovable === 'function') mainWindow.setMovable(true);
+    if (typeof mainWindow.setResizable === 'function') mainWindow.setResizable(true);
+    if (typeof mainWindow.setIgnoreMouseEvents === 'function') mainWindow.setIgnoreMouseEvents(false);
+    if (typeof mainWindow.setFocusable === 'function') mainWindow.setFocusable(true);
+    if (typeof mainWindow.setSkipTaskbar === 'function') mainWindow.setSkipTaskbar(skipTaskbarForSettings(settings));
+    syncTaskbarZOrder();
+    startEdgeCursorPolling();
+    return;
+  }
   const behavior = describeWindowBehavior(settings);
   mainWindow.setAlwaysOnTop(behavior.alwaysOnTop, floatingAlwaysOnTopLevel());
   if (typeof mainWindow.setMovable === 'function') mainWindow.setMovable(behavior.draggable);
@@ -2380,6 +2627,17 @@ function applyWindowSettings() {
   if (typeof mainWindow.setSkipTaskbar === 'function') mainWindow.setSkipTaskbar(skipTaskbarForSettings(settings));
   if (!behavior.focusable && typeof mainWindow.blur === 'function') mainWindow.blur();
   syncTaskbarZOrder();
+  // If switching to edge mode, schedule auto-hide if near edge
+  if (behavior.mode === 'edge') {
+    scheduleEdgeAutoHide();
+  } else {
+    stopEdgeAutoHideTimers();
+    // Clear edge state when leaving edge mode
+    if (settings.edgeAutoHideBounds) {
+      delete settings.edgeAutoHideBounds;
+      saveSettings();
+    }
+  }
 }
 
 function nativeBlurEnabled(source = settings) {
@@ -5862,6 +6120,8 @@ function setWindowPresentationFromMenu(value) {
   saveSettings();
   if (previousTrayMode) exitTrayMode();
   else {
+    syncFloatingBubbleAvailability();
+    syncEdgeAutoHideAvailability();
     applyWindowSettings();
     focusExistingWindow();
   }
@@ -7073,6 +7333,8 @@ function createWindow(boundsOverride, options = {}) {
   applyNativeMaterial();
   win.on('focus', () => {
     stopFloatingBubbleAutoCollapseTimer();
+    stopEdgeAutoHideTimers();
+    if (edgeAutoHideState.hidden) expandEdge();
   });
   win.on('blur', () => {
     limitsHistoryController?.hide();
@@ -7088,13 +7350,16 @@ function createWindow(boundsOverride, options = {}) {
         if (point && tray?.isPointerOverIcon?.(point)) recentPopoverBlur = { at: performance.now(), point };
       }
     }
-    else if (!quitRequested) scheduleFloatingBubbleAutoCollapse();
+    else if (!quitRequested) {
+      scheduleFloatingBubbleAutoCollapse();
+      scheduleEdgeAutoHide();
+    }
   });
   const onBoundsChange = () => { persistBoundsSoon(); syncTaskbarZOrder(); };
   for (const eventName of ['resize', 'resized', 'move', 'moved']) win.on(eventName, onBoundsChange);
-  win.on('show', syncTaskbarZOrder);
+  win.on('show', () => { syncTaskbarZOrder(); scheduleEdgeAutoHide(); });
   win.on('restore', syncTaskbarZOrder);
-  win.on('hide', stopTaskbarZOrderKeeper);
+  win.on('hide', () => { stopTaskbarZOrderKeeper(); stopEdgeAutoHideTimers(); });
   win.on('minimize', stopTaskbarZOrderKeeper);
   win.on('close', (event) => {
     if (quitRequested) return;
@@ -7947,6 +8212,7 @@ app.whenReady().then(() => {
     applyWindowSettings();
     syncFloatingBubbleAvailability();
     syncDockSurfaces();
+    syncEdgeAutoHideAvailability();
     applyNativeMaterial();
     const runtimeChange = classifySettingsChange(previousRuntimeSettings, settings);
     const widgetHistorySourceChanged = previousRuntimeSettings.historyEnabled !== settings.historyEnabled;
@@ -8069,6 +8335,13 @@ app.whenReady().then(() => {
   });
   ipcMain.handle('floatingBubble:expand', () => expandFloatingBubble());
   ipcMain.handle('floatingBubble:peek', () => expandFloatingBubble({ focus: false }));
+  ipcMain.handle('edgeAutoHide:expand', () => expandEdge());
+  ipcMain.handle('edgeAutoHide:collapse', () => {
+    if (!mainWindow || mainWindow.isDestroyed() || !canUseEdgeAutoHide(settings)) return false;
+    if (edgeAutoHideState.hidden) return true;
+    const bounds = mainWindow.getBounds();
+    return maybeCollapseEdge(bounds);
+  });
   ipcMain.handle('floatingBubble:collapseIfIdle', () => {
     if (!mainWindow || mainWindow.isDestroyed()) return false;
     if (floatingBubbleState.collapsed || !canUseFloatingBubble(settings)) return false;

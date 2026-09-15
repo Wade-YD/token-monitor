@@ -1,6 +1,6 @@
 'use strict';
 
-const WINDOW_BEHAVIORS = new Set(['floating', 'normal', 'desktop']);
+const WINDOW_BEHAVIORS = new Set(['floating', 'normal', 'desktop', 'edge']);
 
 const WINDOW_BEHAVIOR_PROFILES = {
   floating: {
@@ -35,6 +35,17 @@ const WINDOW_BEHAVIOR_PROFILES = {
     showInactive: false,
     requiresTrayControl: false,
     cssClass: 'desktop-mode'
+  },
+  edge: {
+    mode: 'edge',
+    alwaysOnTop: true,
+    draggable: true,
+    resizable: true,
+    focusable: true,
+    mousePassthrough: false,
+    showInactive: false,
+    requiresTrayControl: false,
+    cssClass: 'edge-auto-hide'
   }
 };
 
