@@ -1993,10 +1993,24 @@ function expandEdge() {
   edgeAutoHideState.hidden = false;
   const current = mainWindow.getBounds();
   animateWindowPosition(current, expanded, edgeAutoHideApi.EDGE_ANIMATION_DURATION_MS, () => {
+    // Re-arm the cursor poll FIRST. expandEdge() already stopped the poll, and the
+    // poll is the only thing that can ever hide the window again -- so a throw from
+    // the persistence call below must not be able to skip it, or the window would
+    // stay revealed forever with no timer left to collapse it.
+    scheduleEdgeAutoHide();
     // Persist whatever bounds the window actually ended at: the user may have
     // resized while expanded, so state.expandedBounds alone can be stale.
-    if (mainWindow && !mainWindow.isDestroyed()) persistWindowBounds(mainWindow.getBounds());
-    scheduleEdgeAutoHide();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      try {
+        persistWindowBounds(mainWindow.getBounds());
+      } catch (err) {
+        try {
+          require('fs').appendFileSync(
+            require('path').join(require('os').tmpdir(), 'token-monitor-edge-error.log'),
+            new Date().toISOString() + ' expandEdge persist failed: ' + (err && err.stack || err) + '\n');
+        } catch (_) { /* a logging failure must never break the hide/show chain */ }
+      }
+    }
   });
   return true;
 }
@@ -2060,7 +2074,11 @@ function startEdgeCursorPolling() {
       return;
     }
     const docked = edgeAutoHideApi.edgeSnapToBounds(bounds, dockSide, display, process.platform);
-    if (edgeAutoHideApi.edgeCursorInExpandedBounds(cursor, docked) || mainWindow.isFocused()) {
+    // Deliberately no isFocused() gate here. This window is focusable and keeps
+    // focus for long stretches, so gating on focus meant the collapse timer was
+    // never armed and the window never hid. The cursor check alone already covers
+    // "do not hide while the user is interacting with the window".
+    if (edgeAutoHideApi.edgeCursorInExpandedBounds(cursor, docked)) {
       if (edgeAutoHideState.collapseTimer) {
         clearTimeout(edgeAutoHideState.collapseTimer);
         edgeAutoHideState.collapseTimer = null;
@@ -2070,7 +2088,7 @@ function startEdgeCursorPolling() {
     if (!edgeAutoHideState.collapseTimer) {
       edgeAutoHideState.collapseTimer = setTimeout(() => {
         edgeAutoHideState.collapseTimer = null;
-        if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isFocused()) return;
+        if (!mainWindow || mainWindow.isDestroyed()) return;
         if (edgeAutoHideState.hidden || edgeAutoHideState.animating || !canUseEdgeAutoHide(settings)) return;
         // Re-detect the edge at fire time: the window may have been dragged
         // away (or to another edge) during the grace period.
@@ -7779,6 +7797,10 @@ function createWindow(boundsOverride, options = {}) {
     stopFloatingBubbleAutoCollapseTimer();
     stopEdgeAutoHideTimers();
     if (edgeAutoHideState.hidden) expandEdge();
+    // Focus must not leave the poll dead: when the window is already expanded,
+    // expandEdge() above is skipped, so nothing else would ever re-arm the poll,
+    // and the window would then never hide again.
+    if (!edgeAutoHideState.hidden) scheduleEdgeAutoHide();
   });
   win.on('blur', () => {
     limitsHistoryController?.hide();
