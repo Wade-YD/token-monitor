@@ -10,6 +10,12 @@ const EDGE_TRIGGER_ALONG_PADDING = 8; // px margin at each end of the window spa
 const EDGE_TRIGGER_PERPENDICULAR_TOLERANCE = 12; // generous tolerance perpendicular to edge
 const EDGE_COLLAPSE_DELAY_MS = 200;
 const EDGE_ANIMATION_DURATION_MS = 180;
+// Win32 DWM draws invisible resize borders OUTSIDE the rect Electron reports
+// (measured on Win11: left/right/bottom +6px, top +0px). A window slid off the
+// top/left/right edge keeps those invisible borders on-screen, so the strip
+// shows up wider than EDGE_VISIBLE_PX unless the hidden position compensates.
+// A bottom dock is cut by the screen's bottom edge itself and needs none.
+const EDGE_WIN32_FRAME_OVERHANG_PX = 6;
 
 function getArea(display, platform) {
   if (!display) return null;
@@ -59,41 +65,21 @@ function edgeHiddenBounds(expandedBounds, side, display, platform = process.plat
   const y = Number(expandedBounds.y);
   const width = Number(expandedBounds.width);
   const height = Number(expandedBounds.height);
+  const overhang = platform === 'win32' ? EDGE_WIN32_FRAME_OVERHANG_PX : 0;
 
   switch (side) {
     case 'top':
       // Slide up: bottom EDGE_VISIBLE_PX of window remain at the top screen edge
-      return { x, y: Number(area.y) + EDGE_VISIBLE_PX - height, width, height };
+      return { x, y: Number(area.y) + EDGE_VISIBLE_PX - height - overhang, width, height };
     case 'bottom':
       // Slide down: top EDGE_VISIBLE_PX of window remain at the bottom screen edge
       return { x, y: Number(area.y) + Number(area.height) - EDGE_VISIBLE_PX, width, height };
     case 'left':
       // Slide left: right EDGE_VISIBLE_PX of window remain at the left screen edge
-      return { x: Number(area.x) + EDGE_VISIBLE_PX - width, y, width, height };
+      return { x: Number(area.x) + EDGE_VISIBLE_PX - width - overhang, y, width, height };
     case 'right':
       // Slide right: left EDGE_VISIBLE_PX of window remain at the right screen edge
-      return { x: Number(area.x) + Number(area.width) - EDGE_VISIBLE_PX, y, width, height };
-    default:
-      return null;
-  }
-}
-
-// Compute the expanded bounds from a given side and display area.
-// The expanded bounds place the window flush against the edge.
-function edgeExpandedBoundsForSide(width, height, side, display, platform = process.platform) {
-  if (!side || !display) return null;
-  const area = getArea(display, platform);
-  if (!area) return null;
-
-  switch (side) {
-    case 'top':
-      return { x: 0, y: Number(area.y), width, height };
-    case 'bottom':
-      return { x: 0, y: Number(area.y) + Number(area.height) - height, width, height };
-    case 'left':
-      return { x: Number(area.x), y: 0, width, height };
-    case 'right':
-      return { x: Number(area.x) + Number(area.width) - width, y: 0, width, height };
+      return { x: Number(area.x) + Number(area.width) - EDGE_VISIBLE_PX + overhang, y, width, height };
     default:
       return null;
   }
@@ -206,13 +192,13 @@ function canUseEdgeAutoHide(settings = {}) {
 module.exports = {
   EDGE_SNAP_THRESHOLD,
   EDGE_VISIBLE_PX,
+  EDGE_WIN32_FRAME_OVERHANG_PX,
   EDGE_TRIGGER_ALONG_PADDING,
   EDGE_TRIGGER_PERPENDICULAR_TOLERANCE,
   EDGE_COLLAPSE_DELAY_MS,
   EDGE_ANIMATION_DURATION_MS,
   canUseEdgeAutoHide,
   edgeCursorInExpandedBounds,
-  edgeExpandedBoundsForSide,
   edgeHiddenBounds,
   edgeSide,
   edgeSnapToBounds,

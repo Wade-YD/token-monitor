@@ -16,6 +16,7 @@ const {
   EDGE_TRIGGER_PERPENDICULAR_TOLERANCE,
   EDGE_COLLAPSE_DELAY_MS,
   EDGE_ANIMATION_DURATION_MS,
+  EDGE_WIN32_FRAME_OVERHANG_PX,
   canUseEdgeAutoHide,
   edgeCursorInExpandedBounds,
   edgeHiddenBounds,
@@ -49,6 +50,9 @@ test('hidden bounds leave only the 3px strip on-screen for every edge', () => {
     // getArea() anchors to display.bounds on win32 and workArea elsewhere.
     const area = platform === 'win32' ? DISPLAY.bounds : AREA;
     const display = displayFor(platform);
+    // Win32 compensates the DWM frame overhang; the strip width is measured on
+    // the OUTER Win32 rect, which extends overhang px past the Electron bounds.
+    const oh = platform === 'win32' ? EDGE_WIN32_FRAME_OVERHANG_PX : 0;
     for (const side of ['top', 'bottom', 'left', 'right']) {
       const hidden = edgeHiddenBounds(WINDOW, side, display, platform);
       assert.ok(hidden, `${platform}/${side} produced bounds`);
@@ -60,24 +64,43 @@ test('hidden bounds leave only the 3px strip on-screen for every edge', () => {
 
     const top = edgeHiddenBounds(WINDOW, 'top', display, platform);
     assert.equal(top.x, WINDOW.x);
-    assert.equal(top.y + top.height, area.y + EDGE_VISIBLE_PX);
+    // Outer bottom = top.y + top.height + oh must sit at area.y + EDGE_VISIBLE_PX.
+    assert.equal(top.y + top.height + oh, area.y + EDGE_VISIBLE_PX);
     assert.ok(top.y < area.y, 'top dock must sit mostly above the screen');
 
     const bottom = edgeHiddenBounds(WINDOW, 'bottom', display, platform);
     assert.equal(bottom.x, WINDOW.x);
+    // No compensation: the visible top edge is cut by the screen edge itself.
     assert.equal(bottom.y, area.y + area.height - EDGE_VISIBLE_PX);
     assert.ok(bottom.y + bottom.height > area.y + area.height, 'bottom dock must sit mostly below the reference area');
 
     const left = edgeHiddenBounds(WINDOW, 'left', display, platform);
     assert.equal(left.y, WINDOW.y);
-    assert.equal(left.x + left.width, area.x + EDGE_VISIBLE_PX);
+    assert.equal(left.x + left.width + oh, area.x + EDGE_VISIBLE_PX);
     assert.ok(left.x < area.x, 'left dock must sit mostly off the left edge');
 
     const right = edgeHiddenBounds(WINDOW, 'right', display, platform);
     assert.equal(right.y, WINDOW.y);
-    assert.equal(right.x, area.x + area.width - EDGE_VISIBLE_PX);
+    assert.equal(right.x - oh, area.x + area.width - EDGE_VISIBLE_PX);
     assert.ok(right.x + right.width > area.x + area.width, 'right dock must sit mostly off the right edge');
   }
+});
+
+test('win32 hidden bounds shift by the measured DWM overhang, bottom does not', () => {
+  // Measured on Win11 26200: Electron {y:-480,h:483} -> Win32 {top:-480,bottom:9}.
+  assert.equal(EDGE_WIN32_FRAME_OVERHANG_PX, 6);
+  // Window 340x650 at the origin screen.
+  const top = edgeHiddenBounds(WINDOW, 'top', displayFor('win32'), 'win32');
+  assert.equal(top.y, DISPLAY.bounds.y + EDGE_VISIBLE_PX - WINDOW.height - EDGE_WIN32_FRAME_OVERHANG_PX);
+  const left = edgeHiddenBounds(WINDOW, 'left', displayFor('win32'), 'win32');
+  assert.equal(left.x, DISPLAY.bounds.x + EDGE_VISIBLE_PX - WINDOW.width - EDGE_WIN32_FRAME_OVERHANG_PX);
+  const right = edgeHiddenBounds(WINDOW, 'right', displayFor('win32'), 'win32');
+  assert.equal(right.x, DISPLAY.bounds.x + DISPLAY.bounds.width - EDGE_VISIBLE_PX + EDGE_WIN32_FRAME_OVERHANG_PX);
+  // Bottom dock is exact on both platforms (no overhang on the top border).
+  const bottomWin = edgeHiddenBounds(WINDOW, 'bottom', displayFor('win32'), 'win32');
+  const bottomMac = edgeHiddenBounds(WINDOW, 'bottom', displayFor('darwin'), 'darwin');
+  assert.equal(bottomWin.y, DISPLAY.bounds.y + DISPLAY.bounds.height - EDGE_VISIBLE_PX);
+  assert.equal(bottomMac.y, AREA.y + AREA.height - EDGE_VISIBLE_PX);
 });
 
 test('hidden bounds anchor to display.bounds on win32 and workArea elsewhere', () => {
@@ -383,5 +406,128 @@ test('an uncaught main-process exception is logged instead of raising a modal di
   assert.doesNotMatch(handlerCode, /\bthrow\b/, 'the handler must not re-throw: Electron would still show the modal');
   assert.doesNotMatch(handlerCode, /dialog|showMessageBox/, 'the handler must not open a dialog');
   assert.match(handlerCode, /animatingUntil = 0;/, 'the handler must clear the in-flight deadline so the reconciler can recover');
+});
+
+// --- contracts added by the finalize-edge-auto-hide change ------------------
+
+test('the dead edgeExpandedBoundsForSide helper is gone', () => {
+  assert.equal(edgeAutoHide.edgeExpandedBoundsForSide, undefined, 'the export must be removed');
+  const moduleSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'edgeAutoHide.js'), 'utf8');
+  assert.doesNotMatch(moduleSource, /edgeExpandedBoundsForSide/, 'no dead code may remain in the module');
+});
+
+test('focus alone must not reveal a hidden docked window', () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
+  const focusHandler = mainSource.match(/win\.on\('focus', \(\) => \{[\s\S]*?\n  \}\);/);
+  assert.ok(focusHandler, 'the focus handler exists');
+  const focusCode = stripComments(focusHandler[0]);
+  assert.doesNotMatch(focusCode, /expandEdge\(\)/, 'focus must not expand: at startup it popped the restored window out');
+  assert.match(focusCode, /scheduleEdgeAutoHide\(\)/, 'focus must still re-arm the cursor poll');
+});
+
+test('guarded geometry writes are gated until the window is first shown', () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
+  const guardFn = mainSource.match(/function setEdgeWindowPosition\(x, y\)[\s\S]*?\n\}/);
+  assert.ok(guardFn, 'setEdgeWindowPosition exists');
+  assert.match(
+    guardFn[0],
+    /if \(!edgeAutoHideState\.geometryReady\) return false;/,
+    'the guard must skip writes before the first show'
+  );
+  // The early skip sits BEFORE the isFinite branch and must not trip the
+  // session-wide degrade: guardTripped may only be set by a real rejection.
+  const gateIndex = guardFn[0].indexOf('if (!edgeAutoHideState.geometryReady) return false;');
+  const finiteIndex = guardFn[0].indexOf('if (!Number.isFinite(x)');
+  assert.ok(gateIndex !== -1 && finiteIndex !== -1 && gateIndex < finiteIndex, 'the gate precedes validation');
+  assert.match(mainSource, /edgeAutoHideState\.geometryReady = true;/, 'something must open the gate');
+  const showHandler = mainSource.match(/win\.on\('show'[\s\S]*?\n  \}\);/);
+  assert.ok(showHandler, 'the show handler exists');
+  assert.match(stripComments(showHandler[0]), /geometryReady = true;/, 'first show opens the gate');
+  assert.match(mainSource, /mainWindow = win;\s*\n\s*edgeAutoHideState\.geometryReady = false;/, 'a recreated window must re-earn readiness');
+});
+
+test('startup restore moves the window without imposing the saved size', () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
+  assert.doesNotMatch(
+    mainSource,
+    /setBounds\(saved\.hiddenBounds\)/,
+    'the restore must not resurrect the saved width/height over the created size'
+  );
+  const restoreFn = mainSource.match(/const created = mainWindow\.getBounds\(\);[\s\S]*?\n      \}\);/);
+  assert.ok(restoreFn, 'the restore merges saved position with created size');
+  assert.match(restoreFn[0], /width: created\.width/, 'width comes from the created bounds');
+  assert.match(restoreFn[0], /height: created\.height/, 'height comes from the created bounds');
+});
+
+test('a hidden dock follows resizes via syncEdgeDockGeometry', () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
+  const syncFn = mainSource.match(/function syncEdgeDockGeometry\(\)[\s\S]*?\n\}/);
+  assert.ok(syncFn, 'syncEdgeDockGeometry exists');
+  const syncCode = stripComments(syncFn[0]);
+  assert.match(syncCode, /!edgeAutoHideState\.hidden/, 'it must only reconcile the hidden state');
+  assert.match(syncCode, /edgeAutoHideApi\.edgeSnapToBounds\(/, 'expanded geometry is recomputed from the real bounds');
+  assert.match(syncCode, /edgeAutoHideApi\.edgeHiddenBounds\(/, 'hidden geometry is recomputed from the new size');
+  assert.match(syncCode, /settings\.edgeAutoHideBounds = \{ side/, 'the persisted dock geometry must be refreshed');
+  assert.match(syncCode, /setEdgeWindowPosition\(hidden\.x, hidden\.y\)/, 'it moves via the guarded writer, position-only');
+  assert.doesNotMatch(syncCode, /\.setBounds\(/, 'it must not resize the window');
+  const resizedHandler = mainSource.match(/win\.on\('resized'[\s\S]*?\n  \}\);/);
+  assert.ok(resizedHandler, 'the resized handler exists');
+  assert.match(resizedHandler[0], /syncEdgeDockGeometry\(\)/, 'resized events feed the dock sync');
+  // 'resized' is silent for programmatic/external resizes on Windows, so the
+  // continuous 'resize' event must feed the sync too, debounced.
+  const resizeHandler = mainSource.match(/win\.on\('resize', \(\) => \{[\s\S]*?\n  \}\);/);
+  assert.ok(resizeHandler, 'the continuous resize handler exists');
+  const resizeCode = stripComments(resizeHandler[0]);
+  assert.match(resizeCode, /edgeResizeSyncTimer = setTimeout\(/, 'the resize sync must be debounced');
+  assert.match(resizeCode, /syncEdgeDockGeometry\(\)/, 'the debounced sync must call syncEdgeDockGeometry');
+});
+
+test('startup restore recomputes the hidden geometry with the current formula', () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
+  assert.doesNotMatch(
+    mainSource,
+    /edgeAutoHideState\.hiddenBounds = saved\.hiddenBounds;/,
+    'saved hidden coordinates must not be trusted verbatim: a formula change leaves a stale strip'
+  );
+  const restoreBlock = mainSource.match(/const recomputed = edgeAutoHideApi\.edgeHiddenBounds\(saved\.expandedBounds[\s\S]*?\n      \}/);
+  assert.ok(restoreBlock, 'the restore recomputes hidden bounds from the saved expanded bounds');
+  assert.match(restoreBlock[0], /settings\.edgeAutoHideBounds = /, 'the corrected geometry is persisted back');
+});
+
+test('a transient native rejection degrades only after repeated consecutive failures', () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
+  const guardFn = mainSource.match(/function setEdgeWindowPosition\(x, y\)[\s\S]*?\n\}/);
+  assert.ok(guardFn, 'setEdgeWindowPosition exists');
+  const guardCode = stripComments(guardFn[0]);
+  assert.match(guardCode, /nativeRejectStreak >= 3/, 'the session degrade needs repeated consecutive failures');
+  assert.match(guardCode, /nativeRejectStreak = 0;/, 'a successful write must clear the streak');
+  // Non-finite coordinates remain an immediate degrade: that is a logic bug,
+  // and later frames from broken geometry cannot be trusted.
+  const finiteBranch = guardFn[0].match(/if \(!Number\.isFinite\(x\)[\s\S]*?\n  \}/);
+  assert.ok(finiteBranch, 'the non-finite branch exists');
+  assert.match(finiteBranch[0], /guardTripped = true;/, 'non-finite coordinates degrade immediately');
+});
+
+test('the tween snaps onto its target instead of playing the asymptotic tail', () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
+  const animateFn = mainSource.match(/function animateWindowPosition[\s\S]*?\n\}/);
+  assert.ok(animateFn, 'animateWindowPosition exists');
+  assert.match(
+    animateFn[0],
+    /remaining < 1\)/,
+    'the last sub-pixel step must jump straight to the target'
+  );
+  assert.match(animateFn[0], /setEdgeWindowPosition\(target\.x, target\.y\)/, 'the snap goes through the guard');
+});
+
+test('decision logging is opt-in and never on by default', () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
+  assert.match(
+    mainSource,
+    /return settings\?\.edgeAutoHideDebug === true \|\| process\.env\.TOKEN_MONITOR_EDGE_DEBUG === '1';/,
+    'the switch is the settings key OR the env var'
+  );
+  assert.match(mainSource, /function edgeDebug\(scope, message\)/, 'the debug writer exists');
+  assert.match(mainSource, /'token-monitor-edge-debug\.log'/, 'debug output goes to its own file');
 });
 

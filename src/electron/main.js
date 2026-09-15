@@ -1465,7 +1465,7 @@ function restoredBounds() {
 let persistBoundsTimer = null;
 let floatingBubbleAutoCollapseTimer = null;
 const floatingBubbleState = { collapsed: false, side: null, collapsedBounds: null, expandedBounds: null, suppressNextCollapse: false, contentSize: null };
-const edgeAutoHideState = { hidden: false, side: null, expandedBounds: null, hiddenBounds: null, animatingUntil: 0, desired: null, guardTripped: false, collapseTimer: null, pollTimer: null };
+const edgeAutoHideState = { hidden: false, side: null, expandedBounds: null, hiddenBounds: null, animatingUntil: 0, desired: null, guardTripped: false, geometryReady: false, nativeRejectStreak: 0, collapseTimer: null, pollTimer: null };
 let mainWindowChrome = { collapsedFloatingBubble: false };
 let mainWindowReplacementEpoch = 0;
 let mainWindowReplacementTask = Promise.resolve();
@@ -1736,12 +1736,24 @@ function edgeReducedMotion() {
 // setPosition as "Error processing argument at index 1, conversion failure" and
 // surfaces as a modal crash dialog). A rejected frame is logged verbatim, once,
 // so the next occurrence is self-diagnosing instead of needing a re-probe.
-function edgeLog(scope, message) {
+function edgeLog(scope, message, file = 'token-monitor-edge-error.log') {
   try {
     require('fs').appendFileSync(
-      require('path').join(require('os').tmpdir(), 'token-monitor-edge-error.log'),
+      require('path').join(require('os').tmpdir(), file),
       new Date().toISOString() + ' [' + scope + '] ' + message + '\n');
   } catch (_) { /* logging must never throw */ }
+}
+
+// Decision-path logging is opt-in: enabled via settings.edgeAutoHideDebug or
+// TOKEN_MONITOR_EDGE_DEBUG=1, writing to a separate debug log so the error
+// log keeps its "only written on a failure" contract.
+function edgeDebugEnabled() {
+  return settings?.edgeAutoHideDebug === true || process.env.TOKEN_MONITOR_EDGE_DEBUG === '1';
+}
+
+function edgeDebug(scope, message) {
+  if (!edgeDebugEnabled()) return;
+  edgeLog(scope, message, 'token-monitor-edge-debug.log');
 }
 
 function edgeGuardTripped() {
@@ -1764,6 +1776,11 @@ function edgeAnimationDuration(duration) {
 
 function setEdgeWindowPosition(x, y) {
   if (!mainWindow || mainWindow.isDestroyed()) return false;
+  // Before the first show the native layer can reject even finite positions.
+  // Skipping silently is not an error: the watchdog and the cursor poll
+  // converge the geometry once the window is shown, so this must not trip the
+  // session-wide animation degrade.
+  if (!edgeAutoHideState.geometryReady) return false;
   if (!Number.isFinite(x) || !Number.isFinite(y)) {
     if (!edgeGuardTripped()) {
       edgeAutoHideState.guardTripped = true;
@@ -1775,21 +1792,26 @@ function setEdgeWindowPosition(x, y) {
   try {
     mainWindow.setPosition(x, y, false);
   } catch (err) {
-    // Defensive: the native layer can still reject a call whose coordinates we
-    // already verified. Observed once, at startup: "Error processing argument at
-    // index 1, conversion failure from" with both coordinates finite, most likely
-    // because mainWindow still pointed at a native window that had been replaced.
-    // Treat a native rejection exactly like a failed validation -- record it, give
-    // up on tweening for the session, and never let it escape as an uncaught
-    // exception (which Electron would surface as a modal dialog).
-    if (!edgeGuardTripped()) {
+    // Defensive: the native layer has been observed to intermittently reject a
+    // call whose coordinates we already verified (an occasional late tween
+    // frame; the same call succeeds on the next transition). That is transient,
+    // so it degrades the session to instant-only moves only after REPEATED
+    // consecutive failures -- one flaky frame must not cost the whole session
+    // its animation. (The startup class of rejections is prevented upstream by
+    // the geometryReady gate, so what survives to here is rare and transient.)
+    // Never let it escape as an uncaught exception: Electron would surface it
+    // as a modal dialog.
+    edgeAutoHideState.nativeRejectStreak += 1;
+    edgeLog('geometry-guard', 'native setPosition rejected a finite position: x=' + String(x)
+      + ' y=' + String(y) + ' err=' + ((err && err.message) || String(err))
+      + ' streak=' + edgeAutoHideState.nativeRejectStreak);
+    if (edgeAutoHideState.nativeRejectStreak >= 3) {
       edgeAutoHideState.guardTripped = true;
-      edgeLog('geometry-guard', 'native setPosition rejected a finite position: x=' + String(x)
-        + ' y=' + String(y) + ' err=' + ((err && err.message) || String(err))
-        + ' -- tweening disabled for this session');
+      edgeLog('geometry-guard', 'repeated native rejections -- tweening disabled for this session');
     }
     return false;
   }
+  edgeAutoHideState.nativeRejectStreak = 0;
   return true;
 }
 
@@ -1819,17 +1841,25 @@ function animateWindowPosition(from, to, duration, onComplete) {
     const eased = 1 - Math.pow(1 - t, 3);
     const x = Math.round(source.x + (target.x - source.x) * eased);
     const y = Math.round(source.y + (target.y - source.y) * eased);
-    if (!setEdgeWindowPosition(x, y)) {
+    // Snap straight onto the target instead of tweening the asymptotic tail:
+    // the sub-pixel frames add nothing visually, and the native layer has been
+    // observed to intermittently reject exactly such a late frame.
+    const remaining = Math.max(Math.abs(target.x - x), Math.abs(target.y - y));
+    if (t >= 1 || remaining < 1) {
+      if (!setEdgeWindowPosition(target.x, target.y)) {
+        edgeDebug('animate', 'final frame rejected to=' + JSON.stringify(target));
+      }
       edgeAutoHideState.animatingUntil = 0;
       if (onComplete) onComplete();
       return;
     }
-    if (t < 1) {
-      setTimeout(tick, interval);
-    } else {
+    if (!setEdgeWindowPosition(x, y)) {
+      edgeDebug('animate', 'frame rejected from=' + JSON.stringify(source) + ' to=' + JSON.stringify(target));
       edgeAutoHideState.animatingUntil = 0;
       if (onComplete) onComplete();
+      return;
     }
+    setTimeout(tick, interval);
   }
   tick();
 }
@@ -1841,6 +1871,7 @@ function collapseEdge(expandedBounds, side) {
   if (!display) return false;
   const hidden = edgeAutoHideApi.edgeHiddenBounds(expandedBounds, side, display, process.platform);
   if (!hidden) return false;
+  edgeDebug('collapse', 'side=' + side + ' from=' + JSON.stringify(mainWindow.getBounds()) + ' to=' + JSON.stringify(hidden));
   edgeAutoHideState.hidden = true;
   edgeAutoHideState.desired = 'hidden';
   edgeAutoHideState.side = side;
@@ -1860,6 +1891,7 @@ function expandEdge() {
   stopEdgeAutoHideTimers();
   const expanded = edgeAutoHideState.expandedBounds;
   if (!expanded) return false;
+  edgeDebug('expand', 'side=' + edgeAutoHideState.side + ' from=' + JSON.stringify(mainWindow.getBounds()) + ' to=' + JSON.stringify(expanded));
   edgeAutoHideState.hidden = false;
   edgeAutoHideState.desired = 'revealed';
   const current = mainWindow.getBounds();
@@ -1900,6 +1932,29 @@ function trackEdgeExpandedBounds() {
   if (edgeIsAnimating() || edgeAutoHideState.hidden || !edgeAutoHideState.side) return;
   if (!canUseEdgeAutoHide(settings) || !mainWindow || mainWindow.isDestroyed()) return;
   edgeAutoHideState.expandedBounds = mainWindow.getBounds();
+}
+
+// While HIDDEN, the window can be resized underneath us (display/DPI change or
+// a programmatic resize). The remembered dock geometry must follow the new
+// size, or the strip width drifts and the next start restores a stale size.
+// Deliberately hidden-state only: while expanded the user may be mid-drag on
+// an edge, and snapping the dock axis under their hand would fight the drag.
+function syncEdgeDockGeometry() {
+  if (!canUseEdgeAutoHide(settings) || edgeIsAnimating() || !edgeAutoHideState.hidden) return;
+  if (!edgeAutoHideState.side || !mainWindow || mainWindow.isDestroyed()) return;
+  const current = mainWindow.getBounds();
+  const display = displayForBounds(current);
+  if (!display) return;
+  const side = edgeAutoHideState.side;
+  const expanded = edgeAutoHideApi.edgeSnapToBounds(current, side, display, process.platform);
+  const hidden = expanded && edgeAutoHideApi.edgeHiddenBounds(expanded, side, display, process.platform);
+  if (!expanded || !hidden) return;
+  edgeAutoHideState.expandedBounds = expanded;
+  edgeAutoHideState.hiddenBounds = hidden;
+  settings.edgeAutoHideBounds = { side, expandedBounds: expanded, hiddenBounds: hidden };
+  saveSettings();
+  setEdgeWindowPosition(hidden.x, hidden.y);
+  edgeDebug('resize-sync', 'side=' + side + ' bounds=' + JSON.stringify(hidden));
 }
 
 function clearEdgeCollapseTimer() {
@@ -1959,6 +2014,7 @@ function startEdgeCursorPolling() {
       // expanded rect must NOT trigger, or sweeping the cursor across the middle
       // of the screen would pull the window out.
       if (edgeAutoHideApi.edgeTriggerHitTest(cursor, expanded, side, display, process.platform)) {
+        edgeDebug('poll', 'hidden hit side=' + side + ' cursor=' + JSON.stringify(cursor));
         clearEdgeCollapseTimer();
         edgeAutoHideState.desired = 'revealed';
         reconcileEdgeAutoHide();
@@ -1981,6 +2037,7 @@ function startEdgeCursorPolling() {
       return;
     }
     if (!edgeAutoHideState.collapseTimer) {
+      edgeDebug('poll', 'arm collapse side=' + dockSide + ' cursor=' + JSON.stringify(cursor));
       edgeAutoHideState.collapseTimer = setTimeout(() => {
         edgeAutoHideState.collapseTimer = null;
         if (!canUseEdgeAutoHide(settings)) return;
@@ -2698,9 +2755,30 @@ function applyWindowSettings() {
       edgeAutoHideState.hidden = true;
       edgeAutoHideState.side = saved.side;
       edgeAutoHideState.expandedBounds = saved.expandedBounds;
-      edgeAutoHideState.hiddenBounds = saved.hiddenBounds;
-      // Move window to hidden position immediately (no animation on startup)
-      mainWindow.setBounds(saved.hiddenBounds);
+      // Recompute the hidden geometry with the CURRENT formula instead of
+      // trusting the saved coordinates: the formula can change between builds
+      // (e.g. the win32 frame-overhang compensation), and a stale saved y left
+      // a 9px strip showing until the first re-hide.
+      const restoreDisplay = displayForBounds(saved.expandedBounds);
+      const recomputed = edgeAutoHideApi.edgeHiddenBounds(saved.expandedBounds, saved.side, restoreDisplay, process.platform);
+      edgeAutoHideState.hiddenBounds = recomputed || saved.hiddenBounds;
+      if (recomputed) {
+        settings.edgeAutoHideBounds = { side: saved.side, expandedBounds: saved.expandedBounds, hiddenBounds: recomputed };
+        saveSettings();
+      }
+      // Move to the hidden POSITION only: the window was just created with the
+      // size from windowBounds (which carries the user's latest resize), and
+      // forcing the saved width/height here would resurrect a stale size over
+      // it. No animation on startup.
+      const created = mainWindow.getBounds();
+      const restoreTarget = edgeAutoHideState.hiddenBounds;
+      mainWindow.setBounds({
+        x: restoreTarget.x,
+        y: restoreTarget.y,
+        width: created.width,
+        height: created.height
+      });
+      edgeDebug('restore', 'side=' + saved.side + ' hidden=' + JSON.stringify(restoreTarget) + ' size=' + created.width + 'x' + created.height);
       mainWindow.setAlwaysOnTop(true, floatingAlwaysOnTopLevel());
       if (typeof mainWindow.setMovable === 'function') mainWindow.setMovable(true);
       if (typeof mainWindow.setResizable === 'function') mainWindow.setResizable(true);
@@ -2715,8 +2793,15 @@ function applyWindowSettings() {
   if (edgeAutoHideState.hidden && canUseEdgeAutoHide(settings)) {
     // Edge auto-hide hidden state: keep window at hidden position. Mode-guarded
     // so switching away from edge mode can never strand the window off-screen.
+    // Position-only: keep the current size, same reasoning as the startup path.
     if (edgeAutoHideState.hiddenBounds) {
-      mainWindow.setBounds(edgeAutoHideState.hiddenBounds);
+      const kept = mainWindow.getBounds();
+      mainWindow.setBounds({
+        x: edgeAutoHideState.hiddenBounds.x,
+        y: edgeAutoHideState.hiddenBounds.y,
+        width: kept.width,
+        height: kept.height
+      });
     }
     mainWindow.setAlwaysOnTop(true, floatingAlwaysOnTopLevel());
     if (typeof mainWindow.setMovable === 'function') mainWindow.setMovable(true);
@@ -7412,6 +7497,7 @@ function createWindow(boundsOverride, options = {}) {
     })
     : new BrowserWindow(windowOptions);
   mainWindow = win;
+  edgeAutoHideState.geometryReady = false;
   mainWindowChrome = { collapsedFloatingBubble };
   applyMacSpaceBehavior();
   applyWindowsChrome(win, { round: true });
@@ -7446,11 +7532,13 @@ function createWindow(boundsOverride, options = {}) {
   win.on('focus', () => {
     stopFloatingBubbleAutoCollapseTimer();
     stopEdgeAutoHideTimers();
-    if (edgeAutoHideState.hidden) expandEdge();
-    // Focus must not leave the poll dead: when the window is already expanded,
-    // expandEdge() above is skipped, so nothing else would ever re-arm the poll,
-    // and the window would then never hide again.
-    if (!edgeAutoHideState.hidden) scheduleEdgeAutoHide();
+    // Deliberately NO expandEdge() here. The cursor trigger owns reveal: a
+    // focus gain without the cursor at the edge must not pop the window out,
+    // and at startup the automatic focus fired this path against the freshly
+    // restored hidden window — a native setPosition rejection on every launch,
+    // which also tripped the session-wide animation degrade. The poll is all
+    // the reveal path needs (clicking the strip is inside the trigger zone).
+    scheduleEdgeAutoHide();
   });
   win.on('blur', () => {
     limitsHistoryController?.hide();
@@ -7473,7 +7561,6 @@ function createWindow(boundsOverride, options = {}) {
   });
   const onBoundsChange = () => { persistBoundsSoon(); syncTaskbarZOrder(); };
   for (const eventName of ['resize', 'resized', 'move', 'moved']) win.on(eventName, onBoundsChange);
-  win.on('show', () => { syncTaskbarZOrder(); scheduleEdgeAutoHide(); });
   win.on('restore', syncTaskbarZOrder);
   win.on('hide', () => { stopTaskbarZOrderKeeper(); stopEdgeAutoHideTimers(); });
   win.on('minimize', stopTaskbarZOrderKeeper);
