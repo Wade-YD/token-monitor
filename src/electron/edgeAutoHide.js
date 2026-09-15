@@ -10,6 +10,13 @@ const EDGE_TRIGGER_ALONG_PADDING = 8; // px margin at each end of the window spa
 const EDGE_TRIGGER_PERPENDICULAR_TOLERANCE = 12; // generous tolerance perpendicular to edge
 const EDGE_COLLAPSE_DELAY_MS = 200;
 const EDGE_ANIMATION_DURATION_MS = 180;
+// A cursor grabbing a resize border sits on the Win32 OUTER frame, which
+// extends ~6px past the rect Electron reports (measured on Win11). The
+// expanded-state hold test must treat that band as "still using the window",
+// or the window folds back up the moment the user grabs an edge to resize it.
+// The hidden-state trigger zone deliberately gets NO such margin: it must
+// stay narrow.
+const EDGE_INTERACTION_MARGIN_PX = 10;
 // Win32 DWM draws invisible resize borders OUTSIDE the rect Electron reports
 // (measured on Win11: left/right/bottom +6px, top +0px). A window slid off the
 // top/left/right edge keeps those invisible borders on-screen, so the strip
@@ -173,16 +180,19 @@ function edgeTriggerHitTest(cursor, expandedBounds, side, display, platform = pr
     perpCursor >= perpMin && perpCursor <= perpMax;
 }
 
-// Check if the cursor is inside the expanded bounds.
-function edgeCursorInExpandedBounds(cursor, expandedBounds) {
+// Check if the cursor is inside the expanded bounds. `margin` widens the test
+// rect on all sides (used by the expanded-state hold test so a cursor resting
+// on a resize border — outside the Electron rect — still counts as "using it").
+function edgeCursorInExpandedBounds(cursor, expandedBounds, margin = 0) {
   if (!cursor || !expandedBounds) return false;
+  const m = Number.isFinite(margin) ? Number(margin) : 0;
   const cursorX = Number(cursor.x);
   const cursorY = Number(cursor.y);
   const bLeft = Number(expandedBounds.x);
   const bTop = Number(expandedBounds.y);
   const bRight = bLeft + Number(expandedBounds.width);
   const bBottom = bTop + Number(expandedBounds.height);
-  return cursorX >= bLeft && cursorX < bRight && cursorY >= bTop && cursorY < bBottom;
+  return cursorX >= bLeft - m && cursorX < bRight + m && cursorY >= bTop - m && cursorY < bBottom + m;
 }
 
 function canUseEdgeAutoHide(settings = {}) {
@@ -193,6 +203,7 @@ module.exports = {
   EDGE_SNAP_THRESHOLD,
   EDGE_VISIBLE_PX,
   EDGE_WIN32_FRAME_OVERHANG_PX,
+  EDGE_INTERACTION_MARGIN_PX,
   EDGE_TRIGGER_ALONG_PADDING,
   EDGE_TRIGGER_PERPENDICULAR_TOLERANCE,
   EDGE_COLLAPSE_DELAY_MS,

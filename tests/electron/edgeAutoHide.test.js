@@ -17,6 +17,7 @@ const {
   EDGE_COLLAPSE_DELAY_MS,
   EDGE_ANIMATION_DURATION_MS,
   EDGE_WIN32_FRAME_OVERHANG_PX,
+  EDGE_INTERACTION_MARGIN_PX,
   canUseEdgeAutoHide,
   edgeCursorInExpandedBounds,
   edgeHiddenBounds,
@@ -249,6 +250,25 @@ test('expanded-rect containment guards the collapse-under-cursor case', () => {
   assert.equal(edgeCursorInExpandedBounds({ x: 340, y: 400 }, docked), false);
   assert.equal(edgeCursorInExpandedBounds({ x: 100, y: 750 }, docked), false);
   assert.equal(edgeCursorInExpandedBounds(null, docked), false);
+});
+
+test('the interaction margin keeps a cursor on a resize border inside the hold test', () => {
+  // The resize border sits on the Win32 outer frame, ~6px past the Electron
+  // rect; a cursor resting there must count as "using the window".
+  assert.equal(EDGE_INTERACTION_MARGIN_PX, 10);
+  const docked = { x: AREA.x, y: 100, width: WINDOW.width, height: WINDOW.height };
+  // 4px past each side: outside the rect, inside the margin.
+  assert.equal(edgeCursorInExpandedBounds({ x: 344, y: 400 }, docked, EDGE_INTERACTION_MARGIN_PX), true, 'right border');
+  assert.equal(edgeCursorInExpandedBounds({ x: 170, y: 754 }, docked, EDGE_INTERACTION_MARGIN_PX), true, 'bottom border');
+  assert.equal(edgeCursorInExpandedBounds({ x: -4, y: 400 }, docked, EDGE_INTERACTION_MARGIN_PX), true, 'left border');
+  assert.equal(edgeCursorInExpandedBounds({ x: 170, y: 96 }, docked, EDGE_INTERACTION_MARGIN_PX), true, 'top border');
+  // Beyond the margin counts as away again.
+  assert.equal(edgeCursorInExpandedBounds({ x: 170, y: 761 }, docked, EDGE_INTERACTION_MARGIN_PX), false);
+  assert.equal(edgeCursorInExpandedBounds({ x: 351, y: 400 }, docked, EDGE_INTERACTION_MARGIN_PX), false);
+  // Default (no margin) keeps the exclusive-rect contract.
+  assert.equal(edgeCursorInExpandedBounds({ x: 344, y: 400 }, docked), false);
+  // A non-finite margin degrades to 0 instead of widening the rect forever.
+  assert.equal(edgeCursorInExpandedBounds({ x: 344, y: 400 }, docked, Number.NaN), false);
 });
 
 test('edge mode gates on windowBehavior and stays off in tray mode', () => {
@@ -518,6 +538,43 @@ test('the tween snaps onto its target instead of playing the asymptotic tail', (
     'the last sub-pixel step must jump straight to the target'
   );
   assert.match(animateFn[0], /setEdgeWindowPosition\(target\.x, target\.y\)/, 'the snap goes through the guard');
+});
+
+test('resizing a docked expanded window must never fold it back up', () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
+  // The hold test carries the interaction margin (the resize border lives
+  // outside the Electron rect).
+  const pollFn = mainSource.match(/function startEdgeCursorPolling\(\)[\s\S]*?\n\}/);
+  assert.ok(pollFn, 'startEdgeCursorPolling exists');
+  assert.match(
+    pollFn[0],
+    /edgeCursorInExpandedBounds\(cursor, docked, edgeAutoHideApi\.EDGE_INTERACTION_MARGIN_PX\)/,
+    'the expanded-state hold test must use the interaction margin'
+  );
+  // The hidden-state trigger zone must stay narrow: no margin argument there.
+  assert.match(
+    pollFn[0],
+    /edgeTriggerHitTest\(cursor, expanded, side, display, process\.platform\)/,
+    'the trigger hit test must stay margin-free'
+  );
+  // Resize activity refreshes the grace timestamp in BOTH resize events.
+  const resizeHandler = mainSource.match(/win\.on\('resize', \(\) => \{[\s\S]*?\n  \}\);/);
+  assert.ok(resizeHandler, 'the resize handler exists');
+  assert.match(resizeHandler[0], /lastResizeAt = Date\.now\(\);/, 'continuous resize feeds the grace');
+  const resizedHandler = mainSource.match(/win\.on\('resized'[\s\S]*?\n  \}\);/);
+  assert.ok(resizedHandler, 'the resized handler exists');
+  assert.match(resizedHandler[0], /lastResizeAt = Date\.now\(\);/, 'resize end feeds the grace too');
+  // Grace vetoes both the arming and the firing of a collapse.
+  assert.match(mainSource, /function edgeResizeGraceActive\(\)/, 'the grace predicate exists');
+  const pollCode = stripComments(pollFn[0]);
+  assert.match(pollCode, /if \(edgeResizeGraceActive\(\)\) \{\s*\n\s*clearEdgeCollapseTimer\(\);/, 'grace must not arm a collapse');
+  const timerBody = pollCode.match(/collapseTimer = setTimeout\(\(\) => \{[\s\S]*?\}, edgeAutoHideApi\.EDGE_COLLAPSE_DELAY_MS\);/);
+  assert.ok(timerBody, 'the collapse timer exists');
+  assert.match(
+    timerBody[0],
+    /if \(edgeResizeGraceActive\(\)\) return;/,
+    'a collapse firing into an active resize must be vetoed'
+  );
 });
 
 test('decision logging is opt-in and never on by default', () => {
