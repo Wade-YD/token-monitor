@@ -157,13 +157,23 @@ const noZcode = {
 };
 
 // Console-key lane responder: quota, finance report, subscription list.
-function keyLaneResponses({ balance, subscription }) {
+function keyLaneResponses({ balance, subscription, totalSpend }) {
   return async (url) => {
     if (String(url).includes('/quota/limit')) {
       return { ok: true, status: 200, json: async () => ({ data: { limits: [{ type: 'TOKENS_LIMIT', unit: 3, number: 5, percentage: 10 }] } }) };
     }
     if (String(url).includes('query-customer-account-report')) {
-      return { ok: true, status: 200, json: async () => ({ code: 200, data: { availableBalance: balance } }) };
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          code: 200,
+          data: {
+            availableBalance: balance,
+            ...(totalSpend !== undefined ? { totalSpendAmount: totalSpend } : {})
+          }
+        })
+      };
     }
     return { ok: true, status: 200, json: async () => ({ data: [{ product_name: subscription }] }) };
   };
@@ -254,7 +264,7 @@ test('fetchZaiLimits queries quota and balance, then enriches usable quota', asy
       fetch: async (url, init) => {
         urls.push(String(url));
         auth.push(init.headers.Authorization);
-        return keyLaneResponses({ balance: '0E-9', subscription: 'GLM Coding' })(url, init);
+        return keyLaneResponses({ balance: '5.25', subscription: 'GLM Coding' })(url, init);
       }
     }
   );
@@ -263,7 +273,7 @@ test('fetchZaiLimits queries quota and balance, then enriches usable quota', asy
   assert.equal(provider.accountLabel, 'GLM Coding');
   assert.equal(provider.windows.length, 2);
   const balance = provider.windows.find((window) => window.metric === 'credits');
-  assert.equal(balance.remaining, 0);
+  assert.equal(balance.remaining, 5.25);
   assert.equal(balance.currency, 'USD');
   assert.deepEqual(urls, [
     'https://api.z.ai/api/monitor/usage/quota/limit',
@@ -271,6 +281,87 @@ test('fetchZaiLimits queries quota and balance, then enriches usable quota', asy
     'https://api.z.ai/api/biz/subscription/list'
   ]);
   assert.deepEqual(auth, ['Bearer zai-token', 'Bearer zai-token', 'Bearer zai-token']);
+});
+
+test('the idle cash row hides behind an active coding plan', async () => {
+  // Subscribers never touch the wallet: an all-zero Balance/Spend row beside
+  // live plan windows is permanent noise and must not render at all.
+  const provider = await fetchZaiLimits(
+    { zaiApiKey: 'zai-token' },
+    {
+      env: {},
+      now: () => Date.parse('2026-07-06T00:00:00Z'),
+      ...noZcode,
+      fetch: keyLaneResponses({ balance: '0E-9', subscription: 'GLM Coding' })
+    }
+  );
+  assert.equal(provider.status, 'ok');
+  assert.ok(provider.windows.length >= 1, 'plan windows still render');
+  assert.equal(provider.windows.find((window) => window.metric === 'credits'), undefined);
+  assert.equal(provider.balance, null);
+});
+
+test('the cash row returns once the wallet holds money', async () => {
+  const provider = await fetchZaiLimits(
+    { zaiApiKey: 'zai-token' },
+    {
+      env: {},
+      now: () => Date.parse('2026-07-06T00:00:00Z'),
+      ...noZcode,
+      fetch: keyLaneResponses({ balance: '12.5', subscription: 'GLM Coding' })
+    }
+  );
+  const balance = provider.windows.find((window) => window.metric === 'credits');
+  assert.equal(balance.remaining, 12.5);
+  assert.equal(provider.balance.amount, 12.5);
+});
+
+test('a wallet that starts spending brings the row back on its own', async () => {
+  const storePath = path.join(os.tmpdir(), `zai-spend-store-${Date.now()}-${process.pid}.json`);
+  const deps = (totalSpend) => ({
+    env: {},
+    now: () => Date.parse('2026-07-06T00:00:00Z'),
+    ...noZcode,
+    zaiBalanceStorePath: storePath,
+    fetch: keyLaneResponses({ balance: '0E-9', subscription: 'GLM Coding', totalSpend })
+  });
+  const first = await fetchZaiLimits({ zaiApiKey: 'zai-token' }, deps(3.2));
+  assert.equal(
+    first.windows.find((window) => window.metric === 'credits'),
+    undefined,
+    'the first sighting only baselines the cumulative total'
+  );
+  const second = await fetchZaiLimits({ zaiApiKey: 'zai-token' }, deps(4.7));
+  const row = second.windows.find((window) => window.metric === 'credits');
+  assert.ok(row, 'real cash spend must surface the row again');
+  assert.equal(second.balance.monthSpend, 1.5);
+});
+
+test('a cash-only account keeps the balance row even at zero', async () => {
+  // No plan windows at all (cash-only user, or the quota fetch found nothing):
+  // the balance is the only information left and must not be hidden.
+  const provider = await fetchZaiLimits(
+    { zaiApiKey: 'zai-token' },
+    {
+      env: {},
+      now: () => Date.parse('2026-07-06T00:00:00Z'),
+      ...noZcode,
+      fetch: async (url) => {
+        if (String(url).includes('/quota/limit')) {
+          return { ok: true, status: 200, json: async () => ({ data: { limits: [] } }) };
+        }
+        if (String(url).includes('query-customer-account-report')) {
+          return { ok: true, status: 200, json: async () => ({ code: 200, data: { availableBalance: '0E-9' } }) };
+        }
+        return { ok: true, status: 200, json: async () => ({ data: [{ product_name: 'GLM Coding' }] }) };
+      }
+    }
+  );
+  assert.equal(provider.status, 'ok');
+  const balance = provider.windows.find((window) => window.metric === 'credits');
+  assert.ok(balance, 'without plan windows the balance row is the only information');
+  assert.equal(balance.remaining, 0);
+  assert.equal(provider.balance.amount, 0);
 });
 
 test('fetchZaiLimits requests the selected BigModel CN region', async () => {

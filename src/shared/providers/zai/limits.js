@@ -363,14 +363,31 @@ async function fetchZaiLimits(options = {}, deps = {}) {
           })
         };
       }
-      const keyWindows = balanceWindow ? [...usage.windows, balanceWindow] : usage.windows;
+      const keyWindows = (() => {
+        // A coding-plan subscription never touches the cash wallet, so an
+        // all-zero balance row beside live plan windows is permanent noise —
+        // it reads ¥0.00 forever for subscribers. Keep the row only when it
+        // has something to say: cash present, cash spent today/month, or no
+        // plan windows at all (cash-only users; also covers a failed quota
+        // fetch, where the balance is the only information left).
+        // The spend tracker above still runs while hidden, so the moment real
+        // cash spend appears the row returns on its own.
+        const planActive = usage.windows.length > 0;
+        const idleCash = Boolean(balance)
+          && Number(balance.amount) === 0
+          && !balance.todaySpend
+          && !balance.monthSpend;
+        if (planActive && idleCash) return usage.windows;
+        return balanceWindow ? [...usage.windows, balanceWindow] : usage.windows;
+      })();
+      const cashRowHidden = !keyWindows.some((window) => window.kind === 'billing');
       return {
         windows: keyWindows,
         plan: usage.plan,
         accountKey: hashKey('zai', key),
-        balance,
+        balance: cashRowHidden ? null : balance,
         error: quotaResult.status === 'rejected' ? quotaResult.reason : null,
-        hasAnything: usage.windows.length > 0 || Boolean(balanceWindow)
+        hasAnything: keyWindows.length > 0
       };
     })()
     : Promise.resolve(emptyLane());
