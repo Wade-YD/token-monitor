@@ -1772,7 +1772,24 @@ function setEdgeWindowPosition(x, y) {
     }
     return false;
   }
-  mainWindow.setPosition(x, y, false);
+  try {
+    mainWindow.setPosition(x, y, false);
+  } catch (err) {
+    // Defensive: the native layer can still reject a call whose coordinates we
+    // already verified. Observed once, at startup: "Error processing argument at
+    // index 1, conversion failure from" with both coordinates finite, most likely
+    // because mainWindow still pointed at a native window that had been replaced.
+    // Treat a native rejection exactly like a failed validation -- record it, give
+    // up on tweening for the session, and never let it escape as an uncaught
+    // exception (which Electron would surface as a modal dialog).
+    if (!edgeGuardTripped()) {
+      edgeAutoHideState.guardTripped = true;
+      edgeLog('geometry-guard', 'native setPosition rejected a finite position: x=' + String(x)
+        + ' y=' + String(y) + ' err=' + ((err && err.message) || String(err))
+        + ' -- tweening disabled for this session');
+    }
+    return false;
+  }
   return true;
 }
 
