@@ -472,14 +472,14 @@ test('Linux tray re-exports the checked window presentation after a menu action'
 
   const presentationItems = calls.contextMenus[0].template
     .find((item) => item.label === 'Window Presentation').submenu;
-  assert.deepEqual(presentationItems.map((item) => item.checked), [false, true, false, false]);
+  assert.deepEqual(presentationItems.map((item) => item.checked), [false, true, false, false, false]);
 
   presentationItems.find((item) => item.label === 'Normal Window').click();
 
   assert.equal(calls.contextMenus.length, 2);
   const refreshedItems = calls.contextMenus[1].template
     .find((item) => item.label === 'Window Presentation').submenu;
-  assert.deepEqual(refreshedItems.map((item) => item.checked), [false, false, true, false]);
+  assert.deepEqual(refreshedItems.map((item) => item.checked), [false, false, true, false, false]);
 });
 
 test('tray menu actions publish both in-flight transitions', async () => {
@@ -652,7 +652,8 @@ test('tray context menu uses the selected locale for every visible level', () =>
     '自訂'
   ]);
   assert.equal(template[4].submenu[0].label, '托盤彈出視窗');
-  assert.equal(template[4].submenu.at(-1).label, '固定於桌面');
+  assert.equal(template[4].submenu.at(-2).label, '固定於桌面');
+  assert.equal(template[4].submenu.at(-1).label, '貼邊自動隱藏');
 });
 
 test('tray context menu shows the macOS Quit shortcut on macOS only', () => {

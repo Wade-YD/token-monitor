@@ -17,6 +17,8 @@ test('normalizes supported window behavior modes', () => {
   assert.equal(normalizeWindowBehavior('floating'), 'floating');
   assert.equal(normalizeWindowBehavior('NORMAL'), 'normal');
   assert.equal(normalizeWindowBehavior(' desktop '), 'desktop');
+  assert.equal(normalizeWindowBehavior('edge'), 'edge');
+  assert.equal(normalizeWindowBehavior('EDGE'), 'edge');
   assert.equal(normalizeWindowBehavior('unknown', 'normal'), 'normal');
 });
 
@@ -53,6 +55,17 @@ test('maps window behavior modes to window flags', () => {
     showInactive: false,
     requiresTrayControl: false,
     cssClass: 'desktop-mode'
+  });
+  assert.deepEqual(describeWindowBehavior({ windowBehavior: 'edge' }), {
+    mode: 'edge',
+    alwaysOnTop: true,
+    draggable: true,
+    resizable: true,
+    focusable: true,
+    mousePassthrough: false,
+    showInactive: false,
+    requiresTrayControl: false,
+    cssClass: 'edge-auto-hide'
   });
 });
 
