@@ -1,3 +1,4 @@
+1a361fb feat(sessions): label zcode child sessions by kind in the list title
 61e1608 feat(sessions): show ZCode session titles in the session list
 eb52336 fix(edge): exempt persistent app windows (dashboard) from the popup guard
 2834744 fix(edge): convert cursor to physical pixels before the popup guard (completes 2f8f634)

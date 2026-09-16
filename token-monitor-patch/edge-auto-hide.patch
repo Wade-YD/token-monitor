@@ -1300,10 +1300,10 @@ index b6bb516..bc27881 100644
      : Promise.resolve(emptyLane());
 diff --git a/src/shared/providers/zcode/sessionMetadata.js b/src/shared/providers/zcode/sessionMetadata.js
 new file mode 100644
-index 0000000..c94add7
+index 0000000..657c399
 --- /dev/null
 +++ b/src/shared/providers/zcode/sessionMetadata.js
-@@ -0,0 +1,125 @@
+@@ -0,0 +1,143 @@
 +'use strict';
 +
 +// Reads ZCode session titles from the ZCode CLI SQLite store
@@ -1324,6 +1324,20 @@ index 0000000..c94add7
 +try { sqlite = require('node:sqlite'); } catch (_) { sqlite = null; }
 +
 +const SUBAGENT_TITLE_PREFIX = '\u21b3 '; // ↳
++
++// Display labels for child-session kinds (session.task_type). Unmapped kinds
++// fall through to their raw value; the label is only shown on the
++// "↳ <label> · <parent title>" form, never on fallback titles.
++const CHILD_TYPE_LABELS = new Map([
++  ['subagent_child', '子代理'],
++  ['selection_side_chat', '侧聊']
++]);
++
++function childTypeLabel(taskType) {
++  const key = String(taskType || '').trim();
++  if (!key) return '';
++  return CHILD_TYPE_LABELS.get(key) || key;
++}
 +
 +function defaultDbPath(home) {
 +  const base = String(home || process.env.USERPROFILE || process.env.HOME || '').trim();
@@ -1379,7 +1393,10 @@ index 0000000..c94add7
 +      let title = ownTitle;
 +      if (row.parentId) {
 +        const parentTitle = cleanTitle(rows.get(row.parentId)?.title) || parentTitles.get(row.parentId);
-+        if (parentTitle) title = SUBAGENT_TITLE_PREFIX + parentTitle;
++        if (parentTitle) {
++          const label = childTypeLabel(row.taskType);
++          title = SUBAGENT_TITLE_PREFIX + (label ? label + ' · ' : '') + parentTitle;
++        }
 +      }
 +      if (!startedAt && !lastUsedAt && !title) continue;
 +      result.set(id, { startedAt, lastUsedAt, title });
@@ -1406,7 +1423,8 @@ index 0000000..c94add7
 +  const rows = new Map();
 +  const placeholders = ids.map(() => '?').join(',');
 +  const stmt = db.prepare(
-+    `SELECT id, title, parent_id AS parentId, time_created AS timeCreated, time_updated AS timeUpdated
++    `SELECT id, title, parent_id AS parentId, task_type AS taskType,
++            time_created AS timeCreated, time_updated AS timeUpdated
 +       FROM session WHERE id IN (${placeholders})`
 +  );
 +  for (const row of stmt.all(...ids)) {
@@ -2401,10 +2419,10 @@ index ce7dbfc..143baaa 100644
    const provider = await fetchZaiLimits(
 diff --git a/tests/shared/zcodeSessionMetadata.test.js b/tests/shared/zcodeSessionMetadata.test.js
 new file mode 100644
-index 0000000..f4ef90d
+index 0000000..9d340a5
 --- /dev/null
 +++ b/tests/shared/zcodeSessionMetadata.test.js
-@@ -0,0 +1,124 @@
+@@ -0,0 +1,145 @@
 +'use strict';
 +
 +const assert = require('node:assert/strict');
@@ -2421,6 +2439,7 @@ index 0000000..f4ef90d
 +  id TEXT PRIMARY KEY,
 +  title TEXT,
 +  parent_id TEXT,
++  task_type TEXT,
 +  time_created INTEGER,
 +  time_updated INTEGER
 +);
@@ -2432,7 +2451,9 @@ index 0000000..f4ef90d
 +  const file = path.join(dir, 'db.sqlite');
 +  const db = new DatabaseSync(file);
 +  db.exec(SCHEMA);
-+  const insert = db.prepare('INSERT INTO session (id, title, parent_id, time_created, time_updated) VALUES (?, ?, ?, ?, ?)');
++  const insert = db.prepare(
++    'INSERT INTO session (id, title, parent_id, task_type, time_created, time_updated) VALUES (?, ?, ?, ?, ?, ?)'
++  );
 +  for (const row of rows) insert.run(...row);
 +  db.close();
 +  return file;
@@ -2447,7 +2468,7 @@ index 0000000..f4ef90d
 +
 +test('a titled session resolves its title and epoch-ms timestamps', (t) => {
 +  const file = fixtureDb(t, [
-+    ['sess_abc', '工作台网站交接文档优化分析', null, 1789479536728, 1789577827928]
++    ['sess_abc', '工作台网站交接文档优化分析', null, 'interactive', 1789479536728, 1789577827928]
 +  ]);
 +  const meta = resolve(file, ['sess_abc']);
 +  assert.equal(meta.size, 1);
@@ -2459,8 +2480,8 @@ index 0000000..f4ef90d
 +
 +test('an unknown session id and an empty title both stay out of the title column', (t) => {
 +  const file = fixtureDb(t, [
-+    ['sess_known', '', null, 111, 222],
-+    ['sess_other', '', null, null, null]
++    ['sess_known', '', null, 'interactive', 111, 222],
++    ['sess_other', '', null, 'interactive', null, null]
 +  ]);
 +  const meta = resolve(file, ['sess_missing', 'sess_known', 'sess_other']);
 +  assert.equal(meta.has('sess_missing'), false, 'id not in the store must not appear');
@@ -2469,33 +2490,51 @@ index 0000000..f4ef90d
 +  assert.equal(meta.has('sess_other'), false, 'no title and no times -> nothing to contribute');
 +});
 +
-+test('a subagent session renders as an arrow plus its parent title', (t) => {
++test('a subagent session renders as arrow + kind label + parent title', (t) => {
 +  const file = fixtureDb(t, [
-+    ['sess_parent', 'Token-monitor 改进', null, 1, 2],
-+    ['sess_subagent_agent_x', '你是代码审查员。审查一个 PWA……', 'sess_parent', 3, 4]
++    ['sess_parent', 'Token-monitor 改进', null, 'interactive', 1, 2],
++    ['sess_subagent_agent_x', '你是代码审查员。审查一个 PWA……', 'sess_parent', 'subagent_child', 3, 4]
 +  ]);
 +  const meta = resolve(file, ['sess_subagent_agent_x']);
-+  assert.equal(meta.get('sess_subagent_agent_x').title, '\u21b3 Token-monitor 改进');
++  assert.equal(meta.get('sess_subagent_agent_x').title, '\u21b3 子代理 · Token-monitor 改进');
++});
++
++test('a selection side chat renders with the side-chat label', (t) => {
++  const file = fixtureDb(t, [
++    ['sess_parent', '工作台网站交接文档优化分析', null, 'interactive', 1, 2],
++    ['sess_side', '选中内容的问题', 'sess_parent', 'selection_side_chat', 3, 4]
++  ]);
++  const meta = resolve(file, ['sess_side']);
++  assert.equal(meta.get('sess_side').title, '\u21b3 侧聊 · 工作台网站交接文档优化分析');
++});
++
++test('an unmapped child task type falls through to its raw value', (t) => {
++  const file = fixtureDb(t, [
++    ['sess_parent', '父标题', null, 'interactive', 1, 2],
++    ['sess_child', '提示词', 'sess_parent', 'review_panel', 3, 4]
++  ]);
++  const meta = resolve(file, ['sess_child']);
++  assert.equal(meta.get('sess_child').title, '\u21b3 review_panel · 父标题');
 +});
 +
 +test('a subagent resolves the parent title even when the parent is in the same batch', (t) => {
 +  const file = fixtureDb(t, [
-+    ['sess_parent', '工作台网站交接文档优化分析', null, 1, 2],
-+    ['sess_subagent_agent_y', '你是代码审查员。……', 'sess_parent', 3, 4]
++    ['sess_parent', '工作台网站交接文档优化分析', null, 'interactive', 1, 2],
++    ['sess_subagent_agent_y', '你是代码审查员。……', 'sess_parent', 'subagent_child', 3, 4]
 +  ]);
 +  const meta = resolve(file, ['sess_parent', 'sess_subagent_agent_y']);
-+  assert.equal(meta.get('sess_subagent_agent_y').title, '\u21b3 工作台网站交接文档优化分析');
++  assert.equal(meta.get('sess_subagent_agent_y').title, '\u21b3 子代理 · 工作台网站交接文档优化分析');
 +});
 +
-+test('a subagent falls back to its own title when the parent has none or is missing', (t) => {
++test('a child falls back to its own title when the parent has none or is missing', (t) => {
 +  const file = fixtureDb(t, [
-+    ['sess_parent_mute', '', null, 1, 2],
-+    ['sess_sub_a', '审查任务提示词', 'sess_parent_mute', 3, 4],
-+    ['sess_sub_b', '另一个子代理提示词', 'sess_parent_gone', 5, 6]
++    ['sess_parent_mute', '', null, 'interactive', 1, 2],
++    ['sess_sub_a', '审查任务提示词', 'sess_parent_mute', 'subagent_child', 3, 4],
++    ['sess_sub_b', '另一个子代理提示词', 'sess_parent_gone', 'subagent_child', 5, 6]
 +  ]);
 +  const meta = resolve(file, ['sess_sub_a', 'sess_sub_b']);
-+  assert.equal(meta.get('sess_sub_a').title, '审查任务提示词', 'parent without a title -> own title');
-+  assert.equal(meta.get('sess_sub_b').title, '另一个子代理提示词', 'parent row missing -> own title');
++  assert.equal(meta.get('sess_sub_a').title, '审查任务提示词', 'parent without a title -> own title, no label');
++  assert.equal(meta.get('sess_sub_b').title, '另一个子代理提示词', 'parent row missing -> own title, no label');
 +});
 +
 +test('a missing database file degrades to an empty map', () => {
@@ -2513,7 +2552,7 @@ index 0000000..f4ef90d
 +});
 +
 +test('a missing sqlite driver degrades to an empty map', (t) => {
-+  const file = fixtureDb(t, [['sess_abc', 'T', null, 1, 2]]);
++  const file = fixtureDb(t, [['sess_abc', 'T', null, 'interactive', 1, 2]]);
 +  const meta = zcodeSessionMetadata.resolveSessionMetadata(new Set(['sess_abc']), {
 +    home: os.tmpdir(),
 +    deps: { zcodeDeps: { dbPath: file, sqlite: null } }

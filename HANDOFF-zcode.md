@@ -424,3 +424,8 @@ node --test tests/electron/edgeAutoHide.test.js tests/electron/windowBehavior.te
   无错误日志；asar 内容核对含 zcode 模块。
 - 归档：patch 122 KB（13 提交，18 文件 +2132/−21）重生成 + 干净 v0.58.0
   重放校验通过；openspec 变更已 archive；deliver_finalize.py FILES 12 项。
+
+追加（2026-09-17，提交 1a361fb）：子会话标题加类型标签——「↳ 子代理 · 父标题」
+「↳ 侧聊 · 父标题」（task_type 映射，未知类型显示原值；仅在父标题可得时附加）。
+用户确认三行同题会话（主会话/子代理/侧聊）难以区分后加的。155/155 测试，
+真库实测三条行显示正确。patch 125 KB（14 提交），重放校验通过。
