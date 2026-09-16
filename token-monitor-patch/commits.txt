@@ -1,3 +1,4 @@
+41256a6 feat(sessions): zcode session detail drill-down
 1a361fb feat(sessions): label zcode child sessions by kind in the list title
 61e1608 feat(sessions): show ZCode session titles in the session list
 eb52336 fix(edge): exempt persistent app windows (dashboard) from the popup guard

@@ -429,3 +429,22 @@ node --test tests/electron/edgeAutoHide.test.js tests/electron/windowBehavior.te
 「↳ 侧聊 · 父标题」（task_type 映射，未知类型显示原值；仅在父标题可得时附加）。
 用户确认三行同题会话（主会话/子代理/侧聊）难以区分后加的。155/155 测试，
 真库实测三条行显示正确。patch 125 KB（14 提交），重放校验通过。
+
+---
+
+## 13. 2026-09-17：ZCode 会话明细点入（openspec 变更 add-zcode-session-detail）
+
+- 用户反馈：OpenCode 会话能点「>」看逐轮明细，ZCode 不能。原因：明细消费的
+  中性事件流只有 opencode 实现了 `readSessionEvents`，渲染层可点白名单也没有 zcode。
+- 实测发现 ZCode 的 `message`/`part` 表与 OpenCode 几乎同构（同 data JSON：
+  role/cost/tokens{...cache{read,write}}；part 的 type/text/tool），opencode 的
+  两条 SQL 几乎原样可用——仅排序改用 `sequence` 列。
+- 实现（提交 41256a6）：zcode provider 增加 `readSessionEvents`；sessionDetail.js
+  增加 `readZcodeSessionDetail`（groupEvents → period 过滤 → `distributeCost`
+  按 token 占比分摊估算成本——订阅制下 message.cost 恒 0，直接求和会显示 ¥0）；
+  app.js 两处白名单（affordance ~L2305、点击 ~L12977）加 'zcode'。
+- 测试 160/160（新增 zcodeSessionDetail 5：分组/工具/成本分摊/缺库/坏库/白名单契约）；
+  真库实测 587 事件、489 轮、445 轮带工具。**教训**：fixture 把 DatabaseSync 类
+  当模块对象传入导致 found:false——openDb 已兼容两种传法。
+- 交付：13 文件覆盖（FILES 增 sessionDetail.js）→ pack 45,411,331 B → 换装重启，
+  贴边 3px 正常、无错误日志。patch 129 KB（15 提交，20 文件 +2434/−32）重放通过。

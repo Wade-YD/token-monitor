@@ -1105,7 +1105,7 @@ index 4f03f9c..1eef986 100644
      if (!mainWindow || mainWindow.isDestroyed()) return false;
      if (floatingBubbleState.collapsed || !canUseFloatingBubble(settings)) return false;
 diff --git a/src/electron/renderer/app.js b/src/electron/renderer/app.js
-index 35732c1..64288d5 100644
+index 35732c1..8c488d1 100644
 --- a/src/electron/renderer/app.js
 +++ b/src/electron/renderer/app.js
 @@ -195,8 +195,8 @@ const projectRowsApi = window.TokenMonitorProjectRows;
@@ -1119,6 +1119,24 @@ index 35732c1..64288d5 100644
  const LIMIT_SOURCE_LABELS = { oauth: 'OAuth', cli: 'CLI', web: 'Web', rpc: 'RPC', local: 'Local', api: 'API' };
  const LIMIT_CAPABILITY_TAG_KEYS = {
    Auto: 'settings.limits.capability.auto',
+@@ -2303,7 +2303,7 @@ function updateRow(row, { name, subtitle, activity, detail, value, cost, barValu
+   }
+   const interactive = reviewGroup === true || (
+     kind === 'session'
+-    && ['claude', 'codex', 'opencode', 'dsh'].includes(client)
++    && ['claude', 'codex', 'opencode', 'dsh', 'zcode'].includes(client)
+   ) || (kind === 'session' && client === 'reasonix' && sessionDetailAvailable === true);
+   const mark = row.querySelector('.row-mark');
+   const iconKind = iconKindFor({ key: row.dataset.key, platform: row.dataset.platform || '', client: row.dataset.client || '' }, state.breakdown);
+@@ -12973,7 +12973,7 @@ els.breakdown.addEventListener('click', (event) => {
+   }
+   const key = rowEl.dataset.key || '';            // "session:<client>:<sessionId>"
+   const client = rowEl.dataset.client || '';
+-  if (client !== 'claude' && client !== 'codex' && client !== 'opencode' && client !== 'reasonix' && client !== 'dsh') return;
++  if (client !== 'claude' && client !== 'codex' && client !== 'opencode' && client !== 'reasonix' && client !== 'dsh' && client !== 'zcode') return;
+   if (client === 'reasonix' && rowEl.dataset.detailUnavailable === 'true') return;
+   const match = key.match(/^session:([^:]+):(.+)$/);
+   if (!match) return;
 diff --git a/src/electron/renderer/i18n.js b/src/electron/renderer/i18n.js
 index badac3c..7cbcc88 100644
 --- a/src/electron/renderer/i18n.js
@@ -1300,10 +1318,10 @@ index b6bb516..bc27881 100644
      : Promise.resolve(emptyLane());
 diff --git a/src/shared/providers/zcode/sessionMetadata.js b/src/shared/providers/zcode/sessionMetadata.js
 new file mode 100644
-index 0000000..657c399
+index 0000000..178782c
 --- /dev/null
 +++ b/src/shared/providers/zcode/sessionMetadata.js
-@@ -0,0 +1,143 @@
+@@ -0,0 +1,245 @@
 +'use strict';
 +
 +// Reads ZCode session titles from the ZCode CLI SQLite store
@@ -1414,7 +1432,10 @@ index 0000000..657c399
 +}
 +
 +function openDb(dbPath, sqliteMod) {
-+  const db = new sqliteMod.DatabaseSync(dbPath, { readOnly: true });
++  // Accept either the node:sqlite module object or the DatabaseSync class
++  // itself — test seams pass whichever is at hand.
++  const Sync = sqliteMod.DatabaseSync || sqliteMod;
++  const db = new Sync(dbPath, { readOnly: true });
 +  db.exec('PRAGMA busy_timeout = 250');
 +  return db;
 +}
@@ -1446,7 +1467,149 @@ index 0000000..657c399
 +  return titles;
 +}
 +
-+module.exports = { resolveSessionMetadata, defaultDbPath, SUBAGENT_TITLE_PREFIX };
++// ---------------------------------------------------------------------------
++// Session detail events (neutral shape consumed by sessionDetail.js)
++// ---------------------------------------------------------------------------
++const MESSAGES_SQL =
++  `SELECT id,
++          CAST(COALESCE(json_extract(data,'$.time.created'), time_created) AS INTEGER) AS createdMs,
++          json_extract(data,'$.role')             AS role,
++          json_extract(data,'$.cost')             AS cost,
++          json_extract(data,'$.tokens.input')           AS tInput,
++          json_extract(data,'$.tokens.output')          AS tOutput,
++          json_extract(data,'$.tokens.reasoning')       AS tReasoning,
++          json_extract(data,'$.tokens.cache.read')      AS tCacheRead,
++          json_extract(data,'$.tokens.cache.write')     AS tCacheWrite
++   FROM message
++   WHERE session_id = ? AND json_valid(data)
++   ORDER BY sequence ASC, id ASC`;
++
++const PARTS_SQL =
++  `SELECT message_id AS messageId,
++          json_extract(data,'$.type') AS type,
++          json_extract(data,'$.text') AS text,
++          json_extract(data,'$.tool') AS tool
++   FROM part
++   WHERE session_id = ? AND json_valid(data)
++   ORDER BY time_created ASC, id ASC`;
++
++function num(value) {
++  const n = Number(value);
++  return Number.isFinite(n) ? n : 0;
++}
++
++function mapTokens(r) {
++  const input = num(r.tInput);
++  const output = num(r.tOutput);
++  const reasoning = num(r.tReasoning);
++  const cacheRead = num(r.tCacheRead);
++  const cacheWrite = num(r.tCacheWrite);
++  // Same convention as the other clients: reasoning is a subset of output and
++  // stays informational; the session total is in + out + cacheRead + cacheWrite.
++  const total = input + output + cacheRead + cacheWrite;
++  return { input, output, cacheRead, cacheWrite, reasoning, total };
++}
++
++function buildEvents(messages, parts) {
++  const textByMessage = new Map();
++  const toolsByMessage = new Map();
++  for (const p of parts) {
++    if (p.type === 'text' && p.text) {
++      if (!textByMessage.has(p.messageId)) textByMessage.set(p.messageId, []);
++      textByMessage.get(p.messageId).push(String(p.text));
++    } else if (p.type === 'tool' && p.tool) {
++      if (!toolsByMessage.has(p.messageId)) toolsByMessage.set(p.messageId, []);
++      toolsByMessage.get(p.messageId).push(String(p.tool));
++    }
++  }
++
++  const events = [];
++  let sessionCost = 0;
++  for (const m of messages) {
++    const timestamp = isoFromMs(m.createdMs);
++    if (m.role === 'user') {
++      const text = cleanTitle((textByMessage.get(m.id) || []).join(' '));
++      events.push({ kind: 'prompt', timestamp, text });
++    } else if (m.role === 'assistant') {
++      const cost = num(m.cost);
++      sessionCost += cost;
++      const tools = Array.from(new Set(toolsByMessage.get(m.id) || []));
++      events.push({ kind: 'turn', timestamp, tokens: mapTokens(m), tools, cost });
++    }
++  }
++  return { events, sessionCost };
++}
++
++function readSessionEvents(sessionId, deps = {}) {
++  const empty = { found: false, events: [], sessionCost: 0 };
++  const id = String(sessionId || '').trim();
++  if (!id) return empty;
++  const sqliteMod = resolveSqlite(deps);
++  if (!sqliteMod) return empty;
++  const dbPath = deps.dbPath || defaultDbPath(deps.home);
++  if (!dbPath) return empty;
++
++  let db;
++  try {
++    db = openDb(dbPath, sqliteMod);
++    const messages = db.prepare(MESSAGES_SQL).all(id);
++    if (messages.length === 0) return empty;
++    const parts = db.prepare(PARTS_SQL).all(id);
++    const built = buildEvents(messages, parts);
++    return { found: true, ...built };
++  } catch (_) {
++    return empty;
++  } finally {
++    if (db) {
++      try { db.close(); } catch (_) {}
++    }
++  }
++}
++
++module.exports = { resolveSessionMetadata, readSessionEvents, defaultDbPath, SUBAGENT_TITLE_PREFIX };
+diff --git a/src/shared/sessionDetail.js b/src/shared/sessionDetail.js
+index c2dee8c..51c9a56 100644
+--- a/src/shared/sessionDetail.js
++++ b/src/shared/sessionDetail.js
+@@ -3,6 +3,7 @@
+ const fs = require('node:fs');
+ const { resolveSessionFile } = require('./sessionFiles');
+ const opencodeSession = require('./providers/opencode/session');
++const zcodeSession = require('./providers/zcode/sessionMetadata');
+ const { readReasonixSessionEvents } = require('./providers/reasonix/sessionDetail');
+ 
+ function num(value) {
+@@ -361,6 +362,22 @@ function readOpenCodeSessionDetail({ sessionId, period = 'total', deps = {} }) {
+   return { found: true, client: 'opencode', sessionId, period, exchanges: grouped, totals: totalsOf(grouped, filteredCost) };
+ }
+ 
++// ZCode records real per-message costs, but on a subscription plan they are
++// always 0 — the estimated session cost from the card is proportionally
++// distributed across turns instead, matching the Claude/Codex convention.
++function readZcodeSessionDetail({ sessionId, period = 'total', sessionCost = 0, home, deps = {} }) {
++  const zcodeDeps = deps.zcodeDeps || {};
++  const { found, events } = zcodeSession.readSessionEvents(sessionId, {
++    sqlite: zcodeDeps.sqlite,
++    dbPath: zcodeDeps.dbPath,
++    home: zcodeDeps.home || home
++  });
++  if (!found) return { found: false, client: 'zcode', sessionId, period, exchanges: [], totals: totalsOf([], 0) };
++  const now = new Date((deps.now || Date.now)());
++  const grouped = distributeCost(filterExchangesByPeriod(groupEvents(events), period, now), sessionCost);
++  return { found: true, client: 'zcode', sessionId, period, exchanges: grouped, totals: totalsOf(grouped, sessionCost) };
++}
++
+ function readReasonixSessionDetail({ sessionId, period = 'total', home, deps = {} }) {
+   const result = readReasonixSessionEvents({
+     sessionId,
+@@ -392,6 +409,7 @@ function readReasonixSessionDetail({ sessionId, period = 'total', home, deps = {
+ 
+ function readSessionDetail({ client, sessionId, period = 'total', sessionCost = 0, home, env, useEnvRoots, deps = {} }) {
+   if (client === 'opencode') return readOpenCodeSessionDetail({ sessionId, period, deps });
++  if (client === 'zcode') return readZcodeSessionDetail({ sessionId, period, sessionCost, home, deps });
+   if (client === 'reasonix') return readReasonixSessionDetail({ sessionId, period, home, deps });
+   const filePath = resolveSessionFile(client, sessionId, home, { env, useEnvRoots });
+   if (!filePath) return { found: false, client, sessionId, period, exchanges: [], totals: totalsOf([], sessionCost) };
 diff --git a/src/shared/sessionMetadata.js b/src/shared/sessionMetadata.js
 index 2e992c6..769ac4a 100644
 --- a/src/shared/sessionMetadata.js
@@ -2417,6 +2580,126 @@ index ce7dbfc..143baaa 100644
  test('fetchZaiLimits requests the selected BigModel CN region', async () => {
    const urls = [];
    const provider = await fetchZaiLimits(
+diff --git a/tests/shared/zcodeSessionDetail.test.js b/tests/shared/zcodeSessionDetail.test.js
+new file mode 100644
+index 0000000..49cd7e8
+--- /dev/null
++++ b/tests/shared/zcodeSessionDetail.test.js
+@@ -0,0 +1,114 @@
++'use strict';
++
++const assert = require('node:assert/strict');
++const fs = require('node:fs');
++const os = require('node:os');
++const path = require('node:path');
++const test = require('node:test');
++const { DatabaseSync } = require('node:sqlite');
++const nodeSqlite = require('node:sqlite');
++
++const { readSessionDetail } = require('../../src/shared/sessionDetail');
++
++const tmpDirs = [];
++test.after(() => {
++  for (const dir of tmpDirs) fs.rmSync(dir, { recursive: true, force: true });
++});
++
++const T0 = Date.UTC(2026, 8, 16, 14, 0, 0);
++const T1 = Date.UTC(2026, 8, 16, 14, 0, 6);
++const T2 = Date.UTC(2026, 8, 16, 14, 1, 0);
++const T3 = Date.UTC(2026, 8, 16, 14, 1, 8);
++const END = T3 + 1000;
++
++function makeFixture() {
++  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'token-monitor-zcode-detail-'));
++  tmpDirs.push(dir);
++  const file = path.join(dir, 'db.sqlite');
++  const db = new DatabaseSync(file);
++  db.exec('CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT, sequence INTEGER)');
++  db.exec('CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT, sequence INTEGER)');
++  const insM = db.prepare('INSERT INTO message (id, session_id, time_created, time_updated, data, sequence) VALUES (?,?,?,?,?,?)');
++  const asst = (tokens) => JSON.stringify({ role: 'assistant', cost: 0, tokens, time: { created: null } });
++  insM.run('m0', 's1', T0, T0, JSON.stringify({ role: 'user', time: { created: T0 } }), 1);
++  insM.run('m1', 's1', T1, T1, asst({ total: 300, input: 200, output: 100, reasoning: 20, cache: { read: 0, write: 0 } }), 2);
++  insM.run('m2', 's1', T2, T2, JSON.stringify({ role: 'user', time: { created: T2 } }), 3);
++  insM.run('m3', 's1', T3, T3, asst({ total: 100, input: 60, output: 30, reasoning: 0, cache: { read: 10, write: 0 } }), 4);
++  const insP = db.prepare('INSERT INTO part (id, message_id, session_id, time_created, time_updated, data, sequence) VALUES (?,?,?,?,?,?,?)');
++  insP.run('p0', 'm0', 's1', T0, T0, JSON.stringify({ type: 'text', text: '帮我查一下配置' }));
++  insP.run('p1', 'm1', 's1', T1, T1, JSON.stringify({ type: 'tool', tool: 'Bash' }));
++  insP.run('p2', 'm2', 's1', T2, T2, JSON.stringify({ type: 'text', text: '再看一遍日志' }));
++  db.close();
++  return file;
++}
++
++test('readSessionDetail(zcode) groups exchanges with prompt previews and tools', (t) => {
++  const file = makeFixture();
++  const detail = readSessionDetail({
++    client: 'zcode', sessionId: 's1', period: 'total', sessionCost: 1,
++    home: os.tmpdir(), deps: { zcodeDeps: { dbPath: file, sqlite: nodeSqlite }, now: () => END }
++  });
++  assert.equal(detail.found, true);
++  assert.equal(detail.exchanges.length, 2);
++
++  const [ex1, ex2] = detail.exchanges;
++  assert.equal(ex1.promptPreview, '帮我查一下配置');
++  assert.equal(ex1.turnCount, 1);
++  assert.equal(ex1.tokens.total, 300);
++  assert.deepEqual(ex1.turns[0].tools, ['Bash']);
++
++  assert.equal(ex2.promptPreview, '再看一遍日志');
++  assert.equal(ex2.turnCount, 1);
++  assert.equal(ex2.tokens.total, 100);
++});
++
++test('readSessionDetail(zcode) distributes the estimated session cost across turns', (t) => {
++  const file = makeFixture();
++  const detail = readSessionDetail({
++    client: 'zcode', sessionId: 's1', period: 'total', sessionCost: 1,
++    home: os.tmpdir(), deps: { zcodeDeps: { dbPath: file, sqlite: nodeSqlite }, now: () => END }
++  });
++  assert.equal(detail.totals.costUsd, 1);
++  const costSum = detail.exchanges.reduce((acc, ex) => acc + ex.costEstimate, 0);
++  assert.ok(Math.abs(costSum - 1) < 1e-9, 'distributed costs must sum to the session estimate');
++  // 300:100 token split -> 0.75 / 0.25
++  assert.ok(Math.abs(detail.exchanges[0].costEstimate - 0.75) < 1e-9);
++  assert.ok(Math.abs(detail.exchanges[1].costEstimate - 0.25) < 1e-9);
++});
++
++test('readSessionDetail(zcode) reports found:false for an unknown session', (t) => {
++  const file = makeFixture();
++  const detail = readSessionDetail({
++    client: 'zcode', sessionId: 'sess_nope', period: 'total',
++    home: os.tmpdir(), deps: { zcodeDeps: { dbPath: file, sqlite: nodeSqlite }, now: () => END }
++  });
++  assert.equal(detail.found, false);
++  assert.equal(detail.exchanges.length, 0);
++});
++
++test('readSessionDetail(zcode) degrades when the database is missing or corrupt', (t) => {
++  const missing = readSessionDetail({
++    client: 'zcode', sessionId: 's1', period: 'total',
++    home: os.tmpdir(), deps: { zcodeDeps: { dbPath: path.join(os.tmpdir(), 'nope', 'db.sqlite'), sqlite: nodeSqlite } }
++  });
++  assert.equal(missing.found, false);
++
++  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'token-monitor-zcode-detail-bad-'));
++  tmpDirs.push(dir);
++  const bad = path.join(dir, 'db.sqlite');
++  fs.writeFileSync(bad, 'not a database');
++  const corrupt = readSessionDetail({
++    client: 'zcode', sessionId: 's1', period: 'total',
++    home: os.tmpdir(), deps: { zcodeDeps: { dbPath: bad, sqlite: nodeSqlite } }
++  });
++  assert.equal(corrupt.found, false);
++});
++
++test('the renderer whitelists zcode in both detail gates', () => {
++  const source = fs.readFileSync(
++    path.join(__dirname, '..', '..', 'src', 'electron', 'renderer', 'app.js'),
++    'utf8'
++  );
++  assert.match(source, /\['claude', 'codex', 'opencode', 'dsh', 'zcode'\]\.includes\(client\)/);
++  assert.match(source, /client !== 'zcode'\) return;/);
++});
 diff --git a/tests/shared/zcodeSessionMetadata.test.js b/tests/shared/zcodeSessionMetadata.test.js
 new file mode 100644
 index 0000000..9d340a5
