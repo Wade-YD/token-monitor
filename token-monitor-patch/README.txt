@@ -56,7 +56,7 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
                   分支 feat/edge-auto-hide（基线 v0.58.0，含 12 个提交）
                   这是首选留档，含完整历史
   本补丁          D:\桌面\私人图书馆\7-工具箱\1-project\token-monitor-workspace\token-monitor-patch\edge-auto-hide.patch
-                  129 KB（基线 v0.58.0），含全部源码改动 + 测试改动
+                  137 KB（基线 v0.58.0），含全部源码改动 + 测试改动
   已安装应用      C:\Users\29871\AppData\Local\Programs\Token Monitor（v0.58.0 + 补丁）
   官方原包备份    <安装位置>\resources\app.asar.v0580-official.bak   18,868,880 B
                   + 同名 .unpacked 双胞胎（勿删，解包该 bak 时必需）
@@ -86,7 +86,7 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
     61e1608 feat(sessions): ZCode 会话标题（只读 SQLite 解析器）
     1a361fb feat(sessions): 子会话标题带类型标签（子代理/侧聊）
     41256a6 feat(sessions): ZCode 会话明细点入（readSessionEvents + 门控）
-  规模（相对 v0.58.0）：20 files changed, +2434/−32（14 个 src + 6 个测试文件）
+  规模（相对 v0.58.0）：20 files changed, +2407/−23（13 个 src + 7 个测试文件）
 
 【升级记录（2026-09-16，v0.57.0 → v0.58.0）】
   1) 官方 v0.58.0 当天 14:24 发布（新增 Amp 会话统计、Factory Droid 额度）。

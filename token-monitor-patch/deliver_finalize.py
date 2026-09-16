@@ -40,7 +40,8 @@ FILES = [r"src\electron\floatingBubble.js", r"src\electron\main.js",
          r"src\electron\edgePopupGuard.js",
          r"src\shared\providers\zai\limits.js",
          r"src\shared\providers\zcode\sessionMetadata.js",
-         r"src\shared\sessionMetadata.js"]
+         r"src\shared\sessionMetadata.js",
+         r"src\shared\sessionDetail.js"]
 
 user32 = ctypes.windll.user32
 WNDENUMPROC = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)

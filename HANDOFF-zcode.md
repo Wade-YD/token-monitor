@@ -447,4 +447,4 @@ node --test tests/electron/edgeAutoHide.test.js tests/electron/windowBehavior.te
   真库实测 587 事件、489 轮、445 轮带工具。**教训**：fixture 把 DatabaseSync 类
   当模块对象传入导致 found:false——openDb 已兼容两种传法。
 - 交付：13 文件覆盖（FILES 增 sessionDetail.js）→ pack 45,411,331 B → 换装重启，
-  贴边 3px 正常、无错误日志。patch 129 KB（15 提交，20 文件 +2434/−32）重放通过。
+  贴边 3px 正常、无错误日志。patch 137 KB（15 提交，20 文件 +2407/−23）重放通过。
