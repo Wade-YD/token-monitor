@@ -36,6 +36,7 @@ function fakeBindings(spec) {
 const MAIN = { hwnd: MAIN_HWND, pid: OUR_PID, rect: { x: 300, y: 0, w: 300, h: 400 } };
 const POPUP = { hwnd: 10, pid: OUR_PID, rect: { x: 700, y: 100, w: 200, h: 300 } }; // far outside MAIN
 const FOREIGN = { hwnd: 20, pid: 9999, rect: { x: 700, y: 100, w: 200, h: 300 } };
+const DASH = { hwnd: 30, pid: OUR_PID, rect: { x: 0, y: 500, w: 920, h: 620 } }; // persistent dashboard window
 
 test('the cursor resting on an owned popup holds the window open', () => {
   const bindings = fakeBindings({ windows: { [MAIN.hwnd]: MAIN, [POPUP.hwnd]: POPUP } });
@@ -74,6 +75,41 @@ test('an owned child resolves to its owner root before the pid check', () => {
   const bindings = fakeBindings({ windows: { [MAIN.hwnd]: MAIN, [POPUP.hwnd]: POPUP, [child.hwnd]: child } });
   const holds = (cursor) => guard.createPopupGuard(bindings, MAIN_HWND, cursor);
   assert.equal(holds({ x: 800, y: 200 }), true);
+});
+
+test('the cursor resting on the dashboard (a persistent second window) must not hold the dock open', () => {
+  // Reported bug: entering the dashboard froze the home panel spread over it,
+  // because the guard treated every own-process window as a transient popup.
+  const bindings = fakeBindings({ windows: { [MAIN.hwnd]: MAIN, [DASH.hwnd]: DASH } });
+  const holds = (cursor) => guard.createPopupGuard(bindings, MAIN_HWND, cursor, null, [DASH.hwnd]);
+  assert.equal(holds({ x: 400, y: 800 }), false, 'working in the dashboard must let the dock fold away');
+});
+
+test('the dashboard holding focus must not hold the dock open either', () => {
+  // The foreground veto was designed for focused popups; the dashboard takes
+  // focus for the whole working session, so it must be exempt on that path too.
+  const bindings = fakeBindings({
+    windows: { [MAIN.hwnd]: MAIN, [DASH.hwnd]: DASH },
+    foreground: DASH.hwnd
+  });
+  const holds = (cursor) => guard.createPopupGuard(bindings, MAIN_HWND, cursor, null, [DASH.hwnd]);
+  assert.equal(holds({ x: 100, y: 100 }), false);
+});
+
+test('an unknown own-process popup still holds while the dashboard is exempted', () => {
+  // Exempting the dashboard must not weaken the guard for the popups it was
+  // built for: the color chooser is not on the persistent list and still holds.
+  const bindings = fakeBindings({ windows: { [MAIN.hwnd]: MAIN, [POPUP.hwnd]: POPUP, [DASH.hwnd]: DASH } });
+  const holds = (cursor) => guard.createPopupGuard(bindings, MAIN_HWND, cursor, null, [DASH.hwnd]);
+  assert.equal(holds({ x: 800, y: 200 }), true);
+});
+
+test('without an exemption list the conservative default holds (backwards compatible)', () => {
+  // Callers that do not pass persistentHwnds keep the original behavior: every
+  // own-process window other than main holds the dock open.
+  const bindings = fakeBindings({ windows: { [MAIN.hwnd]: MAIN, [DASH.hwnd]: DASH } });
+  const holds = (cursor) => guard.createPopupGuard(bindings, MAIN_HWND, cursor);
+  assert.equal(holds({ x: 400, y: 800 }), true);
 });
 
 test('missing FFI bindings degrade to false and never throw', () => {

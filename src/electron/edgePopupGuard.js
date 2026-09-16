@@ -7,6 +7,13 @@
 // vendor colors). This module answers a single question: is the cursor over a
 // top-level window that belongs to this process but is not the main one — or
 // does such a window hold focus? If yes, the docked window must stay revealed.
+//
+// PERSISTENT windows of ours are the exception, not the rule: the dashboard
+// (a second BrowserWindow) is a workspace the user deliberately works in, so
+// while they are there the dock must fold away as usual. Callers pass such
+// windows in `persistentHwnds` and the guard exempts them; every UNKNOWN
+// own-process window still holds, which keeps the guard conservative for
+// transient popups we did not anticipate.
 
 const GA_ROOT = 2;
 
@@ -51,14 +58,18 @@ function loadApi() {
 // The decision itself, pure over injected bindings so it is testable without a
 // display. bindings: { windowFromPoint, getAncestor, getWindowThreadProcessId,
 // getForegroundWindow, gaRoot, currentPid }. mainHwnd: Number | null.
+// exemptHwnds: persistent own-process windows (dashboard) that must never hold.
 // debug (optional) receives one line per evaluation: what the native layer
 // actually answered, so a verdict can be explained instead of guessed.
-function popupHoldsCollapseWith(bindings, mainHwnd, cursor, debug) {
+function popupHoldsCollapseWith(bindings, mainHwnd, cursor, debug, exemptHwnds) {
   if (!bindings || !cursor) return false;
+  const exempt = new Set((Array.isArray(exemptHwnds) ? exemptHwnds : [])
+    .map((h) => Number(h)).filter((h) => Number.isFinite(h) && h));
   const log = (m) => { if (debug) debug(m); };
   const owned = (hwnd) => {
     if (!hwnd) return false;
     if (mainHwnd !== null && hwnd === mainHwnd) return false;
+    if (exempt.has(hwnd)) return false;
     const out = { value: 0 };
     bindings.getWindowThreadProcessId(hwnd, out);
     return out.value === bindings.currentPid;
@@ -74,7 +85,8 @@ function popupHoldsCollapseWith(bindings, mainHwnd, cursor, debug) {
     const fgOwned = owned(fgRoot);
     log('under=' + under + ' root=' + root + ' underPidOwned=' + underOwned
       + ' fgRoot=' + fgRoot + ' fgOwned=' + fgOwned
-      + ' mainHwnd=' + mainHwnd + ' ourPid=' + bindings.currentPid);
+      + ' exempt=' + [...exempt].join('|') + ' mainHwnd=' + mainHwnd
+      + ' ourPid=' + bindings.currentPid);
     return underOwned || fgOwned;
   } catch (err) {
     // A failed native call must never wedge the window open: fold as before.
@@ -83,10 +95,12 @@ function popupHoldsCollapseWith(bindings, mainHwnd, cursor, debug) {
   }
 }
 
-function popupHoldsCollapse({ mainHwnd, cursor, debug } = {}) {
+function popupHoldsCollapse({ mainHwnd, cursor, debug, persistentHwnds } = {}) {
   const bindings = loadApi();
   if (!bindings) return false;
-  return popupHoldsCollapseWith(bindings, mainHwnd === null || mainHwnd === undefined ? null : Number(mainHwnd), cursor, debug);
+  return popupHoldsCollapseWith(bindings,
+    mainHwnd === null || mainHwnd === undefined ? null : Number(mainHwnd),
+    cursor, debug, Array.isArray(persistentHwnds) ? persistentHwnds : []);
 }
 
 module.exports = {
