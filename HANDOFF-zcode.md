@@ -109,7 +109,10 @@ opencode-session-*.html 本会话完整记录（7.14 MB）
     ——用户反馈「外观-厂商色调色盘取色时窗口自动收回」：取色器是本进程原生弹窗，
     光标进入即被判「离开窗口」。修复：新增 `edgePopupGuard.js`
     （WindowFromPoint+前台窗口双查自有弹窗，win32/koffi，FFI 不可用静默降级），
-    轮询武装前与计时器到点两处守卫。**附带教训**：从 orig-backup 解包 asar 必须有
+    轮询武装前与计时器到点两处守卫。首版上线即被诊断日志抓出 `currentPid` 未传
+    （owned 判定恒 false），一行修复后实测 136 次命中——**诊断开关首功**。
+    另证：取色器不抢焦点（fgRoot 恒为主窗口），光标判定是唯一可行守卫路径。
+    **附带教训**：从 orig-backup 解包 asar 必须有
     `app.asar.orig-backup.unpacked` 孪生目录（已创建勿删），否则丢 78 个 unpacked
     文件（tokscale/bin.js 等）→ 启动报 Cannot find module。交付脚本已加体积护栏
 - **fork（永久副本，就在这里）**：`D:\桌面\私人图书馆\7-工具箱\1-project\token-monitor-workspace\token-monitor`
