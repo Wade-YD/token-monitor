@@ -19,7 +19,7 @@ TBD - created by archiving change add-zcode-session-titles. Update Purpose after
 
 ### Requirement: 子代理会话显示父会话归属
 
-对于 ZCode 库中 `parent_id` 非空的子代理会话，系统 SHALL 以「↳ + 父会话标题」作为其显示标题；父会话标题不可得时 SHALL 回退到该会话自身的标题或裸 id。
+对于 ZCode 库中 `parent_id` 非空的子代理会话，系统 SHALL 以「↳ <类型> · 父会话标题」作为其显示标题（类型映射自 `task_type`：subagent_child→子代理、selection_side_chat→侧聊、未映射显示原值；类型仅在父标题可得时附加）；父会话标题不可得时 SHALL 回退到该会话自身的标题或裸 id。
 
 #### Scenario: 子代理会话归属展示
 
