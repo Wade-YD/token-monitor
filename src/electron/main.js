@@ -35,6 +35,7 @@ const tokenNumberAnimationApi = require('./tokenNumberAnimation');
 const { createRepositoryStars } = require('./repositoryStars');
 const { clearBackgroundImage, getBackgroundImage, importBackgroundImage } = require('./backgroundImage');
 const edgeAutoHideApi = require('./edgeAutoHide');
+const edgePopupGuardApi = require('./edgePopupGuard');
 const { createClientSourceIpcHandlers } = require('./clientSourceIpc');
 const { detectWslClientsAsync } = require('../shared/wslUsage');
 const { createClaudeWebFetch } = require('./providers/claude/webFetch');
@@ -1946,6 +1947,23 @@ function edgeResizeGraceActive() {
   return Date.now() - edgeAutoHideState.lastResizeAt < EDGE_RESIZE_GRACE_MS;
 }
 
+// Native popups we spawn (the vendor-color chooser, context menus, <select>
+// dropdowns) are windows of our own process OUTSIDE the BrowserWindow rect.
+// While the cursor is on one of them — or one holds focus — the docked window
+// must not fold, or the user loses the popup mid-interaction. win32 only; the
+// guard degrades to false everywhere else and when the FFI is unavailable.
+function edgeNativePopupHoldsCursor(cursor) {
+  if (process.platform !== 'win32' || !mainWindow || mainWindow.isDestroyed()) return false;
+  try {
+    return edgePopupGuardApi.popupHoldsCollapse({
+      mainHwnd: edgePopupGuardApi.hwndOf(mainWindow),
+      cursor
+    });
+  } catch (_) {
+    return false;
+  }
+}
+
 // ---- Edge geometry guard -------------------------------------------------
 // No non-finite coordinate may ever reach an Electron window API (a NaN reaches
 // setPosition as "Error processing argument at index 1, conversion failure" and
@@ -2260,15 +2278,29 @@ function startEdgeCursorPolling() {
       clearEdgeCollapseTimer();
       return;
     }
+    if (edgeNativePopupHoldsCursor(cursor)) {
+      // The cursor sits on one of our own native popups (vendor-color chooser,
+      // context menu, <select>) — part of the interaction, not "the user left".
+      clearEdgeCollapseTimer();
+      edgeAutoHideState.desired = 'revealed';
+      edgeDebug('poll', 'popup hold cursor=' + JSON.stringify(cursor));
+      return;
+    }
     if (!edgeAutoHideState.collapseTimer) {
       edgeDebug('poll', 'arm collapse side=' + dockSide + ' cursor=' + JSON.stringify(cursor));
       edgeAutoHideState.collapseTimer = setTimeout(() => {
         edgeAutoHideState.collapseTimer = null;
         if (!canUseEdgeAutoHide(settings)) return;
-        // The user may have grabbed an edge after this timer was armed; a
-        // collapse firing into an active resize is both a UX betrayal and a
-        // known source of transient native rejections.
+        // The user may have grabbed an edge or opened a popup after this timer
+        // was armed; a collapse firing into either is a UX betrayal (and a
+        // known source of transient native rejections).
         if (edgeResizeGraceActive()) return;
+        let cursorNow = null;
+        try { cursorNow = screen.getCursorScreenPoint(); } catch (_) { cursorNow = null; }
+        if (cursorNow && edgeNativePopupHoldsCursor(cursorNow)) {
+          edgeDebug('poll', 'collapse vetoed by popup at cursor=' + JSON.stringify(cursorNow));
+          return;
+        }
         // The grace period only flips the desired state; the move itself stays
         // with the single executor, so it remains subject to the geometry guard.
         edgeAutoHideState.desired = 'hidden';
