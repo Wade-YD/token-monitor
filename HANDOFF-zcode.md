@@ -448,3 +448,9 @@ node --test tests/electron/edgeAutoHide.test.js tests/electron/windowBehavior.te
   当模块对象传入导致 found:false——openDb 已兼容两种传法。
 - 交付：13 文件覆盖（FILES 增 sessionDetail.js）→ pack 45,411,331 B → 换装重启，
   贴边 3px 正常、无错误日志。patch 137 KB（15 提交，20 文件 +2407/−23）重放通过。
+
+追加（2026-09-17，提交 7505480）：zcode 会话行补手掌光标与「›」affordance——
+styles.css 的 per-client 选择器列表（cursor:pointer / row-metrics '>'）也是
+按客户端硬编码的，上一轮加明细时漏了它。**教训：这类 per-client 白名单在
+JS（2 处）和 CSS（2 处）共四份，新增可点入客户端时四处都要加**。
+patch 139 KB（16 提交，21 文件 +2409/−25），重放校验通过。

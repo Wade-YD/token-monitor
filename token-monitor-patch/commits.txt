@@ -1,3 +1,4 @@
+7505480 fix(sessions): zcode session rows get the pointer cursor and drill-in chevron
 41256a6 feat(sessions): zcode session detail drill-down
 1a361fb feat(sessions): label zcode child sessions by kind in the list title
 61e1608 feat(sessions): show ZCode session titles in the session list

@@ -1233,6 +1233,21 @@ index 5b11b50..1e8bd16 100644
                  </select>
                  <span class="settings-note settings-item-desc" data-i18n="settings.display.windowBehaviorNote">Desktop pinned keeps the widget below other apps and locks drag/resize while staying clickable.</span>
                </label>
+diff --git a/src/electron/renderer/styles.css b/src/electron/renderer/styles.css
+index bddbe44..c39a1c9 100644
+--- a/src/electron/renderer/styles.css
++++ b/src/electron/renderer/styles.css
+@@ -5579,8 +5579,8 @@ html.is-windows .limit-live-badge {
+ .background-review-totals { white-space: nowrap; color: var(--text); }
+ .background-review-run:focus-visible,
+ .row[role="button"]:focus-visible { outline: 2px solid rgba(var(--accent-rgb), 0.35); outline-offset: 2px; }
+-.row.session-row[data-client="claude"], .row.session-row[data-client="codex"], .row.session-row[data-client="opencode"], .row.session-row[data-client="reasonix"], .row.session-row[data-client="dsh"] { cursor: pointer; }
+-.row.session-row[data-client="claude"] .row-metrics::after, .row.session-row[data-client="codex"] .row-metrics::after, .row.session-row[data-client="opencode"] .row-metrics::after, .row.session-row[data-client="reasonix"] .row-metrics::after, .row.session-row[data-client="dsh"] .row-metrics::after { content: '›'; color: var(--muted); font-size: 14px; line-height: 1; }
++.row.session-row[data-client="claude"], .row.session-row[data-client="codex"], .row.session-row[data-client="opencode"], .row.session-row[data-client="reasonix"], .row.session-row[data-client="dsh"], .row.session-row[data-client="zcode"] { cursor: pointer; }
++.row.session-row[data-client="claude"] .row-metrics::after, .row.session-row[data-client="codex"] .row-metrics::after, .row.session-row[data-client="opencode"] .row-metrics::after, .row.session-row[data-client="reasonix"] .row-metrics::after, .row.session-row[data-client="dsh"] .row-metrics::after, .row.session-row[data-client="zcode"] .row-metrics::after { content: '›'; color: var(--muted); font-size: 14px; line-height: 1; }
+ .row.summary-row[data-review-group="true"] { cursor: pointer; }
+ .row.summary-row[data-review-group="true"] .row-metrics::after { content: '›'; color: var(--muted); font-size: 14px; line-height: 1; }
+ .row.session-row[data-client="reasonix"][data-detail-unavailable="true"] { cursor: default; }
 diff --git a/src/electron/tray.js b/src/electron/tray.js
 index a5717b0..817c71d 100644
 --- a/src/electron/tray.js
