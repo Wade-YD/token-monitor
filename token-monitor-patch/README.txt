@@ -35,28 +35,53 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
 
 【零件位置】
   完整 git 克隆   D:\桌面\私人图书馆\7-工具箱\1-project\token-monitor-workspace\token-monitor
-                  分支 feat/edge-auto-hide（含 6 个提交），958 文件 / 53.9 MB
+                  分支 feat/edge-auto-hide（基线 v0.58.0，含 11 个提交）
                   这是首选留档，含完整历史
   本补丁          D:\桌面\私人图书馆\7-工具箱\1-project\token-monitor-workspace\token-monitor-patch\edge-auto-hide.patch
-                  84 KB，含两轮全部源码改动 + 测试改动
-  已安装应用      C:\Users\29871\AppData\Local\Programs\Token Monitor
-  官方原包备份    <安装位置>\resources\app.asar.orig-backup   18,753,883 B
-  交付/验证脚本   deliver_finalize.py（finalize 轮，22 项运行时断言）
+                  107 KB（基线 v0.58.0），含全部源码改动 + 测试改动
+  已安装应用      C:\Users\29871\AppData\Local\Programs\Token Monitor（v0.58.0 + 补丁）
+  官方原包备份    <安装位置>\resources\app.asar.v0580-official.bak   18,868,880 B
+                  + 同名 .unpacked 双胞胎（勿删，解包该 bak 时必需）
+  交付/验证脚本   deliver_finalize.py（v0.57 交付轮，22 项运行时断言；FILES 表已补 10 文件）
                   verify_resize_affordance.py（调整大小场景，8 项断言）
+                  verify_v0580.py（2026-09-16 v0.58.0 交付轮验证，7 项断言）
                   第一轮脚本已归档到 superseded\（deliver_hardened.py 等 7 个）
 
 【基线（重要，别弄错）】
-  tag v0.57.0  ->  提交 bbe07de   （chore: release v0.57.0）
-  注意：v0.57.0 是 annotated tag，tag 对象是 9e5cc83，**不要把它当提交号**。
+  当前基线：tag v0.58.0 -> 提交 d426b8e（chore: release v0.58.0）
+    2026-09-16 已把整条补丁链 rebase 到 v0.58.0 并重新交付（见下「升级记录」）。
+    231f075 的提交信息仍写着 "(rebased onto v0.57.0)"，是历史信息别被误导——
+    它的父提交就是 d426b8e。
+  历史基线：tag v0.57.0 -> 提交 bbe07de（annotated tag，tag 对象 9e5cc83，
+    不要把 tag 对象当提交号；v0.57.0 版补丁链哈希见 workspace git 历史里的旧 commits.txt）。
   上游仓库：https://github.com/Javis603/token-monitor.git（浅克隆，本机无 push 权限）
-  提交链（见 commits.txt）：
-    11a3e6e feat(edge): 功能（rebase 到 v0.57.0）
-    56bd66d / 9da4de1 / c229c3f / 6488c3b   harden 四连修
-    4688fee fix(edge): finalize（收口）
-    ec477de fix(edge): resize-affordance（调整大小时不收回）
-    48ac2b8 fix(zai): 隐藏订阅用户恒零的现金行
-    e1326c6 fix(edge): 原生弹窗守卫（调色盘等弹窗期间不收回）
-  规模：14 files changed, +1803/−23（相对 v0.57.0）
+  提交链（见 commits.txt，11 个提交，从旧到新）：
+    231f075 feat(edge): 功能主提交
+    9a93773 / 7f6f215 / 085056e / cb60fae   harden 四连修
+    ec3de55 fix(edge): finalize（收口）
+    5b33903 fix(edge): resize-affordance（调整大小时不收回）
+    70162dd fix(zai): 隐藏订阅用户恒零的现金行
+    3002069 fix(edge): 原生弹窗守卫（调色盘等弹窗期间不收回）
+    342b6ac fix(edge): popup guard 的 currentPid 修复
+    2834744 fix(edge): popup guard 光标 DIP→物理像素换算
+  规模（相对 v0.58.0）：15 files changed, +1814/−20（10 个 src + 5 个测试文件）
+
+【升级记录（2026-09-16，v0.57.0 → v0.58.0）】
+  1) 官方 v0.58.0 当天 14:24 发布（新增 Amp 会话统计、Factory Droid 额度）。
+     应用内更新器实际已自行装好（用户侧看是「卡住」，其实装上了无补丁官方版），
+     NSIS 安装器顺带清掉了 resources 下我们自放的 app.asar.orig-backup 及其 .unpacked。
+  2) fork：git fetch origin --tags 后发现 rebase 已由父会话完成（补丁链 11 提交落在
+     d426b8e 上）；本轮以 5 套测试 140/140 全绿 + node --check 全过确认 rebase 可用。
+  3) 官方安装包 Token-Monitor-Setup-0.58.0.exe 直链下载，SHA-256 实测 =
+     e431146cadda2a248fcc2259f21e936c711307153a6b1765dd126fa13873194b（与 release 元数据一致），
+     /S 静默安装得干净官方 v0.58.0。
+  4) 新回退锚点：<安装位置>\resources\app.asar.v0580-official.bak（18,868,880 B）
+     + 同名 .unpacked 双胞胎目录（日后解包该 bak 必须有它）。
+  5) 从官方 asar 全新解包（2178 文件）→ 覆盖 10 个 src 文件 → pack 自包含包
+     45,399,415 B → 换装 → verify_v0580.py 运行时验证 ALL GREEN
+     （启动隐藏 3px 窄条 / 唤出收回 / 远边不误触发 / 无错误日志）。
+  ⚠️ 下次升级时 NSIS 还会清掉 bak 类自放文件——升级流程必须先备份再装，
+     装完立刻重建回退锚点（即第 4 步）。
 
 【改动的 10 个交付文件】
   src/electron/edgeAutoHide.js            （新增）
@@ -70,14 +95,14 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
   src/shared/providers/zai/limits.js      （GLM 现金行自适应隐藏）
   src/electron/edgePopupGuard.js          （自有弹窗守卫，win32/koffi）
 
-【基线锚点（补丁可回退、可重放的实测凭据，2026-09-15 核验）】
-  回退物校验   app.asar.orig-backup  SHA-256 =
-               fbc2764be3611d658159437c2c94bbc244b08bf8fa86fcc9a5f3200b45490bd1
-               大小 18,753,883 B。**回退覆盖前先核对哈希**，不一致说明备份被改坏，禁止覆盖。
-  补丁可重放   已实测：在干净 v0.57.0 检出上 `git apply --check --3way edge-auto-hide.patch`
-               无冲突通过（2026-09-15）。以后换机器/怀疑补丁与基线脱节时先重验：
+【基线锚点（补丁可回退、可重放的实测凭据）】
+  回退物校验   app.asar.v0580-official.bak，18,868,880 B（2026-09-16 由官方安装产物直接复制）。
+               **回退覆盖前先核对大小/来源**，不一致说明备份被动过，禁止覆盖。
+               （旧 v0.57.0 的 app.asar.orig-backup 已被 v0.58.0 安装器清除，作废）
+  补丁可重放   已实测：在干净 v0.58.0 检出上 `git apply --check --3way edge-auto-hide.patch`
+               无冲突通过（2026-09-16）。以后换机器/怀疑补丁与基线脱节时先重验：
                  cd "D:\桌面\私人图书馆\7-工具箱\1-project\token-monitor-workspace\token-monitor"
-                 git worktree add --detach "$TEMP/patch-check" bbe07de
+                 git worktree add --detach "$TEMP/patch-check" v0.58.0
                  git -C "$TEMP/patch-check" apply --check --3way \
                    "D:\桌面\私人图书馆\7-工具箱\1-project\token-monitor-workspace\token-monitor-patch\edge-auto-hide.patch"
                  git worktree remove --force "$TEMP/patch-check"
@@ -104,7 +129,7 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
        首选：直接用已留档的克隆
              cd "D:\桌面\私人图书馆\7-工具箱\1-project\token-monitor-workspace\token-monitor"
        从零：git clone https://github.com/Javis603/token-monitor.git tm-work
-             cd tm-work && git checkout v0.57.0          # = bbe07de
+             cd tm-work && git checkout v0.58.0          # = d426b8e
              git apply --3way "<本目录>\edge-auto-hide.patch"
   2) 跑测试（纯 Node，不需要 node_modules）
         node --test tests/electron/edgeAutoHide.test.js ^
@@ -112,7 +137,7 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
                    tests/electron/tray.test.js
         期望：edgeAutoHide 34 / edgePopupGuard 8 / windowBehavior 9 / tray 52 / zaiLimits 37，全部 exit=0
   3) 打包成 asar
-        npx --yes @electron/asar extract "<安装位置>\resources\app.asar.orig-backup" asar-extracted
+        npx --yes @electron/asar extract "<安装位置>\resources\app.asar.v0580-official.bak" asar-extracted
         把上面 9 个文件覆盖进 asar-extracted 的对应路径
         npx --yes @electron/asar pack asar-extracted app.asar
   4) 替换（**替换前先确认官方备份存在**；先退出应用）
@@ -126,7 +151,7 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
   用     设置 → 显示方式 → Edge auto-hide，把窗口拖到任意屏幕边
   停用   同一处下拉改回 Floating above apps          （零风险，随时切回）
   回退1  上一条（零风险）
-  回退2  用 app.asar.orig-backup 覆盖 app.asar 后重启   → 回到官方构建
+  回退2  用 app.asar.v0580-official.bak 覆盖 app.asar 后重启  → 回到官方构建
   回退3  git checkout 6488c3b 后重新打包替换          → 回到 finalize 前
 
 【排障】

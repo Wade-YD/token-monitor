@@ -361,3 +361,20 @@ cd "D:\桌面\私人图书馆\7-工具箱\1-project\token-monitor-workspace\toke
 node --test tests/electron/edgeAutoHide.test.js tests/electron/windowBehavior.test.js tests/electron/tray.test.js
 # 期望：34 / 9 / 52 全绿
 ```
+
+---
+
+## 10. 2026-09-16：升级官方 v0.58.0 + 补丁重交付
+
+- 官方 v0.58.0 当天 14:24 发布（新增 Amp 会话统计、Factory Droid 额度）。
+  应用内更新器其实自行装上了**无补丁官方版**（用户侧看是「卡住」）；
+  NSIS 安装器顺带清掉了 resources 下自放的 app.asar.orig-backup 及 .unpacked（作废，无妨）。
+- fork 已 rebase 到 v0.58.0（d426b8e），补丁链 11 提交（231f075…2834744）；
+  本轮复验 5 套测试 **140/140 全绿**（旧文档 §9 的「34 / 9 / 52」口径已过时）。
+- 交付链：官方 Setup 直链下载（SHA-256 e431146c… 与 release 元数据一致）→ /S 静默安装
+  → 全新解包 2178 文件 → 覆盖 10 个 src 文件 → 自包含包 45,399,415 B → 换装
+  → `verify_v0580.py` **ALL GREEN**（启动隐藏 3px 窄条 / 唤出收回 / 远边不误触发 / 无错误日志）。
+- 回退锚点换新：`resources\app.asar.v0580-official.bak`（18,868,880 B）+ 同名 .unpacked 双胞胎。
+- `edge-auto-hide.patch`（107 KB）/ `commits.txt` / `README.txt` 已按 v0.58.0 基线重写；
+  干净 v0.58.0 检出上补丁重放校验通过。
+- ⚠️ 给下次升级：NSIS 会清掉安装目录里一切自放文件——先备份再装，装完立刻重建回退锚点。

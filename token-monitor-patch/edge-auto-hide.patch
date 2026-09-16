@@ -340,7 +340,7 @@ index a2bede0..760750a 100644
  
  function floatingBubbleNativeGlassEnabled(settings = {}) {
 diff --git a/src/electron/main.js b/src/electron/main.js
-index 67b0770..2721ae1 100644
+index 4f03f9c..4f75246 100644
 --- a/src/electron/main.js
 +++ b/src/electron/main.js
 @@ -23,6 +23,8 @@ const { exportFileSet, exportSignature, EXPORT_FILENAMES } = require('../shared/
@@ -352,7 +352,7 @@ index 67b0770..2721ae1 100644
  const { createClientSourceIpcHandlers } = require('./clientSourceIpc');
  const { createClaudeWebFetch } = require('./providers/claude/webFetch');
  const { runAntigravityOAuthLogin } = require('./providers/antigravity/oauthLogin');
-@@ -2025,6 +2027,7 @@ function restoredBounds() {
+@@ -2040,6 +2042,7 @@ function restoredBounds() {
  let persistBoundsTimer = null;
  let floatingBubbleAutoCollapseTimer = null;
  const floatingBubbleState = { collapsed: false, side: null, collapsedBounds: null, expandedBounds: null, suppressNextCollapse: false, contentSize: null };
@@ -360,7 +360,7 @@ index 67b0770..2721ae1 100644
  let mainWindowChrome = { collapsedFloatingBubble: false };
  
  function stopPersistBoundsTimer() {
-@@ -2271,6 +2274,427 @@ function syncFloatingBubbleAvailability() {
+@@ -2286,6 +2289,435 @@ function syncFloatingBubbleAvailability() {
    sendFloatingBubbleState();
  }
  
@@ -392,11 +392,19 @@ index 67b0770..2721ae1 100644
 +function edgeNativePopupHoldsCursor(cursor) {
 +  if (process.platform !== 'win32' || !mainWindow || mainWindow.isDestroyed()) return false;
 +  try {
++    // Electron screen APIs speak DIPs; WindowFromPoint speaks physical pixels.
++    // Convert when the scales differ (identity at 100% zoom).
++    let physical = cursor;
++    try {
++      if (typeof screen.dipToScreenPoint === 'function') physical = screen.dipToScreenPoint(cursor);
++    } catch (_) {}
 +    return edgePopupGuardApi.popupHoldsCollapse({
 +      mainHwnd: edgePopupGuardApi.hwndOf(mainWindow),
-+      cursor
++      cursor: physical,
++      debug: (m) => edgeDebug('popup', 'cursor=' + JSON.stringify(cursor) + ' physical=' + JSON.stringify(physical) + ' | ' + m)
 +    });
-+  } catch (_) {
++  } catch (err) {
++    edgeDebug('popup', 'guard threw: ' + ((err && err.message) || String(err)));
 +    return false;
 +  }
 +}
@@ -788,7 +796,7 @@ index 67b0770..2721ae1 100644
  function persistBoundsSoon() {
    if (!mainWindow || mainWindow.isDestroyed()) return;
    if (!shouldPersistWindowBounds(mainWindow)) {
-@@ -2288,6 +2712,10 @@ function persistBoundsSoon() {
+@@ -2303,6 +2735,10 @@ function persistBoundsSoon() {
        // Popover x/y is anchored to the tray icon each open; only the size carries over.
        if (prev.width === next.width && prev.height === next.height) return;
        settings.windowBounds = { ...prev, width: next.width, height: next.height };
@@ -799,7 +807,7 @@ index 67b0770..2721ae1 100644
      } else if (floatingBubbleState.collapsed && floatingBubbleState.expandedBounds) {
        floatingBubbleState.collapsedBounds = next;
        const display = displayForBounds(next);
-@@ -2816,6 +3244,77 @@ function applyWindowSettings() {
+@@ -2842,6 +3278,77 @@ function applyWindowSettings() {
      applyCollapsedFloatingBubbleLimits(mainWindow.getBounds());
      return;
    }
@@ -877,7 +885,7 @@ index 67b0770..2721ae1 100644
    const behavior = describeWindowBehavior(settings);
    mainWindow.setAlwaysOnTop(behavior.alwaysOnTop, floatingAlwaysOnTopLevel());
    if (typeof mainWindow.setMovable === 'function') mainWindow.setMovable(behavior.draggable);
-@@ -2827,6 +3326,17 @@ function applyWindowSettings() {
+@@ -2853,6 +3360,17 @@ function applyWindowSettings() {
    if (typeof mainWindow.setSkipTaskbar === 'function') mainWindow.setSkipTaskbar(skipTaskbarForSettings(settings));
    if (!behavior.focusable && typeof mainWindow.blur === 'function') mainWindow.blur();
    syncTaskbarZOrder();
@@ -895,7 +903,7 @@ index 67b0770..2721ae1 100644
  }
  
  function nativeBlurEnabled(source = settings) {
-@@ -5135,6 +5645,8 @@ function setWindowPresentationFromMenu(value) {
+@@ -5142,6 +5660,8 @@ function setWindowPresentationFromMenu(value) {
    saveSettings();
    if (previousTrayMode) exitTrayMode();
    else {
@@ -904,7 +912,7 @@ index 67b0770..2721ae1 100644
      applyWindowSettings();
      focusExistingWindow();
    }
-@@ -6256,6 +6768,7 @@ function createWindow(boundsOverride, options = {}) {
+@@ -6268,6 +6788,7 @@ function createWindow(boundsOverride, options = {}) {
      }
    });
    mainWindow = win;
@@ -912,7 +920,7 @@ index 67b0770..2721ae1 100644
    mainWindowNativeBlurEnabled = null;
    mainWindowChrome = { collapsedFloatingBubble };
    applyMacSpaceBehavior();
-@@ -6298,17 +6811,83 @@ function createWindow(boundsOverride, options = {}) {
+@@ -6310,17 +6831,83 @@ function createWindow(boundsOverride, options = {}) {
    applyNativeMaterial();
    win.on('focus', () => {
      stopFloatingBubbleAutoCollapseTimer();
@@ -1001,7 +1009,7 @@ index 67b0770..2721ae1 100644
    win.on('minimize', stopTaskbarZOrderKeeper);
    win.on('close', (event) => {
      if (quitRequested) return;
-@@ -6538,6 +7117,28 @@ function rebuildWindow() {
+@@ -6550,6 +7137,28 @@ function rebuildWindow() {
    });
  }
  
@@ -1030,7 +1038,7 @@ index 67b0770..2721ae1 100644
  app.whenReady().then(() => {
    if (process.platform === 'darwin' && app.dock) app.dock.setIcon(APP_ICON_PATH);
    ensureSettingsLoaded();
-@@ -6902,6 +7503,7 @@ app.whenReady().then(() => {
+@@ -6917,6 +7526,7 @@ app.whenReady().then(() => {
      ) && latestStats) updateDiscordRpcDisplay(latestStats);
      applyWindowSettings();
      syncFloatingBubbleAvailability();
@@ -1038,7 +1046,7 @@ index 67b0770..2721ae1 100644
      const nextNativeMaterial = nativeBlurEnabled();
      const nextWindowsBackdrop = normalizeWindowsBackdropMode(settings?.windowsBackdrop);
      const windowsBackdropChanged = previousWindowsBackdrop !== nextWindowsBackdrop
-@@ -6989,6 +7591,27 @@ app.whenReady().then(() => {
+@@ -7014,6 +7624,27 @@ app.whenReady().then(() => {
    });
    ipcMain.handle('floatingBubble:expand', () => expandFloatingBubble());
    ipcMain.handle('floatingBubble:peek', () => expandFloatingBubble({ focus: false }));
@@ -1067,10 +1075,10 @@ index 67b0770..2721ae1 100644
      if (!mainWindow || mainWindow.isDestroyed()) return false;
      if (floatingBubbleState.collapsed || !canUseFloatingBubble(settings)) return false;
 diff --git a/src/electron/renderer/app.js b/src/electron/renderer/app.js
-index 288d6d2..a9aea3c 100644
+index 35732c1..64288d5 100644
 --- a/src/electron/renderer/app.js
 +++ b/src/electron/renderer/app.js
-@@ -189,8 +189,8 @@ const projectRowsApi = window.TokenMonitorProjectRows;
+@@ -195,8 +195,8 @@ const projectRowsApi = window.TokenMonitorProjectRows;
  const sessionDetailApi = window.TokenMonitorSessionDetail;
  const windowShortcutApi = window.TokenMonitorWindowShortcut;
  const LIMIT_REFRESH_OPTIONS = [60000, 120000, 300000, 900000, 1800000];
@@ -1082,10 +1090,10 @@ index 288d6d2..a9aea3c 100644
  const LIMIT_CAPABILITY_TAG_KEYS = {
    Auto: 'settings.limits.capability.auto',
 diff --git a/src/electron/renderer/i18n.js b/src/electron/renderer/i18n.js
-index 224aa4d..d97eb92 100644
+index badac3c..7cbcc88 100644
 --- a/src/electron/renderer/i18n.js
 +++ b/src/electron/renderer/i18n.js
-@@ -1168,6 +1168,7 @@
+@@ -1201,6 +1201,7 @@
        'settings.windowBehavior.floating': 'Floating above apps',
        'settings.windowBehavior.normal': 'Normal window',
        'settings.windowBehavior.desktop': 'Desktop pinned',
@@ -1093,7 +1101,7 @@ index 224aa4d..d97eb92 100644
        'settings.windowBehavior.buttonTitle': '{current}; click for {next}',
        'settings.display.floatingBubble': 'Floating Bubble',
        'settings.display.floatingBubbleNote': 'Collapse the widget into a slim draggable mini-window; click it to reopen.',
-@@ -1348,6 +1349,7 @@
+@@ -1381,6 +1382,7 @@
        'trayMenu.presentation.floating': 'Floating Above Apps',
        'trayMenu.presentation.normal': 'Normal Window',
        'trayMenu.presentation.desktop': 'Desktop Pinned',
@@ -1101,7 +1109,7 @@ index 224aa4d..d97eb92 100644
        'settings.startup.title': 'Startup',
        'settings.startup.startAtLogin': 'Start at login',
        'settings.startup.available': 'Available in packaged builds. On Linux, run the AppImage build to enable.',
-@@ -2688,6 +2690,7 @@
+@@ -2758,6 +2760,7 @@
        'settings.windowBehavior.floating': '浮在其他 app 上方',
        'settings.windowBehavior.normal': '一般視窗',
        'settings.windowBehavior.desktop': '固定在桌面',
@@ -1109,7 +1117,7 @@ index 224aa4d..d97eb92 100644
        'settings.windowBehavior.buttonTitle': '目前：{current}；點擊切換為 {next}',
        'settings.display.floatingBubble': '懸浮小窗',
        'settings.display.floatingBubbleNote': '將 widget 收成可拖曳的窄長小窗，點擊即可重新展開。',
-@@ -2868,6 +2871,7 @@
+@@ -2938,6 +2941,7 @@
        'trayMenu.presentation.floating': '浮動於其他 App 上方',
        'trayMenu.presentation.normal': '一般視窗',
        'trayMenu.presentation.desktop': '固定於桌面',
@@ -1117,7 +1125,7 @@ index 224aa4d..d97eb92 100644
        'settings.startup.title': '啟動',
        'settings.startup.startAtLogin': '登入時啟動',
        'settings.startup.available': '僅在打包後的版本可用；Linux 需以 AppImage 執行。',
-@@ -4208,6 +4212,7 @@
+@@ -4315,6 +4319,7 @@
        'settings.windowBehavior.floating': '浮在其他 app 上方',
        'settings.windowBehavior.normal': '普通窗口',
        'settings.windowBehavior.desktop': '固定在桌面',
@@ -1125,7 +1133,7 @@ index 224aa4d..d97eb92 100644
        'settings.windowBehavior.buttonTitle': '当前：{current}；点击切换为 {next}',
        'settings.display.floatingBubble': '悬浮小窗',
        'settings.display.floatingBubbleNote': '将组件收成可拖动的窄长小窗，点击即可重新展开。',
-@@ -4388,6 +4393,7 @@
+@@ -4495,6 +4500,7 @@
        'trayMenu.presentation.floating': '浮动于其他 App 上方',
        'trayMenu.presentation.normal': '普通窗口',
        'trayMenu.presentation.desktop': '固定到桌面',
@@ -1133,7 +1141,7 @@ index 224aa4d..d97eb92 100644
        'settings.startup.title': '启动',
        'settings.startup.startAtLogin': '登录时启动',
        'settings.startup.available': '仅在打包后的版本可用；Linux 需以 AppImage 运行。',
-@@ -6042,6 +6048,7 @@
+@@ -6190,6 +6196,7 @@
        'trayMenu.presentation.floating': '다른 앱 위에 띄우기',
        'trayMenu.presentation.normal': '일반 창',
        'trayMenu.presentation.desktop': '데스크톱에 고정',
@@ -1141,7 +1149,7 @@ index 224aa4d..d97eb92 100644
        'settings.views.configureHome': '{name} 설정',
        'settings.views.configureTrend': '{name} 설정',
        'settings.views.enableTrend': '추이 활성화',
-@@ -6059,6 +6066,7 @@
+@@ -6207,6 +6214,7 @@
        'settings.views.trendIntervalMinutes': '{n}분',
        'settings.windowBehavior.buttonTitle': '{current}; {next}로 전환하려면 클릭',
        'settings.windowBehavior.desktop': '데스크톱 고정',
@@ -1149,7 +1157,7 @@ index 224aa4d..d97eb92 100644
        'settings.windowBehavior.floating': '앱 위에 플로팅',
        'settings.windowBehavior.normal': '일반 창',
        'sortMostTokens': '↕ 토큰 많은 순',
-@@ -7562,6 +7570,7 @@
+@@ -7747,6 +7755,7 @@
        'trayMenu.presentation.floating': '他のアプリの前面に表示',
        'trayMenu.presentation.normal': '通常ウィンドウ',
        'trayMenu.presentation.desktop': 'デスクトップに固定',
@@ -1157,7 +1165,7 @@ index 224aa4d..d97eb92 100644
        'settings.views.configureHome': '{name}を設定',
        'settings.views.configureTrend': '{name}を設定',
        'settings.views.enableTrend': 'トレンドを有効化',
-@@ -7579,6 +7588,7 @@
+@@ -7764,6 +7773,7 @@
        'settings.views.trendIntervalMinutes': '{n}分',
        'settings.windowBehavior.buttonTitle': '{current}; {next}に切り替えるにはクリック',
        'settings.windowBehavior.desktop': 'デスクトップに固定',
@@ -1166,7 +1174,7 @@ index 224aa4d..d97eb92 100644
        'settings.windowBehavior.normal': '通常ウィンドウ',
        'sortMostTokens': '↕ トークン数順',
 diff --git a/src/electron/renderer/index.html b/src/electron/renderer/index.html
-index 15de4cc..06373a1 100644
+index 5b11b50..1e8bd16 100644
 --- a/src/electron/renderer/index.html
 +++ b/src/electron/renderer/index.html
 @@ -248,6 +248,7 @@

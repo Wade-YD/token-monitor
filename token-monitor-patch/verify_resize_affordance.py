@@ -20,7 +20,7 @@ import time
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
 FORK = r"D:\桌面\私人图书馆\7-工具箱\1-project\token-monitor-workspace\token-monitor"
-EXTRACTED = r"C:\Users\29871\AppData\Local\Temp\opencode\asar-extracted"
+EXTRACTED = r"C:\Users\29871\AppData\Local\Temp\opencode\asar-extracted-v058"
 APP = r"C:\Users\29871\AppData\Local\Programs\Token Monitor"
 RES = os.path.join(APP, "resources")
 ASAR = os.path.join(RES, "app.asar")
