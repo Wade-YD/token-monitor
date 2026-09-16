@@ -38,7 +38,8 @@ function loadApi() {
         getAncestor: user32.func('uintptr_t GetAncestor(uintptr_t hwnd, uint32_t flags)'),
         getWindowThreadProcessId: user32.func('uint32_t GetWindowThreadProcessId(uintptr_t hwnd, _Out_ TOKEN_MONITOR_POPUP_PID *pid)'),
         getForegroundWindow: user32.func('uintptr_t GetForegroundWindow()'),
-        gaRoot: GA_ROOT
+        gaRoot: GA_ROOT,
+        currentPid: process.pid
       };
     }
   } catch (_) {
@@ -50,8 +51,11 @@ function loadApi() {
 // The decision itself, pure over injected bindings so it is testable without a
 // display. bindings: { windowFromPoint, getAncestor, getWindowThreadProcessId,
 // getForegroundWindow, gaRoot, currentPid }. mainHwnd: Number | null.
-function popupHoldsCollapseWith(bindings, mainHwnd, cursor) {
+// debug (optional) receives one line per evaluation: what the native layer
+// actually answered, so a verdict can be explained instead of guessed.
+function popupHoldsCollapseWith(bindings, mainHwnd, cursor, debug) {
   if (!bindings || !cursor) return false;
+  const log = (m) => { if (debug) debug(m); };
   const owned = (hwnd) => {
     if (!hwnd) return false;
     if (mainHwnd !== null && hwnd === mainHwnd) return false;
@@ -60,27 +64,29 @@ function popupHoldsCollapseWith(bindings, mainHwnd, cursor) {
     return out.value === bindings.currentPid;
   };
   try {
-    const under = bindings.windowFromPoint({ x: Math.round(cursor.x), y: Math.round(cursor.y) });
-    if (under) {
-      const root = bindings.getAncestor(under, bindings.gaRoot) || under;
-      if (owned(root)) return true;
-    }
+    const point = { x: Math.round(cursor.x), y: Math.round(cursor.y) };
+    const under = bindings.windowFromPoint(point);
+    let root = null;
+    if (under) root = bindings.getAncestor(under, bindings.gaRoot) || under;
     const fg = bindings.getForegroundWindow();
-    if (fg) {
-      const fgRoot = bindings.getAncestor(fg, bindings.gaRoot) || fg;
-      if (owned(fgRoot)) return true;
-    }
-  } catch (_) {
+    const fgRoot = fg ? (bindings.getAncestor(fg, bindings.gaRoot) || fg) : null;
+    const underOwned = owned(root);
+    const fgOwned = owned(fgRoot);
+    log('under=' + under + ' root=' + root + ' underPidOwned=' + underOwned
+      + ' fgRoot=' + fgRoot + ' fgOwned=' + fgOwned
+      + ' mainHwnd=' + mainHwnd + ' ourPid=' + bindings.currentPid);
+    return underOwned || fgOwned;
+  } catch (err) {
     // A failed native call must never wedge the window open: fold as before.
+    log('threw: ' + ((err && err.message) || String(err)));
     return false;
   }
-  return false;
 }
 
-function popupHoldsCollapse({ mainHwnd, cursor } = {}) {
+function popupHoldsCollapse({ mainHwnd, cursor, debug } = {}) {
   const bindings = loadApi();
   if (!bindings) return false;
-  return popupHoldsCollapseWith(bindings, mainHwnd === null || mainHwnd === undefined ? null : Number(mainHwnd), cursor);
+  return popupHoldsCollapseWith(bindings, mainHwnd === null || mainHwnd === undefined ? null : Number(mainHwnd), cursor, debug);
 }
 
 module.exports = {
