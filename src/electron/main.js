@@ -1750,11 +1750,19 @@ function edgeResizeGraceActive() {
 function edgeNativePopupHoldsCursor(cursor) {
   if (process.platform !== 'win32' || !mainWindow || mainWindow.isDestroyed()) return false;
   try {
+    // Electron screen APIs speak DIPs; WindowFromPoint speaks physical pixels.
+    // Convert when the scales differ (identity at 100% zoom).
+    let physical = cursor;
+    try {
+      if (typeof screen.dipToScreenPoint === 'function') physical = screen.dipToScreenPoint(cursor);
+    } catch (_) {}
     return edgePopupGuardApi.popupHoldsCollapse({
       mainHwnd: edgePopupGuardApi.hwndOf(mainWindow),
-      cursor
+      cursor: physical,
+      debug: (m) => edgeDebug('popup', 'cursor=' + JSON.stringify(cursor) + ' physical=' + JSON.stringify(physical) + ' | ' + m)
     });
-  } catch (_) {
+  } catch (err) {
+    edgeDebug('popup', 'guard threw: ' + ((err && err.message) || String(err)));
     return false;
   }
 }
