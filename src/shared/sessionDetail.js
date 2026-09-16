@@ -12,6 +12,7 @@ const {
 } = require('./providers/codebuddy/transcript');
 const codebuddyExtension = require('./providers/codebuddy/extension');
 const opencodeSession = require('./providers/opencode/session');
+const zcodeSession = require('./providers/zcode/sessionMetadata');
 const { readReasonixSessionEvents } = require('./providers/reasonix/sessionDetail');
 const { createLocalUsageStore } = require('./providers/codex/localUsageStore');
 const PI_FORMAT_CLIENTS = new Set(['pi', 'omp', 'senpi']);
@@ -598,6 +599,22 @@ function readOpenCodeSessionDetail({ sessionId, period = 'total', deps = {} }) {
   return { found: true, client: 'opencode', sessionId, period, exchanges: grouped, totals: totalsOf(grouped, filteredCost) };
 }
 
+// ZCode records real per-message costs, but on a subscription plan they are
+// always 0 — the estimated session cost from the card is proportionally
+// distributed across turns instead, matching the Claude/Codex convention.
+function readZcodeSessionDetail({ sessionId, period = 'total', sessionCost = 0, home, deps = {} }) {
+  const zcodeDeps = deps.zcodeDeps || {};
+  const { found, events } = zcodeSession.readSessionEvents(sessionId, {
+    sqlite: zcodeDeps.sqlite,
+    dbPath: zcodeDeps.dbPath,
+    home: zcodeDeps.home || home
+  });
+  if (!found) return { found: false, client: 'zcode', sessionId, period, exchanges: [], totals: totalsOf([], 0) };
+  const now = new Date((deps.now || Date.now)());
+  const grouped = distributeCost(filterExchangesByPeriod(groupEvents(events), period, now), sessionCost);
+  return { found: true, client: 'zcode', sessionId, period, exchanges: grouped, totals: totalsOf(grouped, sessionCost) };
+}
+
 function readReasonixSessionDetail({ sessionId, period = 'total', home, deps = {} }) {
   const result = readReasonixSessionEvents({
     sessionId,
@@ -675,6 +692,7 @@ function readCodebuddyExtensionSessionDetail({ sessionId, period, sessionCost, h
 
 function readSessionDetail({ client, sessionId, period = 'total', sessionCost = 0, home, env, useEnvRoots, deps = {} }) {
   if (client === 'opencode') return readOpenCodeSessionDetail({ sessionId, period, deps });
+  if (client === 'zcode') return readZcodeSessionDetail({ sessionId, period, sessionCost, home, deps });
   if (client === 'reasonix') return readReasonixSessionDetail({ sessionId, period, home, deps });
   const filePath = resolveSessionFile(client, sessionId, home, { env, useEnvRoots, fs: deps.fs });
   if (!filePath && client === 'codebuddy') {
