@@ -378,3 +378,28 @@ node --test tests/electron/edgeAutoHide.test.js tests/electron/windowBehavior.te
 - `edge-auto-hide.patch`（107 KB）/ `commits.txt` / `README.txt` 已按 v0.58.0 基线重写；
   干净 v0.58.0 检出上补丁重放校验通过。
 - ⚠️ 给下次升级：NSIS 会清掉安装目录里一切自放文件——先备份再装，装完立刻重建回退锚点。
+
+---
+
+## 11. 2026-09-17：仪表盘钉住主页面板 —— 弹窗守卫的持久窗口豁免
+
+- 用户反馈：从「活动」进入仪表盘后，主页面板（贴边 dock）永远不收纳、挡住仪表盘。
+- 根因：edgePopupGuard 把本进程**所有**非主窗口都当临时弹窗——光标在
+  dashboardWindow 上或其在前台时，`underOwned/fgOwned` 恒真，永远否决收起。
+  （原调色盘修复的守卫范围过宽：临时弹窗与持久工作窗口被一视同仁。）
+- 修复（提交 eb52336）：`popupHoldsCollapse({ persistentHwnds })` 豁免清单；
+  main.js 新增 `edgePersistentWindowHwnds()` 返回 dashboardWindow 的 hwnd。
+  豁免窗口不否决收纳；未知自有窗口仍保守否决（调色盘行为不变）。
+  日后新增持久窗口必须加进同一清单（README 必读第 12 条）。
+- 测试：edgePopupGuard 8→12（仪表盘光标下/前台不否决、取色器仍否决、
+  无清单时保守默认兼容），五套合计 **144/144**。
+- 交付：重解包 v0.58.0 官方 bak（2178 文件）→ deliver_finalize.py 换装。
+  运行日志当场目击修复生效：`fgRoot=1247220 fgOwned=false exempt=1247220`
+  （仪表盘在前台 → 不否决 → collapse 正常发射）。
+- ⚠️ 该轮 deliver_finalize 有两个断言红（resize_repositioned / cycle_reveal），
+  逐帧日志证实是**用户并发用鼠标**所致（出现大量不属于脚本的光标坐标、
+  仪表盘被用户中途打开）——不是回归。日志已核：resize 同步尺寸 709×627 与
+  脚本设定值一致、底边 3px。机器空闲时重跑一轮全绿留档即可。
+- 归档：edge-auto-hide.patch 111 KB（12 提交，15 文件 +1880/−20）重生成，
+  干净 v0.58.0 检出重放校验通过；commits.txt / README.txt 同步更新；
+  deliver_finalize.py 的 BAK 锚点改为 app.asar.v0580-official.bak。

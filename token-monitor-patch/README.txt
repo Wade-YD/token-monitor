@@ -33,12 +33,20 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
        现在「套餐窗口存在 + 余额 0 + 今/月现金消费 0」时整行不渲染；
        钱包有钱、有现金消费、或无订阅窗口（纯按量用户）时自动恢复显示
 
+  追加（v0.58.0 轮，2026-09-17，提交 eb52336）：
+    10. **仪表盘等持久窗口不再钉住主页面板**——「从活动进入仪表盘后主页面板
+        永远不收纳、挡住仪表盘」。根因：弹窗守卫把本进程「所有」非主窗口都当
+        临时弹窗，光标在仪表盘上或其在前台时永远否决收起。修复：调用方传入
+        persistentHwnds 豁免清单（当前 = dashboardWindow），豁免窗口不否决；
+        未知自有窗口（取色器/右键菜单等）仍保守否决。日后新增持久窗口
+        （独立编辑器等）必须加进同一清单
+
 【零件位置】
   完整 git 克隆   D:\桌面\私人图书馆\7-工具箱\1-project\token-monitor-workspace\token-monitor
-                  分支 feat/edge-auto-hide（基线 v0.58.0，含 11 个提交）
+                  分支 feat/edge-auto-hide（基线 v0.58.0，含 12 个提交）
                   这是首选留档，含完整历史
   本补丁          D:\桌面\私人图书馆\7-工具箱\1-project\token-monitor-workspace\token-monitor-patch\edge-auto-hide.patch
-                  107 KB（基线 v0.58.0），含全部源码改动 + 测试改动
+                  111 KB（基线 v0.58.0），含全部源码改动 + 测试改动
   已安装应用      C:\Users\29871\AppData\Local\Programs\Token Monitor（v0.58.0 + 补丁）
   官方原包备份    <安装位置>\resources\app.asar.v0580-official.bak   18,868,880 B
                   + 同名 .unpacked 双胞胎（勿删，解包该 bak 时必需）
@@ -55,7 +63,7 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
   历史基线：tag v0.57.0 -> 提交 bbe07de（annotated tag，tag 对象 9e5cc83，
     不要把 tag 对象当提交号；v0.57.0 版补丁链哈希见 workspace git 历史里的旧 commits.txt）。
   上游仓库：https://github.com/Javis603/token-monitor.git（浅克隆，本机无 push 权限）
-  提交链（见 commits.txt，11 个提交，从旧到新）：
+  提交链（见 commits.txt，12 个提交，从旧到新）：
     231f075 feat(edge): 功能主提交
     9a93773 / 7f6f215 / 085056e / cb60fae   harden 四连修
     ec3de55 fix(edge): finalize（收口）
@@ -64,7 +72,8 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
     3002069 fix(edge): 原生弹窗守卫（调色盘等弹窗期间不收回）
     342b6ac fix(edge): popup guard 的 currentPid 修复
     2834744 fix(edge): popup guard 光标 DIP→物理像素换算
-  规模（相对 v0.58.0）：15 files changed, +1814/−20（10 个 src + 5 个测试文件）
+    eb52336 fix(edge): 持久窗口豁免（仪表盘不钉住主页面板）
+  规模（相对 v0.58.0）：15 files changed, +1880/−20（10 个 src + 5 个测试文件）
 
 【升级记录（2026-09-16，v0.57.0 → v0.58.0）】
   1) 官方 v0.58.0 当天 14:24 发布（新增 Amp 会话统计、Factory Droid 额度）。
@@ -135,7 +144,7 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
         node --test tests/electron/edgeAutoHide.test.js ^
                    tests/electron/windowBehavior.test.js ^
                    tests/electron/tray.test.js
-        期望：edgeAutoHide 34 / edgePopupGuard 8 / windowBehavior 9 / tray 52 / zaiLimits 37，全部 exit=0
+        期望：edgeAutoHide 34 / edgePopupGuard 12 / windowBehavior 9 / tray 52 / zaiLimits 37，全部 exit=0
   3) 打包成 asar
         npx --yes @electron/asar extract "<安装位置>\resources\app.asar.v0580-official.bak" asar-extracted
         把上面 9 个文件覆盖进 asar-extracted 的对应路径
@@ -152,7 +161,7 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
   停用   同一处下拉改回 Floating above apps          （零风险，随时切回）
   回退1  上一条（零风险）
   回退2  用 app.asar.v0580-official.bak 覆盖 app.asar 后重启  → 回到官方构建
-  回退3  git checkout 6488c3b 后重新打包替换          → 回到 finalize 前
+  回退3  git checkout cb60fae 后重新打包替换          → 回到 finalize 前（v0.58 链）
 
 【排障】
   护栏拒收 / 未捕获异常：%TEMP%\token-monitor-edge-error.log
@@ -187,6 +196,13 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
   11. 展开态「光标在窗口内」判定必须带 EDGE_INTERACTION_MARGIN_PX=10 边距，
       且 resize 后 700ms 宽限期内不得武装/触发收起——resize 边框在 Win32 外框上
       （Electron 矩形外 ~6px），不加边距 = 抓边缘调整大小必被收回（用户实测反馈）
+  12. 弹窗守卫只保护「临时」弹窗；本进程的持久窗口（仪表盘 dashboardWindow、
+      日后任何独立工作窗口）必须经 edgePersistentWindowHwnds() 显式豁免，
+      否则用户在那些窗口里工作时 dock 永远不收（2026-09-17 用户实测反馈）
+  13. 自动化验证（deliver_finalize/verify 系列）会劫持光标 60–90 秒，
+      必须在用户不碰机器时跑：日志里出现不属于脚本的光标坐标 = 该轮结果被
+      污染，断言红不代表回归（2026-09-17 教训：断言红但逐帧日志显示全是
+      用户并发输入所致）
 
 【最大的历史教训】
   补丁必须 rebase 到与「已安装版」一致的 tag。

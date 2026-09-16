@@ -223,10 +223,10 @@ index 0000000..20381e1
 +};
 diff --git a/src/electron/edgePopupGuard.js b/src/electron/edgePopupGuard.js
 new file mode 100644
-index 0000000..0b43ef8
+index 0000000..37b17eb
 --- /dev/null
 +++ b/src/electron/edgePopupGuard.js
-@@ -0,0 +1,98 @@
+@@ -0,0 +1,112 @@
 +'use strict';
 +
 +// Native popups we spawn ourselves — the <input type=color> chooser, context
@@ -236,6 +236,13 @@ index 0000000..0b43ef8
 +// vendor colors). This module answers a single question: is the cursor over a
 +// top-level window that belongs to this process but is not the main one — or
 +// does such a window hold focus? If yes, the docked window must stay revealed.
++//
++// PERSISTENT windows of ours are the exception, not the rule: the dashboard
++// (a second BrowserWindow) is a workspace the user deliberately works in, so
++// while they are there the dock must fold away as usual. Callers pass such
++// windows in `persistentHwnds` and the guard exempts them; every UNKNOWN
++// own-process window still holds, which keeps the guard conservative for
++// transient popups we did not anticipate.
 +
 +const GA_ROOT = 2;
 +
@@ -280,14 +287,18 @@ index 0000000..0b43ef8
 +// The decision itself, pure over injected bindings so it is testable without a
 +// display. bindings: { windowFromPoint, getAncestor, getWindowThreadProcessId,
 +// getForegroundWindow, gaRoot, currentPid }. mainHwnd: Number | null.
++// exemptHwnds: persistent own-process windows (dashboard) that must never hold.
 +// debug (optional) receives one line per evaluation: what the native layer
 +// actually answered, so a verdict can be explained instead of guessed.
-+function popupHoldsCollapseWith(bindings, mainHwnd, cursor, debug) {
++function popupHoldsCollapseWith(bindings, mainHwnd, cursor, debug, exemptHwnds) {
 +  if (!bindings || !cursor) return false;
++  const exempt = new Set((Array.isArray(exemptHwnds) ? exemptHwnds : [])
++    .map((h) => Number(h)).filter((h) => Number.isFinite(h) && h));
 +  const log = (m) => { if (debug) debug(m); };
 +  const owned = (hwnd) => {
 +    if (!hwnd) return false;
 +    if (mainHwnd !== null && hwnd === mainHwnd) return false;
++    if (exempt.has(hwnd)) return false;
 +    const out = { value: 0 };
 +    bindings.getWindowThreadProcessId(hwnd, out);
 +    return out.value === bindings.currentPid;
@@ -303,7 +314,8 @@ index 0000000..0b43ef8
 +    const fgOwned = owned(fgRoot);
 +    log('under=' + under + ' root=' + root + ' underPidOwned=' + underOwned
 +      + ' fgRoot=' + fgRoot + ' fgOwned=' + fgOwned
-+      + ' mainHwnd=' + mainHwnd + ' ourPid=' + bindings.currentPid);
++      + ' exempt=' + [...exempt].join('|') + ' mainHwnd=' + mainHwnd
++      + ' ourPid=' + bindings.currentPid);
 +    return underOwned || fgOwned;
 +  } catch (err) {
 +    // A failed native call must never wedge the window open: fold as before.
@@ -312,10 +324,12 @@ index 0000000..0b43ef8
 +  }
 +}
 +
-+function popupHoldsCollapse({ mainHwnd, cursor, debug } = {}) {
++function popupHoldsCollapse({ mainHwnd, cursor, debug, persistentHwnds } = {}) {
 +  const bindings = loadApi();
 +  if (!bindings) return false;
-+  return popupHoldsCollapseWith(bindings, mainHwnd === null || mainHwnd === undefined ? null : Number(mainHwnd), cursor, debug);
++  return popupHoldsCollapseWith(bindings,
++    mainHwnd === null || mainHwnd === undefined ? null : Number(mainHwnd),
++    cursor, debug, Array.isArray(persistentHwnds) ? persistentHwnds : []);
 +}
 +
 +module.exports = {
@@ -340,7 +354,7 @@ index a2bede0..760750a 100644
  
  function floatingBubbleNativeGlassEnabled(settings = {}) {
 diff --git a/src/electron/main.js b/src/electron/main.js
-index 4f03f9c..4f75246 100644
+index 4f03f9c..1eef986 100644
 --- a/src/electron/main.js
 +++ b/src/electron/main.js
 @@ -23,6 +23,8 @@ const { exportFileSet, exportSignature, EXPORT_FILENAMES } = require('../shared/
@@ -360,7 +374,7 @@ index 4f03f9c..4f75246 100644
  let mainWindowChrome = { collapsedFloatingBubble: false };
  
  function stopPersistBoundsTimer() {
-@@ -2286,6 +2289,435 @@ function syncFloatingBubbleAvailability() {
+@@ -2286,6 +2289,451 @@ function syncFloatingBubbleAvailability() {
    sendFloatingBubbleState();
  }
  
@@ -384,6 +398,21 @@ index 4f03f9c..4f75246 100644
 +  return Date.now() - edgeAutoHideState.lastResizeAt < EDGE_RESIZE_GRACE_MS;
 +}
 +
++// The dashboard is a persistent second window of ours — a workspace the user
++// deliberately works in, unlike the transient native popups the guard exists
++// for. It must never hold the dock open, or the home panel would stay spread
++// over the dashboard until the app restarted. Any future persistent window
++// (a widget, a separate editor) belongs on this same list.
++function edgePersistentWindowHwnds() {
++  if (!dashboardWindow || dashboardWindow.isDestroyed()) return [];
++  try {
++    const hwnd = edgePopupGuardApi.hwndOf(dashboardWindow);
++    return hwnd ? [hwnd] : [];
++  } catch (_) {
++    return [];
++  }
++}
++
 +// Native popups we spawn (the vendor-color chooser, context menus, <select>
 +// dropdowns) are windows of our own process OUTSIDE the BrowserWindow rect.
 +// While the cursor is on one of them — or one holds focus — the docked window
@@ -401,6 +430,7 @@ index 4f03f9c..4f75246 100644
 +    return edgePopupGuardApi.popupHoldsCollapse({
 +      mainHwnd: edgePopupGuardApi.hwndOf(mainWindow),
 +      cursor: physical,
++      persistentHwnds: edgePersistentWindowHwnds(),
 +      debug: (m) => edgeDebug('popup', 'cursor=' + JSON.stringify(cursor) + ' physical=' + JSON.stringify(physical) + ' | ' + m)
 +    });
 +  } catch (err) {
@@ -796,7 +826,7 @@ index 4f03f9c..4f75246 100644
  function persistBoundsSoon() {
    if (!mainWindow || mainWindow.isDestroyed()) return;
    if (!shouldPersistWindowBounds(mainWindow)) {
-@@ -2303,6 +2735,10 @@ function persistBoundsSoon() {
+@@ -2303,6 +2751,10 @@ function persistBoundsSoon() {
        // Popover x/y is anchored to the tray icon each open; only the size carries over.
        if (prev.width === next.width && prev.height === next.height) return;
        settings.windowBounds = { ...prev, width: next.width, height: next.height };
@@ -807,7 +837,7 @@ index 4f03f9c..4f75246 100644
      } else if (floatingBubbleState.collapsed && floatingBubbleState.expandedBounds) {
        floatingBubbleState.collapsedBounds = next;
        const display = displayForBounds(next);
-@@ -2842,6 +3278,77 @@ function applyWindowSettings() {
+@@ -2842,6 +3294,77 @@ function applyWindowSettings() {
      applyCollapsedFloatingBubbleLimits(mainWindow.getBounds());
      return;
    }
@@ -885,7 +915,7 @@ index 4f03f9c..4f75246 100644
    const behavior = describeWindowBehavior(settings);
    mainWindow.setAlwaysOnTop(behavior.alwaysOnTop, floatingAlwaysOnTopLevel());
    if (typeof mainWindow.setMovable === 'function') mainWindow.setMovable(behavior.draggable);
-@@ -2853,6 +3360,17 @@ function applyWindowSettings() {
+@@ -2853,6 +3376,17 @@ function applyWindowSettings() {
    if (typeof mainWindow.setSkipTaskbar === 'function') mainWindow.setSkipTaskbar(skipTaskbarForSettings(settings));
    if (!behavior.focusable && typeof mainWindow.blur === 'function') mainWindow.blur();
    syncTaskbarZOrder();
@@ -903,7 +933,7 @@ index 4f03f9c..4f75246 100644
  }
  
  function nativeBlurEnabled(source = settings) {
-@@ -5142,6 +5660,8 @@ function setWindowPresentationFromMenu(value) {
+@@ -5142,6 +5676,8 @@ function setWindowPresentationFromMenu(value) {
    saveSettings();
    if (previousTrayMode) exitTrayMode();
    else {
@@ -912,7 +942,7 @@ index 4f03f9c..4f75246 100644
      applyWindowSettings();
      focusExistingWindow();
    }
-@@ -6268,6 +6788,7 @@ function createWindow(boundsOverride, options = {}) {
+@@ -6268,6 +6804,7 @@ function createWindow(boundsOverride, options = {}) {
      }
    });
    mainWindow = win;
@@ -920,7 +950,7 @@ index 4f03f9c..4f75246 100644
    mainWindowNativeBlurEnabled = null;
    mainWindowChrome = { collapsedFloatingBubble };
    applyMacSpaceBehavior();
-@@ -6310,17 +6831,83 @@ function createWindow(boundsOverride, options = {}) {
+@@ -6310,17 +6847,83 @@ function createWindow(boundsOverride, options = {}) {
    applyNativeMaterial();
    win.on('focus', () => {
      stopFloatingBubbleAutoCollapseTimer();
@@ -1009,7 +1039,7 @@ index 4f03f9c..4f75246 100644
    win.on('minimize', stopTaskbarZOrderKeeper);
    win.on('close', (event) => {
      if (quitRequested) return;
-@@ -6550,6 +7137,28 @@ function rebuildWindow() {
+@@ -6550,6 +7153,28 @@ function rebuildWindow() {
    });
  }
  
@@ -1038,7 +1068,7 @@ index 4f03f9c..4f75246 100644
  app.whenReady().then(() => {
    if (process.platform === 'darwin' && app.dock) app.dock.setIcon(APP_ICON_PATH);
    ensureSettingsLoaded();
-@@ -6917,6 +7526,7 @@ app.whenReady().then(() => {
+@@ -6917,6 +7542,7 @@ app.whenReady().then(() => {
      ) && latestStats) updateDiscordRpcDisplay(latestStats);
      applyWindowSettings();
      syncFloatingBubbleAvailability();
@@ -1046,7 +1076,7 @@ index 4f03f9c..4f75246 100644
      const nextNativeMaterial = nativeBlurEnabled();
      const nextWindowsBackdrop = normalizeWindowsBackdropMode(settings?.windowsBackdrop);
      const windowsBackdropChanged = previousWindowsBackdrop !== nextWindowsBackdrop
-@@ -7014,6 +7624,27 @@ app.whenReady().then(() => {
+@@ -7014,6 +7640,27 @@ app.whenReady().then(() => {
    });
    ipcMain.handle('floatingBubble:expand', () => expandFloatingBubble());
    ipcMain.handle('floatingBubble:peek', () => expandFloatingBubble({ focus: false }));
@@ -1866,10 +1896,10 @@ index 0000000..3101194
 +
 diff --git a/tests/electron/edgePopupGuard.test.js b/tests/electron/edgePopupGuard.test.js
 new file mode 100644
-index 0000000..5411433
+index 0000000..6a27447
 --- /dev/null
 +++ b/tests/electron/edgePopupGuard.test.js
-@@ -0,0 +1,112 @@
+@@ -0,0 +1,148 @@
 +'use strict';
 +
 +const assert = require('node:assert/strict');
@@ -1908,6 +1938,7 @@ index 0000000..5411433
 +const MAIN = { hwnd: MAIN_HWND, pid: OUR_PID, rect: { x: 300, y: 0, w: 300, h: 400 } };
 +const POPUP = { hwnd: 10, pid: OUR_PID, rect: { x: 700, y: 100, w: 200, h: 300 } }; // far outside MAIN
 +const FOREIGN = { hwnd: 20, pid: 9999, rect: { x: 700, y: 100, w: 200, h: 300 } };
++const DASH = { hwnd: 30, pid: OUR_PID, rect: { x: 0, y: 500, w: 920, h: 620 } }; // persistent dashboard window
 +
 +test('the cursor resting on an owned popup holds the window open', () => {
 +  const bindings = fakeBindings({ windows: { [MAIN.hwnd]: MAIN, [POPUP.hwnd]: POPUP } });
@@ -1946,6 +1977,41 @@ index 0000000..5411433
 +  const bindings = fakeBindings({ windows: { [MAIN.hwnd]: MAIN, [POPUP.hwnd]: POPUP, [child.hwnd]: child } });
 +  const holds = (cursor) => guard.createPopupGuard(bindings, MAIN_HWND, cursor);
 +  assert.equal(holds({ x: 800, y: 200 }), true);
++});
++
++test('the cursor resting on the dashboard (a persistent second window) must not hold the dock open', () => {
++  // Reported bug: entering the dashboard froze the home panel spread over it,
++  // because the guard treated every own-process window as a transient popup.
++  const bindings = fakeBindings({ windows: { [MAIN.hwnd]: MAIN, [DASH.hwnd]: DASH } });
++  const holds = (cursor) => guard.createPopupGuard(bindings, MAIN_HWND, cursor, null, [DASH.hwnd]);
++  assert.equal(holds({ x: 400, y: 800 }), false, 'working in the dashboard must let the dock fold away');
++});
++
++test('the dashboard holding focus must not hold the dock open either', () => {
++  // The foreground veto was designed for focused popups; the dashboard takes
++  // focus for the whole working session, so it must be exempt on that path too.
++  const bindings = fakeBindings({
++    windows: { [MAIN.hwnd]: MAIN, [DASH.hwnd]: DASH },
++    foreground: DASH.hwnd
++  });
++  const holds = (cursor) => guard.createPopupGuard(bindings, MAIN_HWND, cursor, null, [DASH.hwnd]);
++  assert.equal(holds({ x: 100, y: 100 }), false);
++});
++
++test('an unknown own-process popup still holds while the dashboard is exempted', () => {
++  // Exempting the dashboard must not weaken the guard for the popups it was
++  // built for: the color chooser is not on the persistent list and still holds.
++  const bindings = fakeBindings({ windows: { [MAIN.hwnd]: MAIN, [POPUP.hwnd]: POPUP, [DASH.hwnd]: DASH } });
++  const holds = (cursor) => guard.createPopupGuard(bindings, MAIN_HWND, cursor, null, [DASH.hwnd]);
++  assert.equal(holds({ x: 800, y: 200 }), true);
++});
++
++test('without an exemption list the conservative default holds (backwards compatible)', () => {
++  // Callers that do not pass persistentHwnds keep the original behavior: every
++  // own-process window other than main holds the dock open.
++  const bindings = fakeBindings({ windows: { [MAIN.hwnd]: MAIN, [DASH.hwnd]: DASH } });
++  const holds = (cursor) => guard.createPopupGuard(bindings, MAIN_HWND, cursor);
++  assert.equal(holds({ x: 400, y: 800 }), true);
 +});
 +
 +test('missing FFI bindings degrade to false and never throw', () => {
