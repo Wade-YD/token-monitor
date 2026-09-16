@@ -37,6 +37,7 @@ FILES = [r"src\electron\floatingBubble.js", r"src\electron\main.js",
          r"src\electron\windowBehavior.js", r"src\electron\edgeAutoHide.js",
          r"src\electron\tray.js", r"src\electron\renderer\app.js",
          r"src\electron\renderer\i18n.js", r"src\electron\renderer\index.html",
+         r"src\electron\edgePopupGuard.js",
          r"src\shared\providers\zai\limits.js"]
 
 user32 = ctypes.windll.user32

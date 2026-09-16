@@ -105,14 +105,21 @@ opencode-session-*.html 本会话完整记录（7.14 MB）
     ——用户反馈 GLM 栏恒零的 Balance/Spend 是无效显示（订阅不动现金钱包）。
     修复：`zai/limits.js` 在「套餐窗口存在 + 余额 0 + 今/月现金消费 0」时不输出该行；
     钱包有钱/有现金消费/无订阅窗口时自动恢复；本地消费记账照跑不断档
+  - 第五轮（edge-native-popup-hold，2026-09-16，提交 `e1326c6`）：**147 测试全绿 + 回归 2 轮 PASS**
+    ——用户反馈「外观-厂商色调色盘取色时窗口自动收回」：取色器是本进程原生弹窗，
+    光标进入即被判「离开窗口」。修复：新增 `edgePopupGuard.js`
+    （WindowFromPoint+前台窗口双查自有弹窗，win32/koffi，FFI 不可用静默降级），
+    轮询武装前与计时器到点两处守卫。**附带教训**：从 orig-backup 解包 asar 必须有
+    `app.asar.orig-backup.unpacked` 孪生目录（已创建勿删），否则丢 78 个 unpacked
+    文件（tokscale/bin.js 等）→ 启动报 Cannot find module。交付脚本已加体积护栏
 - **fork（永久副本，就在这里）**：`D:\桌面\私人图书馆\7-工具箱\1-project\token-monitor-workspace\token-monitor`
   - 分支 `feat/edge-auto-hide`，工作树干净；**958 文件 / 53.9 MB**；`git fsck` 通过
-  - 提交：`11a3e6e`(功能) → `56bd66d` → `9da4de1` → `c229c3f` → `6488c3b` → `4688fee`(finalize) → `ec477de`(resize) → **`48ac2b8`(zai 现金行)**
+  - 提交：`11a3e6e`(功能) → `56bd66d` → `9da4de1` → `c229c3f` → `6488c3b` → `4688fee`(finalize) → `ec477de`(resize) → `48ac2b8`(zai 现金行) → **`e1326c6`(弹窗守卫)**
   - 基线：tag **`v0.57.0`** = 提交 **`bbe07de`**
     （该 tag 是 annotated，tag 对象是 `9e5cc83` —— **别把这个当提交号**）
   - 上游：`https://github.com/Javis603/token-monitor.git`（浅克隆，**无 push 权限**）
-  - 规模：**13 文件 +1564/−20 行**
-  - 测试已通过：`edgeAutoHide 34 / windowBehavior 9 / tray 52 / zaiLimits 37`（纯 Node，无需 node_modules）
+  - 规模：**14 文件 +1803/−23 行**
+  - 测试已通过：`edgeAutoHide 34 / edgePopupGuard 8 / windowBehavior 9 / tray 52 / zaiLimits 37`（纯 Node，无需 node_modules）
 - **finalize 轮修掉的 6 项**（详见 §4 与 openspec 归档 `2026-09-15-finalize-edge-auto-hide`）：
   1. 启动拒收根因 = `focus` 处理器对刚恢复隐藏的窗口调 `expandEdge()` → 已移除；唤出只归光标触发区
   2. `geometryReady` 门控：首次 `show` 前守卫直接跳过且不降级动画

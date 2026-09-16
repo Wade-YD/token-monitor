@@ -221,6 +221,104 @@ index 0000000..20381e1
 +  edgeSnapToBounds,
 +  edgeTriggerHitTest
 +};
+diff --git a/src/electron/edgePopupGuard.js b/src/electron/edgePopupGuard.js
+new file mode 100644
+index 0000000..2e93b30
+--- /dev/null
++++ b/src/electron/edgePopupGuard.js
+@@ -0,0 +1,92 @@
++'use strict';
++
++// Native popups we spawn ourselves — the <input type=color> chooser, context
++// menus, <select> dropdowns — are top-level windows that can sit far outside
++// the BrowserWindow rect. The cursor-based collapse would fold the docked
++// window up the moment the cursor enters one of them (observed while picking
++// vendor colors). This module answers a single question: is the cursor over a
++// top-level window that belongs to this process but is not the main one — or
++// does such a window hold focus? If yes, the docked window must stay revealed.
++
++const GA_ROOT = 2;
++
++// Same handle-width handling as windowsBackdrop.js: x64 handles arrive as an
++// 8-byte buffer, 32-bit as 4. HWNDs are 32-bit significant, so Number() is safe.
++function hwndOf(win) {
++  const buffer = win.getNativeWindowHandle();
++  return buffer.length >= 8 ? Number(buffer.readBigUInt64LE()) : buffer.readUInt32LE();
++}
++
++let cachedApi; // undefined = not tried yet; null = tried and unavailable
++
++// Lazy, best-effort, once. koffi lives outside the asar (native module), so a
++// checkout without node_modules — as in the pure-Node test runs — must degrade
++// to "no guard" instead of throwing.
++function loadApi() {
++  if (cachedApi !== undefined) return cachedApi;
++  cachedApi = null;
++  try {
++    if (process.platform === 'win32') {
++      const koffi = require('koffi');
++      const user32 = koffi.load('user32.dll');
++      const POINT = koffi.struct('TOKEN_MONITOR_CURSOR_POINT', { x: 'long', y: 'long' });
++      const DWORD = koffi.struct('TOKEN_MONITOR_POPUP_PID', { value: 'uint32_t' });
++      cachedApi = {
++        // WindowFromPoint takes POINT by value; the _Out_ struct fills the
++        // passed plain object back (koffi >= 3 semantics, verified live).
++        windowFromPoint: user32.func('uintptr_t WindowFromPoint(TOKEN_MONITOR_CURSOR_POINT point)'),
++        getAncestor: user32.func('uintptr_t GetAncestor(uintptr_t hwnd, uint32_t flags)'),
++        getWindowThreadProcessId: user32.func('uint32_t GetWindowThreadProcessId(uintptr_t hwnd, _Out_ TOKEN_MONITOR_POPUP_PID *pid)'),
++        getForegroundWindow: user32.func('uintptr_t GetForegroundWindow()'),
++        gaRoot: GA_ROOT
++      };
++    }
++  } catch (_) {
++    cachedApi = null;
++  }
++  return cachedApi;
++}
++
++// The decision itself, pure over injected bindings so it is testable without a
++// display. bindings: { windowFromPoint, getAncestor, getWindowThreadProcessId,
++// getForegroundWindow, gaRoot, currentPid }. mainHwnd: Number | null.
++function popupHoldsCollapseWith(bindings, mainHwnd, cursor) {
++  if (!bindings || !cursor) return false;
++  const owned = (hwnd) => {
++    if (!hwnd) return false;
++    if (mainHwnd !== null && hwnd === mainHwnd) return false;
++    const out = { value: 0 };
++    bindings.getWindowThreadProcessId(hwnd, out);
++    return out.value === bindings.currentPid;
++  };
++  try {
++    const under = bindings.windowFromPoint({ x: Math.round(cursor.x), y: Math.round(cursor.y) });
++    if (under) {
++      const root = bindings.getAncestor(under, bindings.gaRoot) || under;
++      if (owned(root)) return true;
++    }
++    const fg = bindings.getForegroundWindow();
++    if (fg) {
++      const fgRoot = bindings.getAncestor(fg, bindings.gaRoot) || fg;
++      if (owned(fgRoot)) return true;
++    }
++  } catch (_) {
++    // A failed native call must never wedge the window open: fold as before.
++    return false;
++  }
++  return false;
++}
++
++function popupHoldsCollapse({ mainHwnd, cursor } = {}) {
++  const bindings = loadApi();
++  if (!bindings) return false;
++  return popupHoldsCollapseWith(bindings, mainHwnd === null || mainHwnd === undefined ? null : Number(mainHwnd), cursor);
++}
++
++module.exports = {
++  GA_ROOT,
++  hwndOf,
++  loadApi,
++  createPopupGuard: popupHoldsCollapseWith,
++  popupHoldsCollapse
++};
 diff --git a/src/electron/floatingBubble.js b/src/electron/floatingBubble.js
 index a2bede0..760750a 100644
 --- a/src/electron/floatingBubble.js
@@ -236,18 +334,19 @@ index a2bede0..760750a 100644
  
  function floatingBubbleNativeGlassEnabled(settings = {}) {
 diff --git a/src/electron/main.js b/src/electron/main.js
-index 67b0770..fed998a 100644
+index 67b0770..2721ae1 100644
 --- a/src/electron/main.js
 +++ b/src/electron/main.js
-@@ -23,6 +23,7 @@ const { exportFileSet, exportSignature, EXPORT_FILENAMES } = require('../shared/
+@@ -23,6 +23,8 @@ const { exportFileSet, exportSignature, EXPORT_FILENAMES } = require('../shared/
  const { createDefaultTrayLayout, normalizeTrayLayout } = require('../shared/trayLayout');
  const fontSettingsApi = require('../shared/fontSettings');
  const motionPreferenceApi = require('./motionPreference');
 +const edgeAutoHideApi = require('./edgeAutoHide');
++const edgePopupGuardApi = require('./edgePopupGuard');
  const { createClientSourceIpcHandlers } = require('./clientSourceIpc');
  const { createClaudeWebFetch } = require('./providers/claude/webFetch');
  const { runAntigravityOAuthLogin } = require('./providers/antigravity/oauthLogin');
-@@ -2025,6 +2026,7 @@ function restoredBounds() {
+@@ -2025,6 +2027,7 @@ function restoredBounds() {
  let persistBoundsTimer = null;
  let floatingBubbleAutoCollapseTimer = null;
  const floatingBubbleState = { collapsed: false, side: null, collapsedBounds: null, expandedBounds: null, suppressNextCollapse: false, contentSize: null };
@@ -255,7 +354,7 @@ index 67b0770..fed998a 100644
  let mainWindowChrome = { collapsedFloatingBubble: false };
  
  function stopPersistBoundsTimer() {
-@@ -2271,6 +2273,396 @@ function syncFloatingBubbleAvailability() {
+@@ -2271,6 +2274,427 @@ function syncFloatingBubbleAvailability() {
    sendFloatingBubbleState();
  }
  
@@ -277,6 +376,23 @@ index 67b0770..fed998a 100644
 +
 +function edgeResizeGraceActive() {
 +  return Date.now() - edgeAutoHideState.lastResizeAt < EDGE_RESIZE_GRACE_MS;
++}
++
++// Native popups we spawn (the vendor-color chooser, context menus, <select>
++// dropdowns) are windows of our own process OUTSIDE the BrowserWindow rect.
++// While the cursor is on one of them — or one holds focus — the docked window
++// must not fold, or the user loses the popup mid-interaction. win32 only; the
++// guard degrades to false everywhere else and when the FFI is unavailable.
++function edgeNativePopupHoldsCursor(cursor) {
++  if (process.platform !== 'win32' || !mainWindow || mainWindow.isDestroyed()) return false;
++  try {
++    return edgePopupGuardApi.popupHoldsCollapse({
++      mainHwnd: edgePopupGuardApi.hwndOf(mainWindow),
++      cursor
++    });
++  } catch (_) {
++    return false;
++  }
 +}
 +
 +// ---- Edge geometry guard -------------------------------------------------
@@ -593,15 +709,29 @@ index 67b0770..fed998a 100644
 +      clearEdgeCollapseTimer();
 +      return;
 +    }
++    if (edgeNativePopupHoldsCursor(cursor)) {
++      // The cursor sits on one of our own native popups (vendor-color chooser,
++      // context menu, <select>) — part of the interaction, not "the user left".
++      clearEdgeCollapseTimer();
++      edgeAutoHideState.desired = 'revealed';
++      edgeDebug('poll', 'popup hold cursor=' + JSON.stringify(cursor));
++      return;
++    }
 +    if (!edgeAutoHideState.collapseTimer) {
 +      edgeDebug('poll', 'arm collapse side=' + dockSide + ' cursor=' + JSON.stringify(cursor));
 +      edgeAutoHideState.collapseTimer = setTimeout(() => {
 +        edgeAutoHideState.collapseTimer = null;
 +        if (!canUseEdgeAutoHide(settings)) return;
-+        // The user may have grabbed an edge after this timer was armed; a
-+        // collapse firing into an active resize is both a UX betrayal and a
-+        // known source of transient native rejections.
++        // The user may have grabbed an edge or opened a popup after this timer
++        // was armed; a collapse firing into either is a UX betrayal (and a
++        // known source of transient native rejections).
 +        if (edgeResizeGraceActive()) return;
++        let cursorNow = null;
++        try { cursorNow = screen.getCursorScreenPoint(); } catch (_) { cursorNow = null; }
++        if (cursorNow && edgeNativePopupHoldsCursor(cursorNow)) {
++          edgeDebug('poll', 'collapse vetoed by popup at cursor=' + JSON.stringify(cursorNow));
++          return;
++        }
 +        // The grace period only flips the desired state; the move itself stays
 +        // with the single executor, so it remains subject to the geometry guard.
 +        edgeAutoHideState.desired = 'hidden';
@@ -652,7 +782,7 @@ index 67b0770..fed998a 100644
  function persistBoundsSoon() {
    if (!mainWindow || mainWindow.isDestroyed()) return;
    if (!shouldPersistWindowBounds(mainWindow)) {
-@@ -2288,6 +2680,10 @@ function persistBoundsSoon() {
+@@ -2288,6 +2712,10 @@ function persistBoundsSoon() {
        // Popover x/y is anchored to the tray icon each open; only the size carries over.
        if (prev.width === next.width && prev.height === next.height) return;
        settings.windowBounds = { ...prev, width: next.width, height: next.height };
@@ -663,7 +793,7 @@ index 67b0770..fed998a 100644
      } else if (floatingBubbleState.collapsed && floatingBubbleState.expandedBounds) {
        floatingBubbleState.collapsedBounds = next;
        const display = displayForBounds(next);
-@@ -2816,6 +3212,77 @@ function applyWindowSettings() {
+@@ -2816,6 +3244,77 @@ function applyWindowSettings() {
      applyCollapsedFloatingBubbleLimits(mainWindow.getBounds());
      return;
    }
@@ -741,7 +871,7 @@ index 67b0770..fed998a 100644
    const behavior = describeWindowBehavior(settings);
    mainWindow.setAlwaysOnTop(behavior.alwaysOnTop, floatingAlwaysOnTopLevel());
    if (typeof mainWindow.setMovable === 'function') mainWindow.setMovable(behavior.draggable);
-@@ -2827,6 +3294,17 @@ function applyWindowSettings() {
+@@ -2827,6 +3326,17 @@ function applyWindowSettings() {
    if (typeof mainWindow.setSkipTaskbar === 'function') mainWindow.setSkipTaskbar(skipTaskbarForSettings(settings));
    if (!behavior.focusable && typeof mainWindow.blur === 'function') mainWindow.blur();
    syncTaskbarZOrder();
@@ -759,7 +889,7 @@ index 67b0770..fed998a 100644
  }
  
  function nativeBlurEnabled(source = settings) {
-@@ -5135,6 +5613,8 @@ function setWindowPresentationFromMenu(value) {
+@@ -5135,6 +5645,8 @@ function setWindowPresentationFromMenu(value) {
    saveSettings();
    if (previousTrayMode) exitTrayMode();
    else {
@@ -768,7 +898,7 @@ index 67b0770..fed998a 100644
      applyWindowSettings();
      focusExistingWindow();
    }
-@@ -6256,6 +6736,7 @@ function createWindow(boundsOverride, options = {}) {
+@@ -6256,6 +6768,7 @@ function createWindow(boundsOverride, options = {}) {
      }
    });
    mainWindow = win;
@@ -776,7 +906,7 @@ index 67b0770..fed998a 100644
    mainWindowNativeBlurEnabled = null;
    mainWindowChrome = { collapsedFloatingBubble };
    applyMacSpaceBehavior();
-@@ -6298,17 +6779,83 @@ function createWindow(boundsOverride, options = {}) {
+@@ -6298,17 +6811,83 @@ function createWindow(boundsOverride, options = {}) {
    applyNativeMaterial();
    win.on('focus', () => {
      stopFloatingBubbleAutoCollapseTimer();
@@ -865,7 +995,7 @@ index 67b0770..fed998a 100644
    win.on('minimize', stopTaskbarZOrderKeeper);
    win.on('close', (event) => {
      if (quitRequested) return;
-@@ -6538,6 +7085,28 @@ function rebuildWindow() {
+@@ -6538,6 +7117,28 @@ function rebuildWindow() {
    });
  }
  
@@ -894,7 +1024,7 @@ index 67b0770..fed998a 100644
  app.whenReady().then(() => {
    if (process.platform === 'darwin' && app.dock) app.dock.setIcon(APP_ICON_PATH);
    ensureSettingsLoaded();
-@@ -6902,6 +7471,7 @@ app.whenReady().then(() => {
+@@ -6902,6 +7503,7 @@ app.whenReady().then(() => {
      ) && latestStats) updateDiscordRpcDisplay(latestStats);
      applyWindowSettings();
      syncFloatingBubbleAvailability();
@@ -902,7 +1032,7 @@ index 67b0770..fed998a 100644
      const nextNativeMaterial = nativeBlurEnabled();
      const nextWindowsBackdrop = normalizeWindowsBackdropMode(settings?.windowsBackdrop);
      const windowsBackdropChanged = previousWindowsBackdrop !== nextWindowsBackdrop
-@@ -6989,6 +7559,27 @@ app.whenReady().then(() => {
+@@ -6989,6 +7591,27 @@ app.whenReady().then(() => {
    });
    ipcMain.handle('floatingBubble:expand', () => expandFloatingBubble());
    ipcMain.handle('floatingBubble:peek', () => expandFloatingBubble({ focus: false }));
@@ -1720,6 +1850,124 @@ index 0000000..3101194
 +  assert.match(mainSource, /'token-monitor-edge-debug\.log'/, 'debug output goes to its own file');
 +});
 +
+diff --git a/tests/electron/edgePopupGuard.test.js b/tests/electron/edgePopupGuard.test.js
+new file mode 100644
+index 0000000..5411433
+--- /dev/null
++++ b/tests/electron/edgePopupGuard.test.js
+@@ -0,0 +1,112 @@
++'use strict';
++
++const assert = require('node:assert/strict');
++const fs = require('node:fs');
++const path = require('node:path');
++const test = require('node:test');
++
++const guard = require('../../src/electron/edgePopupGuard');
++
++const OUR_PID = 4242;
++const MAIN_HWND = 5;
++
++// Fake user32 surface: top-level windows keyed by hwnd, each with a pid, a
++// rect and (optionally) a GA_ROOT that differs from itself (owned popups).
++function fakeBindings(spec) {
++  const windows = spec.windows || {};
++  return {
++    windowFromPoint: (pt) => {
++      for (const [hwnd, w] of Object.entries(windows)) {
++        const r = w.rect;
++        if (pt.x >= r.x && pt.x < r.x + r.w && pt.y >= r.y && pt.y < r.y + r.h) return Number(hwnd);
++      }
++      return 0;
++    },
++    getAncestor: (hwnd, flags) => {
++      assert.equal(flags, guard.GA_ROOT, 'the guard must resolve roots with GA_ROOT');
++      return windows[hwnd]?.root ?? hwnd;
++    },
++    getWindowThreadProcessId: (hwnd, out) => { out.value = windows[hwnd]?.pid ?? 0; },
++    getForegroundWindow: () => spec.foreground || 0,
++    gaRoot: guard.GA_ROOT,
++    currentPid: OUR_PID
++  };
++}
++
++const MAIN = { hwnd: MAIN_HWND, pid: OUR_PID, rect: { x: 300, y: 0, w: 300, h: 400 } };
++const POPUP = { hwnd: 10, pid: OUR_PID, rect: { x: 700, y: 100, w: 200, h: 300 } }; // far outside MAIN
++const FOREIGN = { hwnd: 20, pid: 9999, rect: { x: 700, y: 100, w: 200, h: 300 } };
++
++test('the cursor resting on an owned popup holds the window open', () => {
++  const bindings = fakeBindings({ windows: { [MAIN.hwnd]: MAIN, [POPUP.hwnd]: POPUP } });
++  const holds = (cursor) => guard.createPopupGuard(bindings, MAIN_HWND, cursor);
++  assert.equal(holds({ x: 800, y: 200 }), true, 'cursor inside the popup');
++  assert.equal(holds({ x: 450, y: 200 }), false, 'cursor inside the main window is the ordinary hold path, not the popup guard');
++  assert.equal(holds({ x: 50, y: 500 }), false, 'cursor on the desktop must not hold');
++});
++
++test('the main window itself never counts as a popup', () => {
++  const bindings = fakeBindings({ windows: { [MAIN.hwnd]: MAIN, [POPUP.hwnd]: POPUP } });
++  const holds = (cursor) => guard.createPopupGuard(bindings, MAIN_HWND, cursor);
++  // Point at the main window while the popup exists elsewhere.
++  assert.equal(holds({ x: 400, y: 100 }), false);
++});
++
++test('a foreign application under the cursor must not hold', () => {
++  const bindings = fakeBindings({ windows: { [FOREIGN.hwnd]: FOREIGN } });
++  const holds = (cursor) => guard.createPopupGuard(bindings, MAIN_HWND, cursor);
++  assert.equal(holds({ x: 800, y: 200 }), false);
++});
++
++test('an owned popup holding focus holds the window even when the cursor left it', () => {
++  const bindings = fakeBindings({
++    windows: { [MAIN.hwnd]: MAIN, [POPUP.hwnd]: POPUP },
++    foreground: POPUP.hwnd
++  });
++  const holds = (cursor) => guard.createPopupGuard(bindings, MAIN_HWND, cursor);
++  assert.equal(holds({ x: 100, y: 800 }), true);
++});
++
++test('an owned child resolves to its owner root before the pid check', () => {
++  // Owned popups are top-level, but defend the GA_ROOT hop anyway: a child
++  // window of our popup must be attributed to the popup's root.
++  const child = { hwnd: 11, pid: OUR_PID, rect: POPUP.rect, root: POPUP.hwnd };
++  const bindings = fakeBindings({ windows: { [MAIN.hwnd]: MAIN, [POPUP.hwnd]: POPUP, [child.hwnd]: child } });
++  const holds = (cursor) => guard.createPopupGuard(bindings, MAIN_HWND, cursor);
++  assert.equal(holds({ x: 800, y: 200 }), true);
++});
++
++test('missing FFI bindings degrade to false and never throw', () => {
++  assert.equal(guard.createPopupGuard(null, MAIN_HWND, { x: 800, y: 200 }), false);
++  const throwing = fakeBindings({ windows: { [POPUP.hwnd]: POPUP } });
++  throwing.windowFromPoint = () => { throw new Error('native blew up'); };
++  assert.equal(guard.createPopupGuard(throwing, MAIN_HWND, { x: 800, y: 200 }), false);
++});
++
++test('the packaged entry degrades gracefully when koffi is unavailable', () => {
++  // In the pure-Node test runs koffi cannot resolve from the checkout, so the
++  // lazy loader must produce null instead of throwing.
++  const api = guard.loadApi();
++  assert.ok(api === null || typeof api === 'object', 'loadApi returns bindings or null');
++});
++
++test('main.js consults the popup guard before arming and before firing a collapse', () => {
++  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
++  assert.match(mainSource, /const edgePopupGuardApi = require\('\.\/edgePopupGuard'\);/, 'the guard module is wired in');
++  const pollFn = mainSource.match(/function startEdgeCursorPolling\(\)[\s\S]*?\n\}/);
++  assert.ok(pollFn, 'startEdgeCursorPolling exists');
++  const pollCode = stripComments(pollFn[0]);
++  assert.match(
++    pollCode,
++    /if \(edgeNativePopupHoldsCursor\(cursor\)\) \{/,
++    'the arm path must ask the popup guard first'
++  );
++  const timerBody = pollCode.match(/collapseTimer = setTimeout\(\(\) => \{[\s\S]*?\}, edgeAutoHideApi\.EDGE_COLLAPSE_DELAY_MS\);/);
++  assert.ok(timerBody, 'the collapse timer exists');
++  assert.match(timerBody[0], /edgeNativePopupHoldsCursor\(cursorNow\)/, 'an armed collapse must be vetoed when a popup appears');
++});
++
++// Shared with the source-contract assertions above.
++function stripComments(source) {
++  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
++}
 diff --git a/tests/electron/tray.test.js b/tests/electron/tray.test.js
 index 07c6486..366be29 100644
 --- a/tests/electron/tray.test.js

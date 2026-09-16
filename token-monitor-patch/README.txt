@@ -20,6 +20,13 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
        在 Electron 矩形外 ~6px，光标贴边框曾被判为「光标离开」而收起。
        现在保持测试带 10px 交互边距 + resize 后 700ms 宽限期（不武装/到点否决）
 
+  追加（edge-resize-affordance，2026-09-16，提交 ec477de 之后补记）与
+  hide-idle-zai-cash-row（48ac2b8）之后：
+    9. **调色盘等原生弹窗期间不收回**（提交 e1326c6）——取色器/右键菜单/原生
+       下拉是本进程的独立弹窗，光标进入即被判「离开窗口」而收起。新增
+       edgePopupGuard：WindowFromPoint+前台窗口双查，命中自有弹窗则不武装/
+       否决收起（win32，koffi，FFI 不可用静默降级）
+
   追加（hide-idle-zai-cash-row，2026-09-15 深夜，提交 48ac2b8）：
     8. **GLM 栏恒零的 Balance/Spend 行自动隐藏**——订阅制套餐不动现金钱包，
        Balance（availableBalance）/Spend（本地记账）对订阅用户永远是 ¥0.00。
@@ -48,9 +55,10 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
     4688fee fix(edge): finalize（收口）
     ec477de fix(edge): resize-affordance（调整大小时不收回）
     48ac2b8 fix(zai): 隐藏订阅用户恒零的现金行
-  规模：13 files changed, +1564/−20（相对 v0.57.0）
+    e1326c6 fix(edge): 原生弹窗守卫（调色盘等弹窗期间不收回）
+  规模：14 files changed, +1803/−23（相对 v0.57.0）
 
-【改动的 9 个交付文件】
+【改动的 10 个交付文件】
   src/electron/edgeAutoHide.js            （新增）
   src/electron/main.js
   src/electron/windowBehavior.js
@@ -60,6 +68,7 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
   src/electron/renderer/i18n.js
   src/electron/renderer/index.html
   src/shared/providers/zai/limits.js      （GLM 现金行自适应隐藏）
+  src/electron/edgePopupGuard.js          （自有弹窗守卫，win32/koffi）
 
 【基线锚点（补丁可回退、可重放的实测凭据，2026-09-15 核验）】
   回退物校验   app.asar.orig-backup  SHA-256 =
@@ -82,6 +91,11 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
      git apply --3way "..\token-monitor-patch\edge-auto-hide.patch"   ← 有冲突逐个解
   3) node --test 三套测试（期望见上）+ node --check 全部改动文件
   4) 从**新版安装包**里解出 asar → 覆盖 9 个文件 → pack → 替换（备份先存新版的原件）
+  ⚠️ 解包 asar 时，旁边必须有同名的 `.unpacked` 目录（如解 app.asar.orig-backup
+     需 `app.asar.orig-backup.unpacked`，已创建勿删）：官方 asar 里 78 个文件
+     （tokscale/bin.js、koffi/package.json 等）是 unpacked 状态，内容在 unpacked
+     目录里。缺了它 → 解包少 78 文件 → 启动报 Cannot find module 'tokscale/bin.js'。
+     打包产物体积应与官方 asar 同量级（45MB 自包含包正常）；远小于它 = 内容缺失。
   5) 跑 deliver_finalize.py / verify_resize_affordance.py 至全绿，更新本 README 的基线记录
   注意：不要直接把基于旧版的 asar-extracted 目录套在新版上；混合两版文件 = 启动崩。
 
@@ -96,7 +110,7 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
         node --test tests/electron/edgeAutoHide.test.js ^
                    tests/electron/windowBehavior.test.js ^
                    tests/electron/tray.test.js
-        期望：edgeAutoHide 34 / windowBehavior 9 / tray 52 / zaiLimits 37，全部 exit=0
+        期望：edgeAutoHide 34 / edgePopupGuard 8 / windowBehavior 9 / tray 52 / zaiLimits 37，全部 exit=0
   3) 打包成 asar
         npx --yes @electron/asar extract "<安装位置>\resources\app.asar.orig-backup" asar-extracted
         把上面 9 个文件覆盖进 asar-extracted 的对应路径
