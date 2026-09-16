@@ -41,12 +41,21 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
         未知自有窗口（取色器/右键菜单等）仍保守否决。日后新增持久窗口
         （独立编辑器等）必须加进同一清单
 
+  追加（add-zcode-session-titles，2026-09-17，提交 61e1608）：
+    11. **ZCode 会话显示真实标题**——会话列表里 ZCode 会话原先是裸
+        sess_* id（标题解析器注册表没有 zcode）。新增
+        src/shared/providers/zcode/sessionMetadata.js：只读查
+        ~/.zcode/cli/db/db.sqlite 的 session.title（node:sqlite，
+        复用 opencode 解析器模式）；子代理会话（parent_id 非空）显示
+        「↳ 父会话标题」。库缺失/损坏/驱动不可用一律静默回退裸 id。
+        openspec 变更 add-zcode-session-titles 已归档
+
 【零件位置】
   完整 git 克隆   D:\桌面\私人图书馆\7-工具箱\1-project\token-monitor-workspace\token-monitor
                   分支 feat/edge-auto-hide（基线 v0.58.0，含 12 个提交）
                   这是首选留档，含完整历史
   本补丁          D:\桌面\私人图书馆\7-工具箱\1-project\token-monitor-workspace\token-monitor-patch\edge-auto-hide.patch
-                  111 KB（基线 v0.58.0），含全部源码改动 + 测试改动
+                  122 KB（基线 v0.58.0），含全部源码改动 + 测试改动
   已安装应用      C:\Users\29871\AppData\Local\Programs\Token Monitor（v0.58.0 + 补丁）
   官方原包备份    <安装位置>\resources\app.asar.v0580-official.bak   18,868,880 B
                   + 同名 .unpacked 双胞胎（勿删，解包该 bak 时必需）
@@ -63,7 +72,7 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
   历史基线：tag v0.57.0 -> 提交 bbe07de（annotated tag，tag 对象 9e5cc83，
     不要把 tag 对象当提交号；v0.57.0 版补丁链哈希见 workspace git 历史里的旧 commits.txt）。
   上游仓库：https://github.com/Javis603/token-monitor.git（浅克隆，本机无 push 权限）
-  提交链（见 commits.txt，12 个提交，从旧到新）：
+  提交链（见 commits.txt，13 个提交，从旧到新）：
     231f075 feat(edge): 功能主提交
     9a93773 / 7f6f215 / 085056e / cb60fae   harden 四连修
     ec3de55 fix(edge): finalize（收口）
@@ -73,7 +82,8 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
     342b6ac fix(edge): popup guard 的 currentPid 修复
     2834744 fix(edge): popup guard 光标 DIP→物理像素换算
     eb52336 fix(edge): 持久窗口豁免（仪表盘不钉住主页面板）
-  规模（相对 v0.58.0）：15 files changed, +1880/−20（10 个 src + 5 个测试文件）
+    61e1608 feat(sessions): ZCode 会话标题（只读 SQLite 解析器）
+  规模（相对 v0.58.0）：18 files changed, +2132/−21（12 个 src + 6 个测试文件）
 
 【升级记录（2026-09-16，v0.57.0 → v0.58.0）】
   1) 官方 v0.58.0 当天 14:24 发布（新增 Amp 会话统计、Factory Droid 额度）。
@@ -92,7 +102,7 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
   ⚠️ 下次升级时 NSIS 还会清掉 bak 类自放文件——升级流程必须先备份再装，
      装完立刻重建回退锚点（即第 4 步）。
 
-【改动的 10 个交付文件】
+【改动的 12 个交付文件】
   src/electron/edgeAutoHide.js            （新增）
   src/electron/main.js
   src/electron/windowBehavior.js
@@ -103,6 +113,8 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
   src/electron/renderer/index.html
   src/shared/providers/zai/limits.js      （GLM 现金行自适应隐藏）
   src/electron/edgePopupGuard.js          （自有弹窗守卫，win32/koffi）
+  src/shared/providers/zcode/sessionMetadata.js （新增，ZCode 会话标题）
+  src/shared/sessionMetadata.js           （标题解析器注册表）
 
 【基线锚点（补丁可回退、可重放的实测凭据）】
   回退物校验   app.asar.v0580-official.bak，18,868,880 B（2026-09-16 由官方安装产物直接复制）。
@@ -144,7 +156,8 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
         node --test tests/electron/edgeAutoHide.test.js ^
                    tests/electron/windowBehavior.test.js ^
                    tests/electron/tray.test.js
-        期望：edgeAutoHide 34 / edgePopupGuard 12 / windowBehavior 9 / tray 52 / zaiLimits 37，全部 exit=0
+        期望：edgeAutoHide 34 / edgePopupGuard 12 / windowBehavior 9 / tray 52 / zaiLimits 37
+              / zcodeSessionTitles 9（合计 153），全部 exit=0
   3) 打包成 asar
         npx --yes @electron/asar extract "<安装位置>\resources\app.asar.v0580-official.bak" asar-extracted
         把上面 9 个文件覆盖进 asar-extracted 的对应路径

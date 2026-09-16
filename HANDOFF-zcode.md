@@ -403,3 +403,24 @@ node --test tests/electron/edgeAutoHide.test.js tests/electron/windowBehavior.te
 - 归档：edge-auto-hide.patch 111 KB（12 提交，15 文件 +1880/−20）重生成，
   干净 v0.58.0 检出重放校验通过；commits.txt / README.txt 同步更新；
   deliver_finalize.py 的 BAK 锚点改为 app.asar.v0580-official.bak。
+
+---
+
+## 12. 2026-09-17：ZCode 会话标题（openspec 变更 add-zcode-session-titles）
+
+- 用户反馈：会话列表里 ZCode 会话只显示裸 `sess_*` id，理不清对应哪个会话
+  （OpenCode 会话有标题）。根因：`sessionMetadata.js` 的标题解析器注册表
+  （claude/codex/opencode/droid/kimi/dsh）没有 zcode 条目。
+- 关键事实：ZCode 自己在 `~/.zcode/cli/db/db.sqlite` 的 `session` 表存了
+  `title`（子代理行 `parent_id` 指向父会话、title 是提示词原文）——数据现成。
+- 实现（提交 61e1608）：新增 `providers/zcode/sessionMetadata.js`，`node:sqlite`
+  只读（readOnly + busy_timeout=250，复用 opencode 模式），注册表加
+  `['zcode', { resolve, retryAfterTimestampFallback: true }]`；子代理显示
+  「↳ 父会话标题」；库缺失/损坏/驱动缺失全部静默回退裸 id。
+- 测试 153/153（新增 zcodeSessionTitles 9：真 SQLite fixture DB）。
+  **真库实测抓过一个 bug**：父会话与子代理同批请求时父标题漏查 → 补
+  「同批父会话」用例后修复——真数据测试值得跑。
+- 交付：12 文件覆盖 → pack 45,405,745 B → 换装重启，贴边 3px 正常、
+  无错误日志；asar 内容核对含 zcode 模块。
+- 归档：patch 122 KB（13 提交，18 文件 +2132/−21）重生成 + 干净 v0.58.0
+  重放校验通过；openspec 变更已 archive；deliver_finalize.py FILES 12 项。
