@@ -1,3 +1,4 @@
+2f8f634 fix(edge): pass currentPid into the popup guard (probe caught it undefined)
 e1326c6 fix(edge): keep the dock open while the user interacts with our native popups
 48ac2b8 fix(zai): hide the idle cash row behind an active coding plan
 ec477de fix(edge): keep a docked window revealed while the user resizes it
