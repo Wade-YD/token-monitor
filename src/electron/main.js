@@ -1947,6 +1947,21 @@ function edgeResizeGraceActive() {
   return Date.now() - edgeAutoHideState.lastResizeAt < EDGE_RESIZE_GRACE_MS;
 }
 
+// The dashboard is a persistent second window of ours — a workspace the user
+// deliberately works in, unlike the transient native popups the guard exists
+// for. It must never hold the dock open, or the home panel would stay spread
+// over the dashboard until the app restarted. Any future persistent window
+// (a widget, a separate editor) belongs on this same list.
+function edgePersistentWindowHwnds() {
+  if (!dashboardWindow || dashboardWindow.isDestroyed()) return [];
+  try {
+    const hwnd = edgePopupGuardApi.hwndOf(dashboardWindow);
+    return hwnd ? [hwnd] : [];
+  } catch (_) {
+    return [];
+  }
+}
+
 // Native popups we spawn (the vendor-color chooser, context menus, <select>
 // dropdowns) are windows of our own process OUTSIDE the BrowserWindow rect.
 // While the cursor is on one of them — or one holds focus — the docked window
@@ -1964,6 +1979,7 @@ function edgeNativePopupHoldsCursor(cursor) {
     return edgePopupGuardApi.popupHoldsCollapse({
       mainHwnd: edgePopupGuardApi.hwndOf(mainWindow),
       cursor: physical,
+      persistentHwnds: edgePersistentWindowHwnds(),
       debug: (m) => edgeDebug('popup', 'cursor=' + JSON.stringify(cursor) + ' physical=' + JSON.stringify(physical) + ' | ' + m)
     });
   } catch (err) {
