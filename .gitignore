@@ -24,3 +24,6 @@ worker/.wrangler/
 worker/node_modules/
 worker/.dev.vars
 devlog/
+
+# Mimosa hook writes per-session state into the worktree; never commit it
+.mimosa/
