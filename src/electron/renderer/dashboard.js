@@ -436,7 +436,7 @@ function renderBreakdown() {
   const colModel = buildCol('dashboard.stack.model', modelTotals, charts.modelColor);
   const colClient = buildCol('dashboard.stack.client', clientTotals, (k) => charts.clientColors[k] || charts.clientColors.default);
   
-  elsBreakdown.innerHTML = colModel + colClient;
+  elsBreakdown.innerHTML = colClient + colModel;
   applySwatchColors(elsBreakdown);
   if (state.motion !== 'none' && !prefersReducedMotion()) {
     for (const fill of elsBreakdown.querySelectorAll('.dash-bd-bar-fill[data-motion-key]')) {
