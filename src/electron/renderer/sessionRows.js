@@ -612,6 +612,20 @@
     return data;
   }
 
+  function normalizeSessionSortMode(mode) {
+    return mode === 'tokens' ? 'tokens' : 'recent';
+  }
+
+  // recent: last-activity first (the long-standing default). tokens: current-period
+  // tokens descending, with recency as the tiebreaker so equal-usage sessions
+  // still surface the livelier one.
+  function compareSessionRows(a, b, sortMode) {
+    if (normalizeSessionSortMode(sortMode) === 'tokens') {
+      return b.value - a.value || b.sortTime - a.sortTime || b.cost - a.cost || a.name.localeCompare(b.name);
+    }
+    return b.sortTime - a.sortTime || b.value - a.value || b.cost - a.cost || a.name.localeCompare(b.name);
+  }
+
   function sessionRowsForPeriod(period, options = {}) {
     const previousLabels = options.rowLabelCache?.entries;
     const nextLabels = options.rowLabelCache && new Map();
@@ -724,7 +738,7 @@
       const row = nativeSessionRow(session, key, options, now);
       if (row) rows.push(row);
     }
-    return rows.sort((a, b) => b.sortTime - a.sortTime || b.value - a.value || b.cost - a.cost || a.name.localeCompare(b.name));
+    return rows.sort((a, b) => compareSessionRows(a, b, options.sortMode));
   }
 
   function groupBackgroundReviewRows(rows, options = {}) {
@@ -995,7 +1009,7 @@
     applyBreakdownRowSemantics,
     archivedSessionCount,
     compactSessionTime,
-    filterSessionRows,
+    compareSessionRows,
     groupBackgroundReviewRows,
     groupSessionRows,
     groupSubagentRows,
@@ -1003,6 +1017,7 @@
     isGrokBotSession,
     sessionRowDetailAvailable,
     handleBreakdownRowKeydown,
+    normalizeSessionSortMode,
     sessionBreakdownIncomplete,
     sessionCacheHitPercent,
     cacheHitLabel,

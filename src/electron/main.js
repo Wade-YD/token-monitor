@@ -626,6 +626,7 @@ function defaultSettings() {
     liveTokenRateScope: 'all',
     compactTokenUnits: 'western',
     tokenRateMode: 'speed',
+    sessionSortMode: 'recent',
     heatmapMetric: 'cost',
     modelRankingMetric: 'tokens',
     homeActiveDaysWindow: 'all',
@@ -813,6 +814,10 @@ function normalizeCollectionMode(value, fallback = 'live') {
 // the framing, and neither costs an extra scan.
 function normalizeTokenRateMode(value) {
   return value === 'burn' ? 'burn' : 'speed';
+}
+
+function normalizeSessionSortMode(value) {
+  return value === 'tokens' ? 'tokens' : 'recent';
 }
 
 function normalizeLiveTokenRateScope(value) {
@@ -2461,6 +2466,7 @@ function readSettings() {
     merged.interfaceFontFamily = fontSettingsApi.normalizeFontFamily(merged.interfaceFontFamily);
     merged.displayFontFamily = fontSettingsApi.normalizeFontFamily(merged.displayFontFamily);
     merged.tokenRateMode = normalizeTokenRateMode(merged.tokenRateMode);
+    merged.sessionSortMode = normalizeSessionSortMode(merged.sessionSortMode);
     if (saved.serviceProviderDisplayOrder !== undefined) {
       merged.serviceProviderDisplayOrder = String(saved.serviceProviderDisplayOrder || '');
     }
@@ -8311,6 +8317,7 @@ app.whenReady().then(() => {
         patch.displayFontFamily ?? settings.displayFontFamily
       ),
       tokenRateMode: normalizeTokenRateMode(patch.tokenRateMode ?? settings.tokenRateMode),
+      sessionSortMode: normalizeSessionSortMode(patch.sessionSortMode ?? settings.sessionSortMode),
       floatingBubbleEnabled: parseBoolean(patch.floatingBubbleEnabled ?? settings.floatingBubbleEnabled, false),
       notchEnabled: parseBoolean(patch.notchEnabled ?? settings.notchEnabled, false),
       notchStyle: normalizeNotchStyle(patch.notchStyle ?? settings.notchStyle),

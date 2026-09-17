@@ -10,9 +10,11 @@ const test = require('node:test');
 const {
   applyBreakdownRowSemantics,
   archivedSessionCount,
+  compareSessionRows,
   groupBackgroundReviewRows,
   groupSessionRows,
   handleBreakdownRowKeydown,
+  normalizeSessionSortMode,
   sessionBreakdownIncomplete,
   sessionIdLabel,
   sessionDetailIdLabel,
@@ -1379,4 +1381,84 @@ test('group sections keep main continuations above children without changing usa
   assert.equal(content[0].querySelector('.session-group-count').textContent, '4 records');
   assert.deepEqual(content.filter(item => item.row).map(item => item.row), rows, 'review/bot groups keep their order');
   assert.equal(content.filter(item => item.className === 'session-group-section-heading').length, 0);
+});
+
+test('compareSessionRows keeps the legacy recency order by default', () => {
+  const rows = [
+    { name: 'small-new', sortTime: 300, value: 50, cost: 0.1 },
+    { name: 'big-old', sortTime: 100, value: 5000, cost: 2 },
+    { name: 'mid', sortTime: 200, value: 500, cost: 0.5 }
+  ];
+  const recent = [...rows].sort((a, b) => compareSessionRows(a, b, 'recent')).map((r) => r.name);
+  assert.deepEqual(recent, ['small-new', 'mid', 'big-old']);
+  const implicit = [...rows].sort((a, b) => compareSessionRows(a, b)).map((r) => r.name);
+  assert.deepEqual(implicit, recent, 'missing sortMode must behave as recent');
+});
+
+test('compareSessionRows tokens mode sorts by value with recency as tiebreaker', () => {
+  const rows = [
+    { name: 'small-new', sortTime: 300, value: 50, cost: 0.1 },
+    { name: 'big-old', sortTime: 100, value: 5000, cost: 2 },
+    { name: 'mid', sortTime: 200, value: 500, cost: 0.5 }
+  ];
+  const order = [...rows].sort((a, b) => compareSessionRows(a, b, 'tokens')).map((r) => r.name);
+  assert.deepEqual(order, ['big-old', 'mid', 'small-new']);
+  const tie = [
+    { name: 'b', sortTime: 200, value: 100, cost: 0 },
+    { name: 'a', sortTime: 400, value: 100, cost: 0 }
+  ];
+  const tieOrder = [...tie].sort((a, b) => compareSessionRows(a, b, 'tokens')).map((r) => r.name);
+  assert.deepEqual(tieOrder, ['a', 'b'], 'equal tokens fall back to recency');
+});
+
+test('normalizeSessionSortMode falls back to recent for unknown values', () => {
+  assert.equal(normalizeSessionSortMode('tokens'), 'tokens');
+  assert.equal(normalizeSessionSortMode('recent'), 'recent');
+  assert.equal(normalizeSessionSortMode('garbage'), 'recent');
+  assert.equal(normalizeSessionSortMode(undefined), 'recent');
+});
+
+test('sessionRowsForPeriod honors the sortMode option', () => {
+  const period = {
+    sessions: {
+      'codex:older-big': {
+        client: 'codex',
+        sessionId: 'older-big',
+        totalTokens: 5000,
+        costUsd: 2,
+        models: { 'gpt-5.5': 5000 },
+        messageCount: 10,
+        lastUsedAt: localIso(2026, 5, 30, 10, 0)
+      },
+      'claude:newer-small': {
+        client: 'claude',
+        sessionId: 'newer-small',
+        totalTokens: 500,
+        costUsd: 0.5,
+        models: { 'claude-opus-4-8': 500 },
+        messageCount: 1,
+        lastUsedAt: localIso(2026, 5, 30, 12, 0)
+      }
+    }
+  };
+  const firstValue = (rows) => rows[0].value;
+  assert.equal(firstValue(sessionRowsForPeriod(JSON.parse(JSON.stringify(period)))), 500, 'default stays recency-first');
+  assert.equal(
+    firstValue(sessionRowsForPeriod(JSON.parse(JSON.stringify(period)), { sortMode: 'tokens' })),
+    5000,
+    'tokens mode puts the larger session first'
+  );
+});
+
+test('sort toggle is wired in the renderer sources and localized', () => {
+  const app = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'renderer', 'app.js'), 'utf8');
+  assert.match(app, /sessionRowsApi\.compareSessionRows\(a, b, sortMode\)/);
+  assert.match(app, /function sessionSortMode\(\)/);
+  assert.match(app, /sessionSortMode: next/);
+  const html = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'renderer', 'index.html'), 'utf8');
+  assert.match(html, /id="sessionSortToggle"/);
+  const i18n = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'renderer', 'i18n.js'), 'utf8');
+  assert.equal((i18n.match(/'home\.sessionSort\.recent'/g) || []).length, 5, 'five locales carry the key');
+  assert.equal((i18n.match(/'home\.sessionSort\.tokens'/g) || []).length, 5);
+
 });
