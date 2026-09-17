@@ -1,3 +1,14 @@
+diff --git a/.gitignore b/.gitignore
+index a4dc276..1cd47e5 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -23,3 +23,6 @@ worker/.wrangler/
+ worker/node_modules/
+ worker/.dev.vars
+ devlog/
++
++# Mimosa hook writes per-session state into the worktree; never commit it
++.mimosa/
 diff --git a/src/electron/edgeAutoHide.js b/src/electron/edgeAutoHide.js
 new file mode 100644
 index 0000000..20381e1
@@ -1245,6 +1256,19 @@ index 35732c1..f9a7596 100644
    if (client === 'reasonix' && rowEl.dataset.detailUnavailable === 'true') return;
    const match = key.match(/^session:([^:]+):(.+)$/);
    if (!match) return;
+diff --git a/src/electron/renderer/dashboard.js b/src/electron/renderer/dashboard.js
+index 0ef374a..7bbd7ee 100644
+--- a/src/electron/renderer/dashboard.js
++++ b/src/electron/renderer/dashboard.js
+@@ -419,7 +419,7 @@ function renderBreakdown() {
+   const colModel = buildCol('dashboard.stack.model', modelTotals, charts.modelColor);
+   const colClient = buildCol('dashboard.stack.client', clientTotals, (k) => charts.clientColors[k] || charts.clientColors.default);
+   
+-  elsBreakdown.innerHTML = colModel + colClient;
++  elsBreakdown.innerHTML = colClient + colModel;
+   applySwatchColors(elsBreakdown);
+   if (state.motion !== 'none' && !prefersReducedMotion()) {
+     for (const fill of elsBreakdown.querySelectorAll('.dash-bd-bar-fill[data-motion-key]')) {
 diff --git a/src/electron/renderer/i18n.js b/src/electron/renderer/i18n.js
 index badac3c..8aabd8a 100644
 --- a/src/electron/renderer/i18n.js

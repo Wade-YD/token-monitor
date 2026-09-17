@@ -56,7 +56,7 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
                   分支 feat/edge-auto-hide（基线 v0.58.0，含 12 个提交）
                   这是首选留档，含完整历史
   本补丁          D:\桌面\私人图书馆\7-工具箱\1-project\token-monitor-workspace\token-monitor-patch\edge-auto-hide.patch
-                  155 KB（基线 v0.58.0），含全部源码改动 + 测试改动
+                  156 KB（基线 v0.58.0），含全部源码改动 + 测试改动
   已安装应用      C:\Users\29871\AppData\Local\Programs\Token Monitor（v0.58.0 + 补丁）
   官方原包备份    <安装位置>\resources\app.asar.v0580-official.bak   18,868,880 B
                   + 同名 .unpacked 双胞胎（勿删，解包该 bak 时必需）
@@ -73,7 +73,7 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
   历史基线：tag v0.57.0 -> 提交 bbe07de（annotated tag，tag 对象 9e5cc83，
     不要把 tag 对象当提交号；v0.57.0 版补丁链哈希见 workspace git 历史里的旧 commits.txt）。
   上游仓库：https://github.com/Javis603/token-monitor.git（浅克隆，本机无 push 权限）
-  提交链（见 commits.txt，17 个提交，从旧到新）：
+  提交链（见 commits.txt，18 个提交，从旧到新）：
     231f075 feat(edge): 功能主提交
     9a93773 / 7f6f215 / 085056e / cb60fae   harden 四连修
     ec3de55 fix(edge): finalize（收口）
@@ -88,7 +88,8 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
     41256a6 feat(sessions): ZCode 会话明细点入（readSessionEvents + 门控）
     7505480 fix(sessions): zcode 行补手掌光标与「›」affordance（CSS 选择器遗漏）
     809154d feat(sessions): 会话列表排序切换（最近 ⇄ Token，settings 持久化）
-  规模（相对 v0.58.0）：23 files changed, +2564/−30（15 个 src + 8 个测试文件）
+    7cced1a feat(dashboard): 总览按工具列在前、按模型列在后（用户偏好）
+  规模（相对 v0.58.0）：25 files changed, +2568/−31（16 个 src + 8 个测试文件 + .gitignore）
 
 【升级记录（2026-09-16，v0.57.0 → v0.58.0）】
   1) 官方 v0.58.0 当天 14:24 发布（新增 Amp 会话统计、Factory Droid 额度）。
@@ -123,6 +124,7 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
   src/shared/sessionDetail.js             （会话明细分发，含 zcode 分支）
   src/electron/renderer/styles.css        （zcode 行手掌光标 + 「›」affordance）
   src/electron/renderer/sessionRows.js    （会话行构建 + 排序比较函数）
+  src/electron/renderer/dashboard.js      （仪表盘总览列顺序）
 
 【基线锚点（补丁可回退、可重放的实测凭据）】
   回退物校验   app.asar.v0580-official.bak，18,868,880 B（2026-09-16 由官方安装产物直接复制）。

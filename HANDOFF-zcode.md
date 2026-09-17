@@ -469,3 +469,8 @@ patch 139 KB（16 提交，21 文件 +2409/−25），重放校验通过。
   透传、源码契约）。
 - 交付：15 文件（新增 sessionRows.js 进交付清单）→ pack 45,414,530 B → 换装重启，
   贴边 3px、无错误日志。patch 155 KB（17 提交，23 文件 +2564/−30），重放通过。
+
+追加（2026-09-17，提交 7cced1a）：仪表盘总览的「按工具」列换到左边、「按模型」
+列到右边（dashboard.js 的 innerHTML 顺序对换，一行）。**教训：fork 是 ZCode/
+Mimosa 钩子的写入目标，.mimosa/ 会话状态会被 `git add -A` 扫进提交——已加
+.gitignore；以后 fork 内提交前先 `git status` 过目，勿盲目 add -A。**
