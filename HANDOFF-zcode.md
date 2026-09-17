@@ -454,3 +454,18 @@ styles.css 的 per-client 选择器列表（cursor:pointer / row-metrics '>'）�
 按客户端硬编码的，上一轮加明细时漏了它。**教训：这类 per-client 白名单在
 JS（2 处）和 CSS（2 处）共四份，新增可点入客户端时四处都要加**。
 patch 139 KB（16 提交，21 文件 +2409/−25），重放校验通过。
+
+---
+
+## 14. 2026-09-17：会话列表排序切换（openspec 变更 add-session-sort-toggle）
+
+- 用户要会话列表能按 token 从大到小排。原排序写死「最近活跃优先」（token 仅平局
+  裁决），且公式在 sessionRows.js / app.js 重复两份。
+- 实现（提交 809154d）：收敛为 `compareSessionRows(a, b, sortMode)` 单比较函数；
+  页脚加「⇅ 最近 / ⇅ Token」切换按钮（仅会话视图显示，复用
+  tool-detail-footer-option 样式）；settings 新键 `sessionSortMode`（默认 recent，
+  非法回退），点击立即重渲染并持久化。i18n 五语言。
+- 测试 210/210（十套；sessionRows 新增 5：两模式序、平局、非法回退、sortMode
+  透传、源码契约）。
+- 交付：15 文件（新增 sessionRows.js 进交付清单）→ pack 45,414,530 B → 换装重启，
+  贴边 3px、无错误日志。patch 155 KB（17 提交，23 文件 +2564/−30），重放通过。

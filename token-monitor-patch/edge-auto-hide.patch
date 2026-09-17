@@ -354,7 +354,7 @@ index a2bede0..760750a 100644
  
  function floatingBubbleNativeGlassEnabled(settings = {}) {
 diff --git a/src/electron/main.js b/src/electron/main.js
-index 4f03f9c..1eef986 100644
+index 4f03f9c..3b11ca2 100644
 --- a/src/electron/main.js
 +++ b/src/electron/main.js
 @@ -23,6 +23,8 @@ const { exportFileSet, exportSignature, EXPORT_FILENAMES } = require('../shared/
@@ -366,7 +366,26 @@ index 4f03f9c..1eef986 100644
  const { createClientSourceIpcHandlers } = require('./clientSourceIpc');
  const { createClaudeWebFetch } = require('./providers/claude/webFetch');
  const { runAntigravityOAuthLogin } = require('./providers/antigravity/oauthLogin');
-@@ -2040,6 +2042,7 @@ function restoredBounds() {
+@@ -495,6 +497,7 @@ function defaultSettings() {
+     liveTokenRateScope: 'all',
+     compactTokenUnits: 'western',
+     tokenRateMode: 'speed',
++    sessionSortMode: 'recent',
+     heatmapMetric: 'cost',
+     modelRankingMetric: 'tokens',
+     homeActiveDaysWindow: 'all',
+@@ -651,6 +654,10 @@ function normalizeTokenRateMode(value) {
+   return value === 'burn' ? 'burn' : 'speed';
+ }
+ 
++function normalizeSessionSortMode(value) {
++  return value === 'tokens' ? 'tokens' : 'recent';
++}
++
+ function normalizeLiveTokenRateScope(value) {
+   return value === 'device' ? 'device' : 'all';
+ }
+@@ -2040,6 +2047,7 @@ function restoredBounds() {
  let persistBoundsTimer = null;
  let floatingBubbleAutoCollapseTimer = null;
  const floatingBubbleState = { collapsed: false, side: null, collapsedBounds: null, expandedBounds: null, suppressNextCollapse: false, contentSize: null };
@@ -374,7 +393,7 @@ index 4f03f9c..1eef986 100644
  let mainWindowChrome = { collapsedFloatingBubble: false };
  
  function stopPersistBoundsTimer() {
-@@ -2286,6 +2289,451 @@ function syncFloatingBubbleAvailability() {
+@@ -2286,6 +2294,451 @@ function syncFloatingBubbleAvailability() {
    sendFloatingBubbleState();
  }
  
@@ -826,7 +845,7 @@ index 4f03f9c..1eef986 100644
  function persistBoundsSoon() {
    if (!mainWindow || mainWindow.isDestroyed()) return;
    if (!shouldPersistWindowBounds(mainWindow)) {
-@@ -2303,6 +2751,10 @@ function persistBoundsSoon() {
+@@ -2303,6 +2756,10 @@ function persistBoundsSoon() {
        // Popover x/y is anchored to the tray icon each open; only the size carries over.
        if (prev.width === next.width && prev.height === next.height) return;
        settings.windowBounds = { ...prev, width: next.width, height: next.height };
@@ -837,7 +856,15 @@ index 4f03f9c..1eef986 100644
      } else if (floatingBubbleState.collapsed && floatingBubbleState.expandedBounds) {
        floatingBubbleState.collapsedBounds = next;
        const display = displayForBounds(next);
-@@ -2842,6 +3294,77 @@ function applyWindowSettings() {
+@@ -2523,6 +2980,7 @@ function readSettings() {
+     merged.interfaceFontFamily = fontSettingsApi.normalizeFontFamily(merged.interfaceFontFamily);
+     merged.displayFontFamily = fontSettingsApi.normalizeFontFamily(merged.displayFontFamily);
+     merged.tokenRateMode = normalizeTokenRateMode(merged.tokenRateMode);
++    merged.sessionSortMode = normalizeSessionSortMode(merged.sessionSortMode);
+     if (saved.serviceProviderDisplayOrder !== undefined) {
+       merged.serviceProviderDisplayOrder = String(saved.serviceProviderDisplayOrder || '');
+     }
+@@ -2842,6 +3300,77 @@ function applyWindowSettings() {
      applyCollapsedFloatingBubbleLimits(mainWindow.getBounds());
      return;
    }
@@ -915,7 +942,7 @@ index 4f03f9c..1eef986 100644
    const behavior = describeWindowBehavior(settings);
    mainWindow.setAlwaysOnTop(behavior.alwaysOnTop, floatingAlwaysOnTopLevel());
    if (typeof mainWindow.setMovable === 'function') mainWindow.setMovable(behavior.draggable);
-@@ -2853,6 +3376,17 @@ function applyWindowSettings() {
+@@ -2853,6 +3382,17 @@ function applyWindowSettings() {
    if (typeof mainWindow.setSkipTaskbar === 'function') mainWindow.setSkipTaskbar(skipTaskbarForSettings(settings));
    if (!behavior.focusable && typeof mainWindow.blur === 'function') mainWindow.blur();
    syncTaskbarZOrder();
@@ -933,7 +960,7 @@ index 4f03f9c..1eef986 100644
  }
  
  function nativeBlurEnabled(source = settings) {
-@@ -5142,6 +5676,8 @@ function setWindowPresentationFromMenu(value) {
+@@ -5142,6 +5682,8 @@ function setWindowPresentationFromMenu(value) {
    saveSettings();
    if (previousTrayMode) exitTrayMode();
    else {
@@ -942,7 +969,7 @@ index 4f03f9c..1eef986 100644
      applyWindowSettings();
      focusExistingWindow();
    }
-@@ -6268,6 +6804,7 @@ function createWindow(boundsOverride, options = {}) {
+@@ -6268,6 +6810,7 @@ function createWindow(boundsOverride, options = {}) {
      }
    });
    mainWindow = win;
@@ -950,7 +977,7 @@ index 4f03f9c..1eef986 100644
    mainWindowNativeBlurEnabled = null;
    mainWindowChrome = { collapsedFloatingBubble };
    applyMacSpaceBehavior();
-@@ -6310,17 +6847,83 @@ function createWindow(boundsOverride, options = {}) {
+@@ -6310,17 +6853,83 @@ function createWindow(boundsOverride, options = {}) {
    applyNativeMaterial();
    win.on('focus', () => {
      stopFloatingBubbleAutoCollapseTimer();
@@ -1039,7 +1066,7 @@ index 4f03f9c..1eef986 100644
    win.on('minimize', stopTaskbarZOrderKeeper);
    win.on('close', (event) => {
      if (quitRequested) return;
-@@ -6550,6 +7153,28 @@ function rebuildWindow() {
+@@ -6550,6 +7159,28 @@ function rebuildWindow() {
    });
  }
  
@@ -1068,7 +1095,15 @@ index 4f03f9c..1eef986 100644
  app.whenReady().then(() => {
    if (process.platform === 'darwin' && app.dock) app.dock.setIcon(APP_ICON_PATH);
    ensureSettingsLoaded();
-@@ -6917,6 +7542,7 @@ app.whenReady().then(() => {
+@@ -6775,6 +7406,7 @@ app.whenReady().then(() => {
+         patch.displayFontFamily ?? settings.displayFontFamily
+       ),
+       tokenRateMode: normalizeTokenRateMode(patch.tokenRateMode ?? settings.tokenRateMode),
++      sessionSortMode: normalizeSessionSortMode(patch.sessionSortMode ?? settings.sessionSortMode),
+       floatingBubbleEnabled: parseBoolean(patch.floatingBubbleEnabled ?? settings.floatingBubbleEnabled, false),
+       discordRpcEnabled: patch.discordRpcEnabled ?? settings.discordRpcEnabled ?? false,
+       limitsEnabled: parseBoolean(patch.limitsEnabled ?? settings.limitsEnabled, true),
+@@ -6917,6 +7549,7 @@ app.whenReady().then(() => {
      ) && latestStats) updateDiscordRpcDisplay(latestStats);
      applyWindowSettings();
      syncFloatingBubbleAvailability();
@@ -1076,7 +1111,7 @@ index 4f03f9c..1eef986 100644
      const nextNativeMaterial = nativeBlurEnabled();
      const nextWindowsBackdrop = normalizeWindowsBackdropMode(settings?.windowsBackdrop);
      const windowsBackdropChanged = previousWindowsBackdrop !== nextWindowsBackdrop
-@@ -7014,6 +7640,27 @@ app.whenReady().then(() => {
+@@ -7014,6 +7647,27 @@ app.whenReady().then(() => {
    });
    ipcMain.handle('floatingBubble:expand', () => expandFloatingBubble());
    ipcMain.handle('floatingBubble:peek', () => expandFloatingBubble({ focus: false }));
@@ -1105,7 +1140,7 @@ index 4f03f9c..1eef986 100644
      if (!mainWindow || mainWindow.isDestroyed()) return false;
      if (floatingBubbleState.collapsed || !canUseFloatingBubble(settings)) return false;
 diff --git a/src/electron/renderer/app.js b/src/electron/renderer/app.js
-index 35732c1..8c488d1 100644
+index 35732c1..f9a7596 100644
 --- a/src/electron/renderer/app.js
 +++ b/src/electron/renderer/app.js
 @@ -195,8 +195,8 @@ const projectRowsApi = window.TokenMonitorProjectRows;
@@ -1119,7 +1154,34 @@ index 35732c1..8c488d1 100644
  const LIMIT_SOURCE_LABELS = { oauth: 'OAuth', cli: 'CLI', web: 'Web', rpc: 'RPC', local: 'Local', api: 'API' };
  const LIMIT_CAPABILITY_TAG_KEYS = {
    Auto: 'settings.limits.capability.auto',
-@@ -2303,7 +2303,7 @@ function updateRow(row, { name, subtitle, activity, detail, value, cost, barValu
+@@ -366,6 +366,8 @@ Object.assign(els, {
+   toolDetailFooter: document.getElementById('toolDetailFooter'),
+   toolDetailFooterTokens: document.getElementById('toolDetailFooterTokens'),
+   toolDetailFooterModels: document.getElementById('toolDetailFooterModels'),
++  sessionSortToggle: document.getElementById('sessionSortToggle'),
++  sessionSortToggleLabel: document.getElementById('sessionSortToggleLabel'),
+   monthPeriodMenu: document.getElementById('monthPeriodMenu'),
+   monthPeriodTab: document.getElementById('monthPeriodTab'),
+   periodMonthModeInput: document.getElementById('periodMonthModeInput'),
+@@ -527,8 +529,15 @@ document.addEventListener('keydown', (event) => {
+   toggleAccordionRow(row);
+ });
+ 
+-els.toolDetailFooterTokens.addEventListener('click', () => setActiveToolDetailMode('tokens'));
+-els.toolDetailFooterModels.addEventListener('click', () => setActiveToolDetailMode('models'));
++  els.toolDetailFooterTokens.addEventListener('click', () => setActiveToolDetailMode('tokens'));
++  els.toolDetailFooterModels.addEventListener('click', () => setActiveToolDetailMode('models'));
++  els.sessionSortToggle?.addEventListener('click', () => {
++    const next = sessionSortMode() === 'tokens' ? 'recent' : 'tokens';
++    if (state.settings) state.settings.sessionSortMode = next;
++    updateSessionSortToggle();
++    render();
++    saveSettings({ sessionSortMode: next }).catch(() => {});
++  });
+ 
+ document.addEventListener('pointerdown', (event) => {
+   if (state.viewSwitcherOpen && !event.target.closest('#viewSwitcher')) {
+@@ -2303,7 +2312,7 @@ function updateRow(row, { name, subtitle, activity, detail, value, cost, barValu
    }
    const interactive = reviewGroup === true || (
      kind === 'session'
@@ -1128,7 +1190,53 @@ index 35732c1..8c488d1 100644
    ) || (kind === 'session' && client === 'reasonix' && sessionDetailAvailable === true);
    const mark = row.querySelector('.row-mark');
    const iconKind = iconKindFor({ key: row.dataset.key, platform: row.dataset.platform || '', client: row.dataset.client || '' }, state.breakdown);
-@@ -12973,7 +12973,7 @@ els.breakdown.addEventListener('click', (event) => {
+@@ -2707,7 +2716,23 @@ function modelRowsForPeriod(period, rankingMetric = state.settings?.modelRanking
+   return toolRowsForPeriod(period);
+ }
+ 
++function sessionSortMode() {
++  return sessionRowsApi.normalizeSessionSortMode(state.settings?.sessionSortMode);
++}
++
++function updateSessionSortToggle() {
++  if (!els.sessionSortToggle) return;
++  const visible = state.breakdown === 'session';
++  els.sessionSortToggle.classList.toggle('hidden', !visible);
++  const mode = sessionSortMode();
++  els.sessionSortToggleLabel.textContent = mode === 'tokens'
++    ? t('home.sessionSort.tokens')
++    : t('home.sessionSort.recent');
++  els.sessionSortToggle.setAttribute('aria-pressed', String(mode === 'tokens'));
++}
++
+ function sessionRowsForPeriod(period) {
++  const sortMode = sessionSortMode();
+   const rows = sessionRowsApi.sessionRowsForPeriod(period, {
+     clientLabels,
+     clientColors,
+@@ -2715,10 +2740,11 @@ function sessionRowsForPeriod(period) {
+     stableColor,
+     fallbackColors: fallbackModelColors,
+     archivedLabel: t('session.archived'),
+-    nativeSessions: state.stats?.nativeSessions?.[state.period] || {}
++    nativeSessions: state.stats?.nativeSessions?.[state.period] || {},
++    sortMode
+   });
+   if (rows.length > 0) {
+-    rows.sort((a, b) => b.sortTime - a.sortTime || b.value - a.value || b.cost - a.cost || a.name.localeCompare(b.name));
++    rows.sort((a, b) => sessionRowsApi.compareSessionRows(a, b, sortMode));
+     return sessionRowsApi.groupBackgroundReviewRows(rows, {
+       label: t('sessions.backgroundReviews'),
+       countLabel: (count) => t('sessions.backgroundReviewCount', { count }),
+@@ -8569,6 +8595,7 @@ function render() {
+   }
+   
+   renderFloatingBubbleContent();
++  updateSessionSortToggle();
+   // Tell main the window has painted real content (not the static "0" defaults),
+   // so a recreated window can stay hidden until it's populated. See loadWindowFile.
+   signalContentReady();
+@@ -12973,7 +13000,7 @@ els.breakdown.addEventListener('click', (event) => {
    }
    const key = rowEl.dataset.key || '';            // "session:<client>:<sessionId>"
    const client = rowEl.dataset.client || '';
@@ -1138,10 +1246,20 @@ index 35732c1..8c488d1 100644
    const match = key.match(/^session:([^:]+):(.+)$/);
    if (!match) return;
 diff --git a/src/electron/renderer/i18n.js b/src/electron/renderer/i18n.js
-index badac3c..7cbcc88 100644
+index badac3c..8aabd8a 100644
 --- a/src/electron/renderer/i18n.js
 +++ b/src/electron/renderer/i18n.js
-@@ -1201,6 +1201,7 @@
+@@ -453,6 +453,9 @@
+       'home.liveTokenRate.burnTitle': 'Live token burn ({scope}): {value}. Click to show live tok/s.',
+       'home.liveTokenRate.speedIdleTitle': 'Last observed generation speed ({scope}): {value}. Click to show TPM.',
+       'home.liveTokenRate.burnIdleTitle': 'Last observed token burn ({scope}): {value}. Click to show tok/s.',
++      'home.sessionSort.recent': 'Recent',
++      'home.sessionSort.tokens': 'Tokens',
++      'home.sessionSort.title': 'Toggle session sort (recent activity / token size)',
+       'home.less': 'Less',
+       'home.more': 'More',
+       'home.used': 'used',
+@@ -1201,6 +1204,7 @@
        'settings.windowBehavior.floating': 'Floating above apps',
        'settings.windowBehavior.normal': 'Normal window',
        'settings.windowBehavior.desktop': 'Desktop pinned',
@@ -1149,7 +1267,7 @@ index badac3c..7cbcc88 100644
        'settings.windowBehavior.buttonTitle': '{current}; click for {next}',
        'settings.display.floatingBubble': 'Floating Bubble',
        'settings.display.floatingBubbleNote': 'Collapse the widget into a slim draggable mini-window; click it to reopen.',
-@@ -1381,6 +1382,7 @@
+@@ -1381,6 +1385,7 @@
        'trayMenu.presentation.floating': 'Floating Above Apps',
        'trayMenu.presentation.normal': 'Normal Window',
        'trayMenu.presentation.desktop': 'Desktop Pinned',
@@ -1157,7 +1275,17 @@ index badac3c..7cbcc88 100644
        'settings.startup.title': 'Startup',
        'settings.startup.startAtLogin': 'Start at login',
        'settings.startup.available': 'Available in packaged builds. On Linux, run the AppImage build to enable.',
-@@ -2758,6 +2760,7 @@
+@@ -2010,6 +2015,9 @@
+       'home.liveTokenRate.burnTitle': '即時 Token 消耗（{scope}）：{value}。點擊切換至即時 tok/s。',
+       'home.liveTokenRate.speedIdleTitle': '最近一次生成速度（{scope}）：{value}。點擊切換至 TPM。',
+       'home.liveTokenRate.burnIdleTitle': '最近一次 Token 消耗（{scope}）：{value}。點擊切換至 tok/s。',
++      'home.sessionSort.recent': '最近',
++      'home.sessionSort.tokens': 'Token',
++      'home.sessionSort.title': '切換會話排序（最近活躍 / Token 大小）',
+       'home.less': '較少',
+       'home.more': '較多',
+       'home.used': '已用',
+@@ -2758,6 +2766,7 @@
        'settings.windowBehavior.floating': '浮在其他 app 上方',
        'settings.windowBehavior.normal': '一般視窗',
        'settings.windowBehavior.desktop': '固定在桌面',
@@ -1165,7 +1293,7 @@ index badac3c..7cbcc88 100644
        'settings.windowBehavior.buttonTitle': '目前：{current}；點擊切換為 {next}',
        'settings.display.floatingBubble': '懸浮小窗',
        'settings.display.floatingBubbleNote': '將 widget 收成可拖曳的窄長小窗，點擊即可重新展開。',
-@@ -2938,6 +2941,7 @@
+@@ -2938,6 +2947,7 @@
        'trayMenu.presentation.floating': '浮動於其他 App 上方',
        'trayMenu.presentation.normal': '一般視窗',
        'trayMenu.presentation.desktop': '固定於桌面',
@@ -1173,7 +1301,17 @@ index badac3c..7cbcc88 100644
        'settings.startup.title': '啟動',
        'settings.startup.startAtLogin': '登入時啟動',
        'settings.startup.available': '僅在打包後的版本可用；Linux 需以 AppImage 執行。',
-@@ -4315,6 +4319,7 @@
+@@ -3567,6 +3577,9 @@
+       'home.liveTokenRate.burnTitle': '实时 Token 消耗（{scope}）：{value}。点击切换至实时 tok/s。',
+       'home.liveTokenRate.speedIdleTitle': '最近一次生成速度（{scope}）：{value}。点击切换至 TPM。',
+       'home.liveTokenRate.burnIdleTitle': '最近一次 Token 消耗（{scope}）：{value}。点击切换至 tok/s。',
++      'home.sessionSort.recent': '最近',
++      'home.sessionSort.tokens': 'Token',
++      'home.sessionSort.title': '切换会话排序（最近活跃 / Token 大小）',
+       'home.less': '较少',
+       'home.more': '较多',
+       'home.used': '已用',
+@@ -4315,6 +4328,7 @@
        'settings.windowBehavior.floating': '浮在其他 app 上方',
        'settings.windowBehavior.normal': '普通窗口',
        'settings.windowBehavior.desktop': '固定在桌面',
@@ -1181,7 +1319,7 @@ index badac3c..7cbcc88 100644
        'settings.windowBehavior.buttonTitle': '当前：{current}；点击切换为 {next}',
        'settings.display.floatingBubble': '悬浮小窗',
        'settings.display.floatingBubbleNote': '将组件收成可拖动的窄长小窗，点击即可重新展开。',
-@@ -4495,6 +4500,7 @@
+@@ -4495,6 +4509,7 @@
        'trayMenu.presentation.floating': '浮动于其他 App 上方',
        'trayMenu.presentation.normal': '普通窗口',
        'trayMenu.presentation.desktop': '固定到桌面',
@@ -1189,7 +1327,17 @@ index badac3c..7cbcc88 100644
        'settings.startup.title': '启动',
        'settings.startup.startAtLogin': '登录时启动',
        'settings.startup.available': '仅在打包后的版本可用；Linux 需以 AppImage 运行。',
-@@ -6190,6 +6196,7 @@
+@@ -4769,6 +4784,9 @@
+       'home.liveTokenRate.burnTitle': '실시간 토큰 소모량({scope}): {value}. 클릭하여 실시간 tok/s로 전환합니다.',
+       'home.liveTokenRate.speedIdleTitle': '마지막으로 관찰된 생성 속도({scope}): {value}. 클릭하여 TPM으로 전환합니다.',
+       'home.liveTokenRate.burnIdleTitle': '마지막으로 관찰된 토큰 소모량({scope}): {value}. 클릭하여 tok/s로 전환합니다.',
++      'home.sessionSort.recent': '최근',
++      'home.sessionSort.tokens': 'Token',
++      'home.sessionSort.title': '세션 정렬 전환(최근 활동 / 토큰 크기)',
+       'home.reset': '{value} 초기화',
+       'home.staleDevice': '오프라인',
+       'home.tools': '도구',
+@@ -6190,6 +6208,7 @@
        'trayMenu.presentation.floating': '다른 앱 위에 띄우기',
        'trayMenu.presentation.normal': '일반 창',
        'trayMenu.presentation.desktop': '데스크톱에 고정',
@@ -1197,7 +1345,7 @@ index badac3c..7cbcc88 100644
        'settings.views.configureHome': '{name} 설정',
        'settings.views.configureTrend': '{name} 설정',
        'settings.views.enableTrend': '추이 활성화',
-@@ -6207,6 +6214,7 @@
+@@ -6207,6 +6226,7 @@
        'settings.views.trendIntervalMinutes': '{n}분',
        'settings.windowBehavior.buttonTitle': '{current}; {next}로 전환하려면 클릭',
        'settings.windowBehavior.desktop': '데스크톱 고정',
@@ -1205,7 +1353,17 @@ index badac3c..7cbcc88 100644
        'settings.windowBehavior.floating': '앱 위에 플로팅',
        'settings.windowBehavior.normal': '일반 창',
        'sortMostTokens': '↕ 토큰 많은 순',
-@@ -7747,6 +7755,7 @@
+@@ -6326,6 +6346,9 @@
+       'home.liveTokenRate.burnTitle': 'ライブ Token 消費（{scope}）：{value}。クリックするとライブ tok/s に切り替わります。',
+       'home.liveTokenRate.speedIdleTitle': '直近の生成速度（{scope}）：{value}。クリックすると TPM に切り替わります。',
+       'home.liveTokenRate.burnIdleTitle': '直近の Token 消費（{scope}）：{value}。クリックすると tok/s に切り替わります。',
++      'home.sessionSort.recent': '最近',
++      'home.sessionSort.tokens': 'Token',
++      'home.sessionSort.title': 'セッションの並び替え（最近の活動 / Token サイズ）',
+       'home.reset': '{value}をリセット',
+       'home.staleDevice': 'オフライン',
+       'home.tools': 'ツール',
+@@ -7747,6 +7770,7 @@
        'trayMenu.presentation.floating': '他のアプリの前面に表示',
        'trayMenu.presentation.normal': '通常ウィンドウ',
        'trayMenu.presentation.desktop': 'デスクトップに固定',
@@ -1213,7 +1371,7 @@ index badac3c..7cbcc88 100644
        'settings.views.configureHome': '{name}を設定',
        'settings.views.configureTrend': '{name}を設定',
        'settings.views.enableTrend': 'トレンドを有効化',
-@@ -7764,6 +7773,7 @@
+@@ -7764,6 +7788,7 @@
        'settings.views.trendIntervalMinutes': '{n}分',
        'settings.windowBehavior.buttonTitle': '{current}; {next}に切り替えるにはクリック',
        'settings.windowBehavior.desktop': 'デスクトップに固定',
@@ -1222,7 +1380,7 @@ index badac3c..7cbcc88 100644
        'settings.windowBehavior.normal': '通常ウィンドウ',
        'sortMostTokens': '↕ トークン数順',
 diff --git a/src/electron/renderer/index.html b/src/electron/renderer/index.html
-index 5b11b50..1e8bd16 100644
+index 5b11b50..4fd45d5 100644
 --- a/src/electron/renderer/index.html
 +++ b/src/electron/renderer/index.html
 @@ -248,6 +248,7 @@
@@ -1233,6 +1391,62 @@ index 5b11b50..1e8bd16 100644
                  </select>
                  <span class="settings-note settings-item-desc" data-i18n="settings.display.windowBehaviorNote">Desktop pinned keeps the widget below other apps and locks drag/resize while staying clickable.</span>
                </label>
+@@ -1782,6 +1783,10 @@
+       <div id="sessionPagerHost" class="session-pager-host hidden"></div>
+       <footer class="footer">
+         <div id="viewSwitcher" class="view-switcher"></div>
++        <button id="sessionSortToggle" class="tool-detail-footer-option hidden" type="button" aria-pressed="false">
++          <span aria-hidden="true">⇅</span>
++          <span id="sessionSortToggleLabel">Recent</span>
++        </button>
+         <div id="toolDetailFooter" class="tool-detail-footer hidden" role="group">
+           <button id="toolDetailFooterTokens" class="tool-detail-footer-option" type="button">Tokens</button>
+           <button id="toolDetailFooterModels" class="tool-detail-footer-option" type="button">Models</button>
+diff --git a/src/electron/renderer/sessionRows.js b/src/electron/renderer/sessionRows.js
+index 652a2dd..99d513d 100644
+--- a/src/electron/renderer/sessionRows.js
++++ b/src/electron/renderer/sessionRows.js
+@@ -189,6 +189,20 @@
+     };
+   }
+ 
++  function normalizeSessionSortMode(mode) {
++    return mode === 'tokens' ? 'tokens' : 'recent';
++  }
++
++  // recent: last-activity first (the long-standing default). tokens: current-period
++  // tokens descending, with recency as the tiebreaker so equal-usage sessions
++  // still surface the livelier one.
++  function compareSessionRows(a, b, sortMode) {
++    if (normalizeSessionSortMode(sortMode) === 'tokens') {
++      return b.value - a.value || b.sortTime - a.sortTime || b.cost - a.cost || a.name.localeCompare(b.name);
++    }
++    return b.sortTime - a.sortTime || b.value - a.value || b.cost - a.cost || a.name.localeCompare(b.name);
++  }
++
+   function sessionRowsForPeriod(period, options = {}) {
+     const labels = options.clientLabels || {};
+     const colors = options.clientColors || {};
+@@ -234,7 +248,7 @@
+       const row = nativeSessionRow(session, key, options, now);
+       if (row) rows.push(row);
+     }
+-    return rows.sort((a, b) => b.sortTime - a.sortTime || b.value - a.value || b.cost - a.cost || a.name.localeCompare(b.name));
++    return rows.sort((a, b) => compareSessionRows(a, b, options.sortMode));
+   }
+ 
+   function groupBackgroundReviewRows(rows, options = {}) {
+@@ -302,8 +316,10 @@
+     applyBreakdownRowSemantics,
+     archivedSessionCount,
+     compactSessionTime,
++    compareSessionRows,
+     groupBackgroundReviewRows,
+     handleBreakdownRowKeydown,
++    normalizeSessionSortMode,
+     sessionBreakdownIncomplete,
+     sessionIdLabel,
+     sessionRowsForPeriod
 diff --git a/src/electron/renderer/styles.css b/src/electron/renderer/styles.css
 index bddbe44..c39a1c9 100644
 --- a/src/electron/renderer/styles.css
@@ -2397,6 +2611,104 @@ index 0000000..6a27447
 +function stripComments(source) {
 +  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
 +}
+diff --git a/tests/electron/sessionRows.test.js b/tests/electron/sessionRows.test.js
+index 6c063b1..df17a9a 100644
+--- a/tests/electron/sessionRows.test.js
++++ b/tests/electron/sessionRows.test.js
+@@ -8,8 +8,10 @@ const test = require('node:test');
+ const {
+   applyBreakdownRowSemantics,
+   archivedSessionCount,
++  compareSessionRows,
+   groupBackgroundReviewRows,
+   handleBreakdownRowKeydown,
++  normalizeSessionSortMode,
+   sessionBreakdownIncomplete,
+   sessionIdLabel,
+   sessionRowsForPeriod
+@@ -461,3 +463,82 @@ test('session layout keeps page chrome consistent and scrolls long labels on one
+   assert.match(renderer, /function setHoverMarqueeText\([^]*?element\.removeAttribute\('title'\);\n}/);
+   assert.doesNotMatch(renderer, /function setHoverMarqueeText\([^]*?element\.title\s*=/);
+ });
++
++test('compareSessionRows keeps the legacy recency order by default', () => {
++  const rows = [
++    { name: 'small-new', sortTime: 300, value: 50, cost: 0.1 },
++    { name: 'big-old', sortTime: 100, value: 5000, cost: 2 },
++    { name: 'mid', sortTime: 200, value: 500, cost: 0.5 }
++  ];
++  const recent = [...rows].sort((a, b) => compareSessionRows(a, b, 'recent')).map((r) => r.name);
++  assert.deepEqual(recent, ['small-new', 'mid', 'big-old']);
++  const implicit = [...rows].sort((a, b) => compareSessionRows(a, b)).map((r) => r.name);
++  assert.deepEqual(implicit, recent, 'missing sortMode must behave as recent');
++});
++
++test('compareSessionRows tokens mode sorts by value with recency as tiebreaker', () => {
++  const rows = [
++    { name: 'small-new', sortTime: 300, value: 50, cost: 0.1 },
++    { name: 'big-old', sortTime: 100, value: 5000, cost: 2 },
++    { name: 'mid', sortTime: 200, value: 500, cost: 0.5 }
++  ];
++  const order = [...rows].sort((a, b) => compareSessionRows(a, b, 'tokens')).map((r) => r.name);
++  assert.deepEqual(order, ['big-old', 'mid', 'small-new']);
++  const tie = [
++    { name: 'b', sortTime: 200, value: 100, cost: 0 },
++    { name: 'a', sortTime: 400, value: 100, cost: 0 }
++  ];
++  const tieOrder = [...tie].sort((a, b) => compareSessionRows(a, b, 'tokens')).map((r) => r.name);
++  assert.deepEqual(tieOrder, ['a', 'b'], 'equal tokens fall back to recency');
++});
++
++test('normalizeSessionSortMode falls back to recent for unknown values', () => {
++  assert.equal(normalizeSessionSortMode('tokens'), 'tokens');
++  assert.equal(normalizeSessionSortMode('recent'), 'recent');
++  assert.equal(normalizeSessionSortMode('garbage'), 'recent');
++  assert.equal(normalizeSessionSortMode(undefined), 'recent');
++});
++
++test('sessionRowsForPeriod honors the sortMode option', () => {
++  const period = {
++    sessions: {
++      'codex:older-big': {
++        client: 'codex',
++        sessionId: 'older-big',
++        totalTokens: 5000,
++        costUsd: 2,
++        models: { 'gpt-5.5': 5000 },
++        messageCount: 10,
++        lastUsedAt: localIso(2026, 5, 30, 10, 0)
++      },
++      'claude:newer-small': {
++        client: 'claude',
++        sessionId: 'newer-small',
++        totalTokens: 500,
++        costUsd: 0.5,
++        models: { 'claude-opus-4-8': 500 },
++        messageCount: 1,
++        lastUsedAt: localIso(2026, 5, 30, 12, 0)
++      }
++    }
++  };
++  const firstValue = (rows) => rows[0].value;
++  assert.equal(firstValue(sessionRowsForPeriod(JSON.parse(JSON.stringify(period)))), 500, 'default stays recency-first');
++  assert.equal(
++    firstValue(sessionRowsForPeriod(JSON.parse(JSON.stringify(period)), { sortMode: 'tokens' })),
++    5000,
++    'tokens mode puts the larger session first'
++  );
++});
++
++test('sort toggle is wired in the renderer sources and localized', () => {
++  const app = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'renderer', 'app.js'), 'utf8');
++  assert.match(app, /sessionRowsApi\.compareSessionRows\(a, b, sortMode\)/);
++  assert.match(app, /function sessionSortMode\(\)/);
++  assert.match(app, /sessionSortMode: next/);
++  const html = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'renderer', 'index.html'), 'utf8');
++  assert.match(html, /id="sessionSortToggle"/);
++  const i18n = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'renderer', 'i18n.js'), 'utf8');
++  assert.equal((i18n.match(/'home\.sessionSort\.recent'/g) || []).length, 5, 'five locales carry the key');
++  assert.equal((i18n.match(/'home\.sessionSort\.tokens'/g) || []).length, 5);
++});
 diff --git a/tests/electron/tray.test.js b/tests/electron/tray.test.js
 index 07c6486..366be29 100644
 --- a/tests/electron/tray.test.js
