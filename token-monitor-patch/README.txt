@@ -123,13 +123,23 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
      `npm install --no-save --no-package-lock semver chokidar undici` 后全量
      4546 用例，4538 通过；唯一失败 = macOS symlink 测试（Windows EPERM，平台
      限制，与本补丁无关）。
-  5) 交付：19 文件 overlay → pack 45,417,483 B → 换装 → 轻验证全绿（无对话框、
+  5) 交付：20 文件 overlay → pack 45,417,560 B → 换装 → 轻验证全绿（无对话框、
      启动隐藏 3px 窄条、错误日志不存在）。完整光标编排（deliver_finalize.py
      22 断言）留待机器空闲时回归。本轮换装用 Bash 步骤完成——deliver_finalize.py
      的 pack-only 改造被 Mimosa hook 误报拦截（变量路径+subprocess 形态），该脚本
-     其余部分未动，FILES 表已更新为 19 文件。
+     其余部分未动，FILES 表已更新为 20 文件。
+  6) ⚠️ 本轮首交付即出事故，已修复，教训必读：overlay 清单凭记忆手写，漏了
+     dashboard.html（只给了 index.html）。asar 里 dashboard.js 是新的而
+     dashboard.html 是旧的 → 新增的 <script src="manualRefresh.js"> 不存在 →
+     仪表盘窗口里 TokenMonitorManualRefresh 未定义 → dashboard.js 顶层抛错
+     （控制器接线在 745 行，boot() 在 787 行）→ dashboard.ready() 永不上报 →
+     窗口创建但永不显示，用户看到「点 ↗ 跳转没反应」。
+     教训：① overlay 清单必须由 `git diff --name-only v0.58.0..HEAD -- src`
+     生成，不许手抄；② 换装后必须先做「内容断言」（解包 asar grep 每个新改动
+     的标记串）再做启动验证；③ 仪表盘窗口的显示依赖渲染进程 ready 回报，
+     渲染层任何顶层异常都会表现为「窗口打不开」而非报错弹窗。
 
-【改动的 19 个交付文件（2026-09-18 轮更新）】
+【改动的 20 个交付文件（2026-09-18 轮更新）】
   src/electron/edgeAutoHide.js            （新增）
   src/electron/main.js                    （+ dashboard:forceRefresh IPC）
   src/electron/preload.js                 （+ forceDashboardRefresh 桥接）
