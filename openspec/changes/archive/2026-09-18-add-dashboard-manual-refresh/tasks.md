@@ -19,5 +19,5 @@
 - [x] 4.1 `npm test`（或仓库既有测试命令）全绿，含新增 manualRefresh 用例
 - [x] 4.2 `deliver_finalize.py` 的 FILES 清单加入 `manualRefresh.js`（如该脚本仍作为交付载体）；补丁重放验证：checkout 干净 v0.58.0 tag worktree，`git apply --check --3way` 用补丁文件**绝对路径**回放成功
 - [x] 4.3 重打 asar（保留 `.unpacked` 孪生目录），退应用后替换安装目录 `app.asar`，重启无错误日志
-- [ ] 4.4 运行时手测：打开仪表盘点 ↻ → 按钮转圈且连点无效 → 结束后恢复；有新会话数据时点击后数字立即更新；机器空闲时可跑 `verify_v0580.py` 回归吸附行为
+- [x] 4.4 运行时手测：打开仪表盘点 ↻ → 按钮转圈且连点无效 → 结束后恢复；有新会话数据时点击后数字立即更新；机器空闲时可跑 `verify_v0580.py` 回归吸附行为
 - [x] 4.5 fork 仓库提交（`git status` 逐项核对，禁 `add -A` 盲加），更新 `token-monitor-patch/README.txt`（提交数/文件数/补丁大小）与 workspace 提交
