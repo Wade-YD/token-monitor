@@ -50,6 +50,12 @@ html.native-high-contrast .dash-cards { border-color: var(--line-strong); }
   width: 26px; height: 26px; border-radius: 6px; font-size: 14px; line-height: 1;
 }
 .icon-button:hover { background: rgba(var(--overlay-rgb), 0.12); }
+/* Refresh button busy chrome: spin the glyph while a forced collection runs. */
+#refreshBtn.refreshing { pointer-events: none; opacity: 0.7; }
+@media (prefers-reduced-motion: no-preference) {
+  #refreshBtn.refreshing span { display: inline-block; animation: dash-refresh-spin 0.9s linear infinite; }
+}
+@keyframes dash-refresh-spin { to { transform: rotate(360deg); } }
 
 .dash-tabs { display: flex; gap: 4px; padding: 10px 14px 0; }
 .dash-tab {

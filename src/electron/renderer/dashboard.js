@@ -802,7 +802,12 @@ els.heatmapMetricBtns.forEach((b) => b.addEventListener('click', () => {
   window.tokenMonitor.updateSettings({ heatmapMetric: state.heatmapMetric });
 }));
 els.themeToggle.addEventListener('click', () => { state.flat = !state.flat; els.body.classList.toggle('flat', state.flat); window.tokenMonitor.updateSettings({ dashboardFlat: state.flat }); });
-els.refreshBtn.addEventListener('click', refresh);
+const manualRefreshController = TokenMonitorManualRefresh.createManualRefreshController({
+  forceRefresh: () => window.tokenMonitor.forceDashboardRefresh?.(),
+  apply: (on) => els.refreshBtn.classList.toggle('refreshing', on),
+  pull: () => refresh()
+});
+els.refreshBtn.addEventListener('click', () => { void manualRefreshController.run(); });
 els.minBtn.addEventListener('click', () => window.tokenMonitor.dashboard.minimize());
 els.closeBtn.addEventListener('click', () => window.tokenMonitor.dashboard.close());
 

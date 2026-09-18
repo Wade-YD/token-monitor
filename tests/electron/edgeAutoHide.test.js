@@ -463,7 +463,10 @@ test('guarded geometry writes are gated until the window is first shown', () => 
   const showHandler = mainSource.match(/win\.on\('show'[\s\S]*?\n  \}\);/);
   assert.ok(showHandler, 'the show handler exists');
   assert.match(stripComments(showHandler[0]), /geometryReady = true;/, 'first show opens the gate');
-  assert.match(mainSource, /mainWindow = win;\s*\n\s*edgeAutoHideState\.geometryReady = false;/, 'a recreated window must re-earn readiness');
+  // The reset must sit in the window-creation path, right after the assignment;
+  // upstream's material-lifecycle test owns the line right after `mainWindow = win;`,
+  // so only insist the gate reset stays within the same creation neighborhood.
+  assert.match(mainSource, /mainWindow = win;[\s\S]{0,200}?edgeAutoHideState\.geometryReady = false;/, 'a recreated window must re-earn readiness');
 });
 
 test('startup restore moves the window without imposing the saved size', () => {
