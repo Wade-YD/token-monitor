@@ -225,7 +225,11 @@ def main():
             time.sleep(3)
             rv = rect_of(hwnd)
             revealed = rv["y"] > base["y"] + 20
-            set_cursor(300 if i % 2 else 768, 700 + i)
+            # Away point must clear the frame's 10px interaction margin
+            # (window left edge 776 -> margin band 766..776): x=768 parked the
+            # cursor INSIDE that band, the pointer-hold kept the dock open by
+            # design and cycles 2/4 read as stuck. x=500 is safely clear.
+            set_cursor(300 if i % 2 else 500, 700 + i)
             time.sleep(4)
             rh = rect_of(hwnd)
             rehidden = abs(rh["bottom"] - 3) <= 3

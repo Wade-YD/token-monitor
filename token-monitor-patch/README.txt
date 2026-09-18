@@ -60,7 +60,8 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
   已安装应用      C:\Users\29871\AppData\Local\Programs\Token Monitor（v0.58.0 + 补丁）
   官方原包备份    <安装位置>\resources\app.asar.v0580-official.bak   18,868,880 B
                   + 同名 .unpacked 双胞胎（勿删，解包该 bak 时必需）
-  交付/验证脚本   deliver_finalize.py（22 项运行时断言；FILES 表已更新为 19 文件）
+  交付/验证脚本   deliver_finalize.py（22 项运行时断言；FILES 表 20 文件；
+                  2026-09-18 空闲时段全量回归 ALL GREEN）
                   verify_resize_affordance.py（调整大小场景，8 项断言）
                   verify_v0580.py（2026-09-16 v0.58.0 交付轮验证，7 项断言）
                   第一轮脚本已归档到 superseded\（deliver_hardened.py 等 7 个）
@@ -138,6 +139,13 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
      生成，不许手抄；② 换装后必须先做「内容断言」（解包 asar grep 每个新改动
      的标记串）再做启动验证；③ 仪表盘窗口的显示依赖渲染进程 ready 回报，
      渲染层任何顶层异常都会表现为「窗口打不开」而非报错弹窗。
+  7) 完整回归（2026-09-18，22 断言）：**ALL GREEN**（用户空闲时段执行）。
+     首跑曾 20/22——cycle 2/4 收回失败，根因是测试坐标 x=768 落在窗口左边框
+     的 10px 交互余量带内（逻辑左缘 776，余量带 766~776，main.js:2661 的
+     edgeCursorInExpandedBounds + EDGE_INTERACTION_MARGIN_PX，即 5b33903
+     拖边框防误收的设计行为）：守卫按设计保持展开且不打日志。已把偶数轮
+     回收位改 x=500（脚本内已注释说明），重跑全绿。2026-09-16 那轮的
+     2 个红疑因此同源（当时归因于鼠标污染，可能两种因素并存）。
 
 【改动的 20 个交付文件（2026-09-18 轮更新）】
   src/electron/edgeAutoHide.js            （新增）
