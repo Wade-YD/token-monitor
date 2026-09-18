@@ -53,12 +53,12 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
 
 【零件位置】
   完整 git 克隆   D:\桌面\私人图书馆\7-工具箱\1-project\token-monitor-workspace\token-monitor
-                  分支 feat/edge-auto-hide（基线 v0.58.0，含 19 个提交）
+                  分支 feat/edge-auto-hide（基线 v0.59.0，含 19 个提交）
                   这是首选留档，含完整历史
   本补丁          D:\桌面\私人图书馆\7-工具箱\1-project\token-monitor-workspace\token-monitor-patch\edge-auto-hide.patch
-                  165 KB（基线 v0.58.0），含全部源码改动 + 测试改动
-  已安装应用      C:\Users\29871\AppData\Local\Programs\Token Monitor（v0.58.0 + 补丁）
-  官方原包备份    <安装位置>\resources\app.asar.v0580-official.bak   18,868,880 B
+                  165 KB（基线 v0.59.0），含全部源码改动 + 测试改动
+  已安装应用      C:\Users\29871\AppData\Local\Programs\Token Monitor（v0.59.0 + 补丁）
+  官方原包备份    <安装位置>\resources\app.asar.v0590-official.bak   19,106,291 B
                   + 同名 .unpacked 双胞胎（勿删，解包该 bak 时必需）
   交付/验证脚本   deliver_finalize.py（22 项运行时断言；FILES 表 20 文件；
                   2026-09-18 空闲时段全量回归 ALL GREEN）
@@ -67,13 +67,13 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
                   第一轮脚本已归档到 superseded\（deliver_hardened.py 等 7 个）
 
 【基线（重要，别弄错）】
-  当前基线：tag v0.58.0 -> 提交 d426b8e（chore: release v0.58.0）
-    2026-09-16 已把整条补丁链 rebase 到 v0.58.0 并重新交付（见下「升级记录」）。
-    231f075 的提交信息仍写着 "(rebased onto v0.57.0)"，是历史信息别被误导——
-    它的父提交就是 d426b8e。
-  历史基线：tag v0.57.0 -> 提交 bbe07de（annotated tag，tag 对象 9e5cc83，
-    不要把 tag 对象当提交号；v0.57.0 版补丁链哈希见 workspace git 历史里的旧 commits.txt）。
-  上游仓库：https://github.com/Javis603/token-monitor.git（浅克隆，本机无 push 权限）
+  当前基线：tag v0.59.0 -> 提交 fa17225（chore: release v0.59.0；
+    注意 8d17051 是 annotated tag 对象号，别当提交号用——v0.57 时代同款坑）
+    2026-09-18 已把整条补丁链 rebase 到 v0.59.0 并重新交付（见「升级记录 2026-09-18」）。
+  历史基线：tag v0.58.0 -> 提交 d426b8e（chore: release v0.58.0）。
+    其官方原包备份已移出安装目录，存于
+    C:\Users\29871\AppData\Local\Temp\opencode\v0580-anchors\（已被 v0.59.0 锚点取代）。
+  上游仓库：https://github.com/Javis603/token-monitor.git
   提交链（见 commits.txt，19 个提交，从旧到新）：
     231f075 feat(edge): 功能主提交
     9a93773 / 7f6f215 / 085056e / cb60fae   harden 四连修
@@ -91,7 +91,7 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
     809154d feat(sessions): 会话列表排序切换（最近 ⇄ Token，settings 持久化）
     7cced1a feat(dashboard): 总览按工具列在前、按模型列在后（用户偏好）
     2cabdbd feat(dashboard): 仪表盘刷新按钮强制即时采集 + 转圈反馈（15s 有界等待）
-  规模（相对 v0.58.0）：30 files changed, +2711/−33（20 个 src + 9 个测试文件 + .gitignore）
+  规模（相对 v0.59.0）：30 files changed, +2711/−33（20 个 src + 9 个测试文件 + .gitignore）
 
 【升级记录（2026-09-16，v0.57.0 → v0.58.0）】
   1) 官方 v0.58.0 当天 14:24 发布（新增 Amp 会话统计、Factory Droid 额度）。
@@ -147,6 +147,41 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
      回收位改 x=500（脚本内已注释说明），重跑全绿。2026-09-16 那轮的
      2 个红疑因此同源（当时归因于鼠标污染，可能两种因素并存）。
 
+【升级记录（2026-09-18，v0.58.0 → v0.59.0）】
+  1) 应用内弹出 v0.59.0 更新面板（新增侧边栏 edgeDock、改进 Kimi/ZCode/Antigravity/
+     Cursor）。先查本地：安装目录仍是我们补丁版（45,417,560 B），更新器未偷换。
+  2) 网络波折：github.com 直连超时（VPN 断开），但 api.github.com /
+     codeload.github.com / objects.githubusercontent.com 三个旁路可达——
+     于是不开 VPN 完成了大半升级：
+     a. 安装包经 GitHub API 拿官方 digest（sha256:c07bfb01…）+ CDN 下载，
+        实测 SHA-256 完全一致（Token-Monitor-Setup-0.59.0.exe，119,357,136 B）；
+     b. 源码经 codeload tarball 构建合成基准提交 upstream-v0590-synthetic
+        （树内容 = v0.59.0 by construction），先在其上 rebase：19 提交仅
+        1 处冲突——main.js 里上游新侧边栏 syncEdgeDock 与我们的
+        syncEdgeAutoHideAvailability 撞行，两行都保留（功能互相独立）；
+     c. VPN 恢复后 git fetch 真标签（v0.59.0 = 8d17051），实测
+        `git diff v0.59.0 upstream-v0590-synthetic` 为空（逐字节一致），
+        再 rebase --onto 真标签零冲突，删除合成分支。**教训：断网时
+        tarball+API 是可行降级路径，且事后可用空 diff 严格补验。**
+  3) 测试：全量 4658 用例（含上游 v0.59.0 新测试），4650 通过；唯一失败仍是
+     macOS symlink 平台限制。另 2 个 electron-builder 红是本地 node_modules
+     残留旧版 26.15.3，`npm install --no-save app-builder-lib@26.16.1` 对齐即绿。
+     共存抽查：上游 ZCode 3.12.3 修复 + 我们 GLM 现金行、上游 edgeDock 300 处
+     i18n + 我们 sessionSort 键，同文件双活。
+  4) 安装：退应用 → v0.58 锚点移出安装目录（opencode\v0580-anchors\）→
+     /S 静默安装官方 v0.59.0 → 重建回退锚点 app.asar.v0590-official.bak
+     （19,106,291 B）+ 同名 .unpacked 双胞胎（26 MB）。
+  5) 交付：从官方 asar 全新解包 asar-extracted-v059（绝不混版本）→ overlay
+     20 文件（清单由 `git diff --name-only v0.59.0..HEAD -- src` 生成——
+     上轮事故后立的新规；注意 providers\zcode\ 目录为补丁新增，overlay 需
+     makedirs）→ 双向内容断言 17/17 全过（我们 9 项标记 + 上游 edgeDock/
+     ZCode 修复标记）→ pack 45,654,875 B → 换装。
+  6) 验证：解包换装后 asar 复核 4 标记全过；启动轻验证——吸附隐藏 3px 露出条、
+     零对话框、错误日志不存在。⚠️ 又见 settings 写回残留：上一轮 22 断言收尾
+     清掉 edgeAutoHideDebug 时应用仍在运行，几何同步把旧值写了回去（v0.57 时代
+     同款教训）——本次已按「退应用→改设置→重启」正确清理。完整光标编排待空闲跑
+     deliver_finalize.py（已适配 v0.59.0 路径）。
+
 【改动的 20 个交付文件（2026-09-18 轮更新）】
   src/electron/edgeAutoHide.js            （新增）
   src/electron/main.js                    （+ dashboard:forceRefresh IPC）
@@ -173,10 +208,10 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
   回退物校验   app.asar.v0580-official.bak，18,868,880 B（2026-09-16 由官方安装产物直接复制）。
                **回退覆盖前先核对大小/来源**，不一致说明备份被动过，禁止覆盖。
                （旧 v0.57.0 的 app.asar.orig-backup 已被 v0.58.0 安装器清除，作废）
-  补丁可重放   已实测：在干净 v0.58.0 检出上 `git apply --check --3way edge-auto-hide.patch`
-               无冲突通过（最近重验 2026-09-18，30 文件全绿）。以后换机器/怀疑补丁与基线脱节时先重验：
+  补丁可重放   rebase 即重放（2026-09-18 于真标签 v0.59.0 完成零冲突重放）。
+               事后抽验可重跑：
                  cd "D:\桌面\私人图书馆\7-工具箱\1-project\token-monitor-workspace\token-monitor"
-                 git worktree add --detach "$TEMP/patch-check" v0.58.0
+                 git worktree add --detach "$TEMP/patch-check" v0.59.0
                  git -C "$TEMP/patch-check" apply --check --3way \
                    "D:\桌面\私人图书馆\7-工具箱\1-project\token-monitor-workspace\token-monitor-patch\edge-auto-hide.patch"
                  git worktree remove --force "$TEMP/patch-check"
