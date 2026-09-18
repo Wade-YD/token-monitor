@@ -9130,6 +9130,20 @@ app.whenReady().then(() => {
   });
   ipcMain.handle('dashboard:open', () => { createDashboardWindow(); return true; });
   ipcMain.handle('dashboard:getHistory', (_event, options) => getDashboardHistory(options));
+  // Dashboard refresh button: force one full collection now instead of
+  // re-projecting the last snapshot. A missing/stopped runtime reports cleanly
+  // so the renderer can still re-pull and restore its button.
+  ipcMain.handle('dashboard:forceRefresh', async () => {
+    if (!deviceRuntimeHandle || typeof deviceRuntimeHandle.tick !== 'function') {
+      return { ok: false, reason: 'unavailable' };
+    }
+    try {
+      const collected = await deviceRuntimeHandle.tick('manual');
+      return { ok: true, collected: collected === true };
+    } catch (error) {
+      return { ok: false, reason: String(error?.message || error) };
+    }
+  });
   ipcMain.on('dashboard:ready', (event) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     if (!win || win !== dashboardWindow || win.isDestroyed()) return;
