@@ -365,7 +365,7 @@ index a2bede0..760750a 100644
  
  function floatingBubbleNativeGlassEnabled(settings = {}) {
 diff --git a/src/electron/main.js b/src/electron/main.js
-index 4f03f9c..3b11ca2 100644
+index 4f03f9c..a2ffbee 100644
 --- a/src/electron/main.js
 +++ b/src/electron/main.js
 @@ -23,6 +23,8 @@ const { exportFileSet, exportSignature, EXPORT_FILENAMES } = require('../shared/
@@ -980,14 +980,14 @@ index 4f03f9c..3b11ca2 100644
      applyWindowSettings();
      focusExistingWindow();
    }
-@@ -6268,6 +6810,7 @@ function createWindow(boundsOverride, options = {}) {
-     }
+@@ -6269,6 +6811,7 @@ function createWindow(boundsOverride, options = {}) {
    });
    mainWindow = win;
-+  edgeAutoHideState.geometryReady = false;
    mainWindowNativeBlurEnabled = null;
++  edgeAutoHideState.geometryReady = false;
    mainWindowChrome = { collapsedFloatingBubble };
    applyMacSpaceBehavior();
+   applyWindowsChrome(win, { round: true });
 @@ -6310,17 +6853,83 @@ function createWindow(boundsOverride, options = {}) {
    applyNativeMaterial();
    win.on('focus', () => {
@@ -1150,6 +1150,39 @@ index 4f03f9c..3b11ca2 100644
    ipcMain.handle('floatingBubble:collapseIfIdle', () => {
      if (!mainWindow || mainWindow.isDestroyed()) return false;
      if (floatingBubbleState.collapsed || !canUseFloatingBubble(settings)) return false;
+@@ -8263,6 +8917,20 @@ app.whenReady().then(() => {
+   });
+   ipcMain.handle('dashboard:open', () => { createDashboardWindow(); return true; });
+   ipcMain.handle('dashboard:getHistory', (_event, options) => getDashboardHistory(options));
++  // Dashboard refresh button: force one full collection now instead of
++  // re-projecting the last snapshot. A missing/stopped runtime reports cleanly
++  // so the renderer can still re-pull and restore its button.
++  ipcMain.handle('dashboard:forceRefresh', async () => {
++    if (!deviceRuntimeHandle || typeof deviceRuntimeHandle.tick !== 'function') {
++      return { ok: false, reason: 'unavailable' };
++    }
++    try {
++      const collected = await deviceRuntimeHandle.tick('manual');
++      return { ok: true, collected: collected === true };
++    } catch (error) {
++      return { ok: false, reason: String(error?.message || error) };
++    }
++  });
+   ipcMain.on('dashboard:ready', (event) => {
+     const win = BrowserWindow.fromWebContents(event.sender);
+     if (!win || win !== dashboardWindow || win.isDestroyed()) return;
+diff --git a/src/electron/preload.js b/src/electron/preload.js
+index 10d5784..ecdfe68 100644
+--- a/src/electron/preload.js
++++ b/src/electron/preload.js
+@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('tokenMonitor', {
+   getCodexResetForecast: (options) => ipcRenderer.invoke('codexResetForecast:get', options),
+   openDashboard: () => ipcRenderer.invoke('dashboard:open'),
+   getDashboardHistory: (options) => ipcRenderer.invoke('dashboard:getHistory', options),
++  forceDashboardRefresh: () => ipcRenderer.invoke('dashboard:forceRefresh'),
+   onDashboardHistoryChanged: (callback) => {
+     const listener = () => { try { callback(); } catch (_) {} };
+     ipcRenderer.on('dashboard:historyChanged', listener);
 diff --git a/src/electron/renderer/app.js b/src/electron/renderer/app.js
 index 35732c1..f9a7596 100644
 --- a/src/electron/renderer/app.js
@@ -1256,8 +1289,46 @@ index 35732c1..f9a7596 100644
    if (client === 'reasonix' && rowEl.dataset.detailUnavailable === 'true') return;
    const match = key.match(/^session:([^:]+):(.+)$/);
    if (!match) return;
+diff --git a/src/electron/renderer/dashboard.css b/src/electron/renderer/dashboard.css
+index dea5d1d..f0d0fcb 100644
+--- a/src/electron/renderer/dashboard.css
++++ b/src/electron/renderer/dashboard.css
+@@ -40,6 +40,12 @@ body.flat { background: rgb(var(--glass-rgb)); }
+   width: 26px; height: 26px; border-radius: 6px; font-size: 14px; line-height: 1;
+ }
+ .icon-button:hover { background: rgba(var(--overlay-rgb), 0.12); }
++/* Refresh button busy chrome: spin the glyph while a forced collection runs. */
++#refreshBtn.refreshing { pointer-events: none; opacity: 0.7; }
++@media (prefers-reduced-motion: no-preference) {
++  #refreshBtn.refreshing span { display: inline-block; animation: dash-refresh-spin 0.9s linear infinite; }
++}
++@keyframes dash-refresh-spin { to { transform: rotate(360deg); } }
+ 
+ .dash-tabs { display: flex; gap: 4px; padding: 10px 14px 0; }
+ .dash-tab {
+diff --git a/src/electron/renderer/dashboard.html b/src/electron/renderer/dashboard.html
+index 7265915..f80c999 100644
+--- a/src/electron/renderer/dashboard.html
++++ b/src/electron/renderer/dashboard.html
+@@ -12,7 +12,7 @@
+       <div class="dash-title" data-i18n="dashboard.title">Usage Dashboard</div>
+       <div class="dash-header-actions">
+         <button id="themeToggle" class="icon-button" title="Theme">◐</button>
+-        <button id="refreshBtn" class="icon-button" title="Refresh">↻</button>
++        <button id="refreshBtn" class="icon-button" title="Refresh"><span aria-hidden="true">↻</span></button>
+         <button id="minBtn" class="icon-button" title="Minimize">−</button>
+         <button id="closeBtn" class="icon-button" title="Close">×</button>
+       </div>
+@@ -68,6 +68,7 @@
+     <script src="../../shared/fontSettings.js"></script>
+     <script src="../motionPreference.js"></script>
+     <script src="statsRenderScheduler.js"></script>
++    <script src="manualRefresh.js"></script>
+     <script src="dashboard.js"></script>
+   </body>
+ </html>
 diff --git a/src/electron/renderer/dashboard.js b/src/electron/renderer/dashboard.js
-index 0ef374a..7bbd7ee 100644
+index 0ef374a..b8c509b 100644
 --- a/src/electron/renderer/dashboard.js
 +++ b/src/electron/renderer/dashboard.js
 @@ -419,7 +419,7 @@ function renderBreakdown() {
@@ -1269,6 +1340,20 @@ index 0ef374a..7bbd7ee 100644
    applySwatchColors(elsBreakdown);
    if (state.motion !== 'none' && !prefersReducedMotion()) {
      for (const fill of elsBreakdown.querySelectorAll('.dash-bd-bar-fill[data-motion-key]')) {
+@@ -742,7 +742,12 @@ els.heatmapMetricBtns.forEach((b) => b.addEventListener('click', () => {
+   window.tokenMonitor.updateSettings({ heatmapMetric: state.heatmapMetric });
+ }));
+ els.themeToggle.addEventListener('click', () => { state.flat = !state.flat; els.body.classList.toggle('flat', state.flat); window.tokenMonitor.updateSettings({ dashboardFlat: state.flat }); });
+-els.refreshBtn.addEventListener('click', refresh);
++const manualRefreshController = TokenMonitorManualRefresh.createManualRefreshController({
++  forceRefresh: () => window.tokenMonitor.forceDashboardRefresh?.(),
++  apply: (on) => els.refreshBtn.classList.toggle('refreshing', on),
++  pull: () => refresh()
++});
++els.refreshBtn.addEventListener('click', () => { void manualRefreshController.run(); });
+ els.minBtn.addEventListener('click', () => window.tokenMonitor.dashboard.minimize());
+ els.closeBtn.addEventListener('click', () => window.tokenMonitor.dashboard.close());
+ 
 diff --git a/src/electron/renderer/i18n.js b/src/electron/renderer/i18n.js
 index badac3c..8aabd8a 100644
 --- a/src/electron/renderer/i18n.js
@@ -1426,6 +1511,54 @@ index 5b11b50..4fd45d5 100644
          <div id="toolDetailFooter" class="tool-detail-footer hidden" role="group">
            <button id="toolDetailFooterTokens" class="tool-detail-footer-option" type="button">Tokens</button>
            <button id="toolDetailFooterModels" class="tool-detail-footer-option" type="button">Models</button>
+diff --git a/src/electron/renderer/manualRefresh.js b/src/electron/renderer/manualRefresh.js
+new file mode 100644
+index 0000000..63fc442
+--- /dev/null
++++ b/src/electron/renderer/manualRefresh.js
+@@ -0,0 +1,42 @@
++'use strict';
++
++(function exposeManualRefresh(root, factory) {
++  const api = factory(root);
++  if (typeof module === 'object' && module.exports) module.exports = api;
++  if (root) root.TokenMonitorManualRefresh = api;
++})(typeof window !== 'undefined' ? window : null, function createManualRefreshApi() {
++
++  function delay(ms) {
++    return new Promise((resolve) => setTimeout(resolve, ms));
++  }
++
++  // One refresh at a time: press -> busy chrome -> force-collect (bounded) ->
++  // re-pull data -> release. Transport errors and timeouts both fall through to
++  // the pull so the dashboard keeps its last-known-good render either way.
++  function createManualRefreshController({ forceRefresh, apply, pull, timeoutMs = 15000 } = {}) {
++    let busy = false;
++
++    async function run() {
++      if (busy) return false;
++      busy = true;
++      try {
++        apply(true);
++        try {
++          await Promise.race([
++            Promise.resolve(forceRefresh()).catch(() => false),
++            delay(timeoutMs)
++          ]);
++        } catch (_) { /* the pull below must still run */ }
++        await Promise.resolve(pull());
++      } finally {
++        busy = false;
++        apply(false);
++      }
++      return true;
++    }
++
++    return { run, isBusy: () => busy };
++  }
++
++  return { createManualRefreshController, delay };
++});
 diff --git a/src/electron/renderer/sessionRows.js b/src/electron/renderer/sessionRows.js
 index 652a2dd..99d513d 100644
 --- a/src/electron/renderer/sessionRows.js
@@ -1887,10 +2020,10 @@ index 2e992c6..769ac4a 100644
  function resolverDefinition(entry) {
 diff --git a/tests/electron/edgeAutoHide.test.js b/tests/electron/edgeAutoHide.test.js
 new file mode 100644
-index 0000000..3101194
+index 0000000..47458a4
 --- /dev/null
 +++ b/tests/electron/edgeAutoHide.test.js
-@@ -0,0 +1,590 @@
+@@ -0,0 +1,593 @@
 +'use strict';
 +
 +const assert = require('node:assert/strict');
@@ -2356,7 +2489,10 @@ index 0000000..3101194
 +  const showHandler = mainSource.match(/win\.on\('show'[\s\S]*?\n  \}\);/);
 +  assert.ok(showHandler, 'the show handler exists');
 +  assert.match(stripComments(showHandler[0]), /geometryReady = true;/, 'first show opens the gate');
-+  assert.match(mainSource, /mainWindow = win;\s*\n\s*edgeAutoHideState\.geometryReady = false;/, 'a recreated window must re-earn readiness');
++  // The reset must sit in the window-creation path, right after the assignment;
++  // upstream's material-lifecycle test owns the line right after `mainWindow = win;`,
++  // so only insist the gate reset stays within the same creation neighborhood.
++  assert.match(mainSource, /mainWindow = win;[\s\S]{0,200}?edgeAutoHideState\.geometryReady = false;/, 'a recreated window must re-earn readiness');
 +});
 +
 +test('startup restore moves the window without imposing the saved size', () => {
@@ -2635,6 +2771,81 @@ index 0000000..6a27447
 +function stripComments(source) {
 +  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
 +}
+diff --git a/tests/electron/manualRefresh.test.js b/tests/electron/manualRefresh.test.js
+new file mode 100644
+index 0000000..1dfb36f
+--- /dev/null
++++ b/tests/electron/manualRefresh.test.js
+@@ -0,0 +1,69 @@
++'use strict';
++
++const assert = require('node:assert/strict');
++const test = require('node:test');
++
++const { createManualRefreshController } = require('../../src/electron/renderer/manualRefresh');
++
++function deferred() {
++  let resolve;
++  const promise = new Promise((res) => { resolve = res; });
++  return { promise, resolve };
++}
++
++test('run() is a no-op while a refresh is already in flight', async () => {
++  const gate = deferred();
++  const events = [];
++  const controller = createManualRefreshController({
++    forceRefresh: () => gate.promise,
++    apply: (on) => events.push(on ? 'on' : 'off'),
++    pull: () => events.push('pull'),
++    timeoutMs: 50
++  });
++  const first = controller.run();
++  assert.equal(controller.isBusy(), true);
++  assert.equal(await controller.run(), false, 're-entrant run must be refused');
++  gate.resolve(true);
++  assert.equal(await first, true);
++  assert.equal(controller.isBusy(), false);
++  assert.deepEqual(events, ['on', 'pull', 'off']);
++});
++
++test('successful refresh applies busy chrome, forces collect, then pulls', async () => {
++  const order = [];
++  const controller = createManualRefreshController({
++    forceRefresh: async () => { order.push('force'); return { ok: true }; },
++    apply: (on) => order.push(on ? 'chrome-on' : 'chrome-off'),
++    pull: async () => { order.push('pull'); },
++    timeoutMs: 50
++  });
++  assert.equal(await controller.run(), true);
++  assert.equal(controller.isBusy(), false);
++  assert.deepEqual(order, ['chrome-on', 'force', 'pull', 'chrome-off']);
++});
++
++test('a hanging force-collect still releases the button at the timeout', async () => {
++  const events = [];
++  const controller = createManualRefreshController({
++    forceRefresh: () => new Promise(() => {}),
++    apply: (on) => events.push(on ? 'on' : 'off'),
++    pull: () => events.push('pull'),
++    timeoutMs: 10
++  });
++  assert.equal(await controller.run(), true);
++  assert.equal(controller.isBusy(), false);
++  assert.deepEqual(events, ['on', 'pull', 'off']);
++});
++
++test('forceRefresh rejection is swallowed and the data pull still runs', async () => {
++  const events = [];
++  const controller = createManualRefreshController({
++    forceRefresh: () => Promise.reject(new Error('ipc gone')),
++    apply: (on) => events.push(on ? 'on' : 'off'),
++    pull: () => events.push('pull'),
++    timeoutMs: 50
++  });
++  assert.equal(await controller.run(), true);
++  assert.equal(controller.isBusy(), false);
++  assert.deepEqual(events, ['on', 'pull', 'off']);
++});
 diff --git a/tests/electron/sessionRows.test.js b/tests/electron/sessionRows.test.js
 index 6c063b1..df17a9a 100644
 --- a/tests/electron/sessionRows.test.js

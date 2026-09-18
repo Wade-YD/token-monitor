@@ -1,18 +1,19 @@
-7cced1a feat(dashboard): put the by-tool column before by-model in the overview
-809154d feat(sessions): sort-mode toggle for the home session list
-7505480 fix(sessions): zcode session rows get the pointer cursor and drill-in chevron
-41256a6 feat(sessions): zcode session detail drill-down
-1a361fb feat(sessions): label zcode child sessions by kind in the list title
-61e1608 feat(sessions): show ZCode session titles in the session list
-eb52336 fix(edge): exempt persistent app windows (dashboard) from the popup guard
-2834744 fix(edge): convert cursor to physical pixels before the popup guard (completes 2f8f634)
-342b6ac fix(edge): pass currentPid into the popup guard (probe caught it undefined)
-3002069 fix(edge): keep the dock open while the user interacts with our native popups
-70162dd fix(zai): hide the idle cash row behind an active coding plan
-5b33903 fix(edge): keep a docked window revealed while the user resizes it
-ec3de55 fix(edge): finalize edge auto-hide (startup, strip width, resize sync, opt-in debug)
-cb60fae fix(edge): contain a native setPosition rejection instead of crashing
-085056e fix(edge): guard geometry, expire the in-flight marker, single reconciler
-7f6f215 fix(edge): add a slow watchdog so the window can always re-hide
-9a93773 fix(edge): keep the cursor poll alive so the window can re-hide
 231f075 feat(edge): add edge auto-hide window mode (rebased onto v0.57.0)
+9a93773 fix(edge): keep the cursor poll alive so the window can re-hide
+7f6f215 fix(edge): add a slow watchdog so the window can always re-hide
+085056e fix(edge): guard geometry, expire the in-flight marker, single reconciler
+cb60fae fix(edge): contain a native setPosition rejection instead of crashing
+ec3de55 fix(edge): finalize edge auto-hide (startup, strip width, resize sync, opt-in debug)
+5b33903 fix(edge): keep a docked window revealed while the user resizes it
+70162dd fix(zai): hide the idle cash row behind an active coding plan
+3002069 fix(edge): keep the dock open while the user interacts with our native popups
+342b6ac fix(edge): pass currentPid into the popup guard (probe caught it undefined)
+2834744 fix(edge): convert cursor to physical pixels before the popup guard (completes 2f8f634)
+eb52336 fix(edge): exempt persistent app windows (dashboard) from the popup guard
+61e1608 feat(sessions): show ZCode session titles in the session list
+1a361fb feat(sessions): label zcode child sessions by kind in the list title
+41256a6 feat(sessions): zcode session detail drill-down
+7505480 fix(sessions): zcode session rows get the pointer cursor and drill-in chevron
+809154d feat(sessions): sort-mode toggle for the home session list
+7cced1a feat(dashboard): put the by-tool column before by-model in the overview
+2cabdbd feat(dashboard): refresh button forces a fresh collection with busy feedback

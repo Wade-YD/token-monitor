@@ -33,16 +33,28 @@ TMP = r"C:\Users\29871\AppData\Local\Temp\opencode"
 ERRLOG = os.path.join(os.environ.get("TEMP", TMP), "token-monitor-edge-error.log")
 DBGLOG = os.path.join(os.environ.get("TEMP", TMP), "token-monitor-edge-debug.log")
 
+# Derive this list from the fork's git diff against v0.58.0 whenever a new
+# round touches files: every patched/added src file must be here or the packed
+# asar silently ships stale code. Test files and .gitignore never go in.
 FILES = [r"src\electron\floatingBubble.js", r"src\electron\main.js",
+         r"src\electron\preload.js",
          r"src\electron\windowBehavior.js", r"src\electron\edgeAutoHide.js",
          r"src\electron\tray.js", r"src\electron\renderer\app.js",
          r"src\electron\renderer\i18n.js", r"src\electron\renderer\index.html",
          r"src\electron\renderer\styles.css", r"src\electron\renderer\sessionRows.js",
+         r"src\electron\renderer\dashboard.js", r"src\electron\renderer\dashboard.css",
+         r"src\electron\renderer\manualRefresh.js",
          r"src\electron\edgePopupGuard.js",
          r"src\shared\providers\zai\limits.js",
          r"src\shared\providers\zcode\sessionMetadata.js",
          r"src\shared\sessionMetadata.js",
          r"src\shared\sessionDetail.js"]
+
+# --pack-only: phases 1-2 (quit, overlay, pack, swap) plus a light launch check
+# (window exists, hidden at ~3px strip, no dialogs / guard log). No cursor
+# choreography, so it is safe to run while the user is at the machine. The full
+# 22-assertion run stays the idle-machine acceptance gate.
+PACK_ONLY = "--pack-only" in sys.argv
 
 user32 = ctypes.windll.user32
 WNDENUMPROC = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
