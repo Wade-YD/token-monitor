@@ -1,2 +1,3 @@
 # token-monitor 有自己的仓（feat/edge-auto-hide），不嵌套管理
 /token-monitor/
+.mimosa/
