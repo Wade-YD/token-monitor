@@ -56,15 +56,17 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
                   分支 feat/edge-auto-hide（基线 v0.59.0，含 19 个提交）
                   这是首选留档，含完整历史
   本补丁          D:\桌面\私人图书馆\7-工具箱\1-project\token-monitor-workspace\token-monitor-patch\edge-auto-hide.patch
-                  165 KB（基线 v0.59.0），含全部源码改动 + 测试改动
+                  174 KB（基线 v0.59.0），含全部源码改动 + 测试改动
   已安装应用      C:\Users\29871\AppData\Local\Programs\Token Monitor（v0.59.0 + 补丁）
   官方原包备份    <安装位置>\resources\app.asar.v0590-official.bak   19,106,291 B
                   + 同名 .unpacked 双胞胎（勿删，解包该 bak 时必需）
-  交付/验证脚本   deliver_finalize.py（22 项运行时断言；FILES 表 20 文件；
-                  2026-09-18 空闲时段全量回归 ALL GREEN）
-                  verify_resize_affordance.py（调整大小场景，8 项断言）
-                  verify_v0580.py（2026-09-16 v0.58.0 交付轮验证，7 项断言）
-                  第一轮脚本已归档到 superseded\（deliver_hardened.py 等 7 个）
+  交付/验证脚本   已迁出本仓（本机运维工具，不随内容仓分发），新位置：
+                  D:\桌面\私人图书馆\7-工具箱\1-project\tooling\token-monitor-patch\
+                    deliver_finalize.py（22 项运行时断言；FILES 表 21 文件；已适配 v0.59.0）
+                    verify_resize_affordance.py（调整大小场景，8 项断言）
+                    verify_v0580.py（2026-09-16 v0.58.0 交付轮验证，7 项断言）
+                    superseded\（第一轮脚本等历史归档）
+                  旧 git 路径下的内容可从本仓 git 历史找回。
 
 【基线（重要，别弄错）】
   当前基线：tag v0.59.0 -> 提交 fa17225（chore: release v0.59.0；
@@ -91,7 +93,8 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
     809154d feat(sessions): 会话列表排序切换（最近 ⇄ Token，settings 持久化）
     7cced1a feat(dashboard): 总览按工具列在前、按模型列在后（用户偏好）
     2cabdbd feat(dashboard): 仪表盘刷新按钮强制即时采集 + 转圈反馈（15s 有界等待）
-  规模（相对 v0.59.0）：30 files changed, +2711/−33（20 个 src + 9 个测试文件 + .gitignore）
+    b32c532 feat(trends): 主窗口趋势图加纵轴刻度（padLeft 槽 + 网格线 + HTML 标签）
+  规模（相对 v0.59.0）：32 files changed, +2777/−43（21 个 src + 10 个测试文件 + .gitignore）
 
 【升级记录（2026-09-16，v0.57.0 → v0.58.0）】
   1) 官方 v0.58.0 当天 14:24 发布（新增 Amp 会话统计、Factory Droid 额度）。
@@ -184,7 +187,7 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
   7) 完整回归（2026-09-18，22 断言）：**ALL GREEN 一次过**（用户手测通过后空闲执行）。
      deliver_finalize.py 的 EXTRACTED/BAK 常量已适配 v0.59.0。
 
-【改动的 20 个交付文件（2026-09-18 轮更新）】
+【改动的 21 个交付文件（2026-09-18 轮更新）】
   src/electron/edgeAutoHide.js            （新增）
   src/electron/main.js                    （+ dashboard:forceRefresh IPC）
   src/electron/preload.js                 （+ forceDashboardRefresh 桥接）
@@ -204,6 +207,7 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
   src/shared/sessionDetail.js             （会话明细分发，含 zcode 分支）
   src/electron/renderer/styles.css        （zcode 行手掌光标 + 「›」affordance）
   src/electron/renderer/sessionRows.js    （会话行构建 + 排序比较函数）
+  src/electron/renderer/usageCharts.js    （+ sparkline padLeft/yTicks 纵轴支持）
   src/electron/renderer/dashboard.js      （仪表盘总览列顺序；刷新按钮接控制器）
 
 【基线锚点（补丁可回退、可重放的实测凭据）】
