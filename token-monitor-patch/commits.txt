@@ -17,3 +17,5 @@ e785b27 fix(edge): convert cursor to physical pixels before the popup guard (com
 c756447 feat(sessions): sort-mode toggle for the home session list
 490a03f feat(dashboard): put the by-tool column before by-model in the overview
 2645122 feat(dashboard): refresh button forces a fresh collection with busy feedback
+b32c532 feat(trends): y-axis ticks for the main-window trends chart
+051a40f fix(trends): set tick label positions via CSSOM - CSP drops inline styles

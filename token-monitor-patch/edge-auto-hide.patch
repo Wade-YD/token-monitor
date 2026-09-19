@@ -1184,7 +1184,7 @@ index 6c79079..28b9147 100644
      const listener = () => { try { callback(); } catch (_) {} };
      ipcRenderer.on('dashboard:historyChanged', listener);
 diff --git a/src/electron/renderer/app.js b/src/electron/renderer/app.js
-index 1c3fcf3..e829f57 100644
+index 1c3fcf3..4de3e3e 100644
 --- a/src/electron/renderer/app.js
 +++ b/src/electron/renderer/app.js
 @@ -196,8 +196,8 @@ const projectRowsApi = window.TokenMonitorProjectRows;
@@ -1272,7 +1272,47 @@ index 1c3fcf3..e829f57 100644
      return sessionRowsApi.groupBackgroundReviewRows(rows, {
        label: t('sessions.backgroundReviews'),
        countLabel: (count) => t('sessions.backgroundReviewCount', { count }),
-@@ -8444,6 +8470,7 @@ function render() {
+@@ -6935,9 +6961,16 @@ function renderTrends() {
+     return;
+   }
+ 
+-  const model = charts.sparklinePreview(finalPoints, { width: 300, height: 120, gap: 0.3, metric });
++  const model = charts.sparklinePreview(finalPoints, { width: 300, height: 120, gap: 0.3, metric, padLeft: 30 });
+   const titles = finalPoints.map((p) => `${trendShortLabel(p[labelKey], labelKey)} · ${formatCompact(p[metric])}`);
+-  const svg = charts.sparklineSvg(model, { titles, showZeroMarkers: state.period === 'today' });
++  const yTicks = 4;
++  const svg = charts.sparklineSvg(model, { titles, showZeroMarkers: state.period === 'today', yTicks, formatTick: (v) => formatCompact(v) });
++  // Tick values render as HTML (not SVG text): the sparkline stretches
++  // non-uniformly, which would distort glyphs. Positions are set via CSSOM
++  // below — the app CSP (style-src 'self') drops inline style attributes.
++  const yTickLabels = Array.from({ length: yTicks + 1 }, (_, i) =>
++    `<span>${formatCompact(model.maxVal * i / yTicks)}</span>`
++  ).join('');
+ 
+   const summary = homeOverviewApi.activityStatsForPeriod({
+     period: state.period,
+@@ -6963,9 +6996,19 @@ function renderTrends() {
+ 
+   els.trendsPanel.innerHTML =
+     `<div class="trends-cap"><span>${rangeLabel}</span><span class="trends-open-hint" title="${t('trends.open')}">↗</span></div>`
+-    + `<div class="trends-spark" role="button" tabindex="0" title="${t('trends.open')}">${svg}</div>`
++    + `<div class="trends-spark" role="button" tabindex="0" title="${t('trends.open')}">${svg}`
++    + `<div class="spark-y-labels">${yTickLabels}</div></div>`
+     + `<div class="trends-axis"><span>${first}</span><span>${last}</span></div>`
+     + `<div class="trends-stats">${statsHtml}</div>`;
++  // CSP forbids inline style attributes, so label positions go through CSSOM:
++  // each span lands on its grid line's height fraction, inside the gutter.
++  const yLabelWrap = els.trendsPanel.querySelector('.spark-y-labels');
++  if (yLabelWrap) {
++    yLabelWrap.style.setProperty('--spark-gutter', (100 * model.padLeft / model.width).toFixed(3) + '%');
++    Array.from(yLabelWrap.children).forEach((span, i) => {
++      span.style.setProperty('top', (100 - 100 * i / yTicks).toFixed(3) + '%');
++    });
++  }
+   const bars = Array.from(els.trendsPanel.querySelectorAll('.spark-bar'));
+   bars.forEach((bar, index) => {
+     bar.dataset.motionKey = String(finalPoints[index]?.[labelKey] || index);
+@@ -8444,6 +8487,7 @@ function render() {
    }
    
    renderFloatingBubbleContent();
@@ -1280,7 +1320,7 @@ index 1c3fcf3..e829f57 100644
    // Tell main the window has painted real content (not the static "0" defaults),
    // so a recreated window can stay hidden until it's populated. See loadWindowFile.
    signalContentReady();
-@@ -12849,7 +12876,7 @@ els.breakdown.addEventListener('click', (event) => {
+@@ -12849,7 +12893,7 @@ els.breakdown.addEventListener('click', (event) => {
    }
    const key = rowEl.dataset.key || '';            // "session:<client>:<sessionId>"
    const client = rowEl.dataset.client || '';
@@ -1605,7 +1645,7 @@ index 652a2dd..99d513d 100644
      sessionIdLabel,
      sessionRowsForPeriod
 diff --git a/src/electron/renderer/styles.css b/src/electron/renderer/styles.css
-index 42ca95c..2c0c81b 100644
+index 42ca95c..e50e27b 100644
 --- a/src/electron/renderer/styles.css
 +++ b/src/electron/renderer/styles.css
 @@ -5579,8 +5579,8 @@ html.is-windows .limit-live-badge {
@@ -1619,6 +1659,89 @@ index 42ca95c..2c0c81b 100644
  .row.summary-row[data-review-group="true"] { cursor: pointer; }
  .row.summary-row[data-review-group="true"] .row-metrics::after { content: '›'; color: var(--muted); font-size: 14px; line-height: 1; }
  .row.session-row[data-client="reasonix"][data-detail-unavailable="true"] { cursor: default; }
+@@ -5778,9 +5778,20 @@ html.is-windows .limit-live-badge {
+ .trends-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; padding-right: 2px; overflow: hidden; }
+ .trends-cap { flex: none; display: flex; align-items: center; justify-content: space-between; font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; opacity: 0.6; }
+ .trends-open-hint { opacity: 0.75; cursor: pointer; font-size: 13px; }
+-.trends-spark { flex: 1 1 auto; min-height: 0; display: flex; cursor: pointer; border-radius: 8px; padding: 6px 4px; transition: background 0.12s ease; }
++.trends-spark { flex: 1 1 auto; min-height: 0; position: relative; display: flex; cursor: pointer; border-radius: 8px; padding: 6px 4px; transition: background 0.12s ease; }
+ .trends-spark:hover { background: rgba(var(--overlay-rgb), 0.05); }
+ .trends-spark .sparkline { width: 100%; height: 100%; display: block; }
++/* Y-axis for the trends sparkline: grid lines live inside the stretched SVG
++   (vector-effect keeps them 1px), the numeric labels are an HTML overlay so the
++   non-uniform SVG scaling cannot distort the glyphs. The gutter width is passed
++   down as --spark-gutter and mirrors sparklinePreview's padLeft. */
++.trends-spark .grid-line { stroke: rgba(var(--line-rgb), 0.07); }
++.spark-y-labels { position: absolute; inset: 6px 4px; pointer-events: none; }
++.spark-y-labels span {
++  position: absolute; left: 0; width: var(--spark-gutter, 10%);
++  transform: translateY(-50%); text-align: right; padding-right: 6px;
++  font-size: 10px; color: rgba(var(--line-rgb), 0.5); white-space: nowrap;
++}
+ .trends-spark .spark-bar {
+   fill: #6ab4f0;
+   opacity: 0.5;
+diff --git a/src/electron/renderer/usageCharts.js b/src/electron/renderer/usageCharts.js
+index cac982a..ec4ab54 100644
+--- a/src/electron/renderer/usageCharts.js
++++ b/src/electron/renderer/usageCharts.js
+@@ -251,18 +251,20 @@
+   }
+ 
+   function sparklinePreview(points, options) {
+-    const o = Object.assign({ width: 120, height: 28, gap: 0.25, metric: 'tokens' }, options || {});
++    const o = Object.assign({ width: 120, height: 28, gap: 0.25, metric: 'tokens', padLeft: 0 }, options || {});
+     const arr = Array.isArray(points) ? points : [];
+     const valueOf = (p) => n(p && p[o.metric]);
+     const maxVal = Math.max(1, ...arr.map(valueOf));
+-    const slot = arr.length ? o.width / arr.length : o.width;
++    const plotLeft = Math.max(0, Number(o.padLeft) || 0);
++    const plotWidth = Math.max(0, o.width - plotLeft);
++    const slot = arr.length ? plotWidth / arr.length : plotWidth;
+     const barWidth = slot * (1 - o.gap);
+     const bars = arr.map((p, i) => {
+       const value = valueOf(p);
+       const height = o.height * value / maxVal;
+-      return { value, x: i * slot + (slot - barWidth) / 2, width: barWidth, y: o.height - height, height, last: i === arr.length - 1 };
++      return { value, x: plotLeft + i * slot + (slot - barWidth) / 2, width: barWidth, y: o.height - height, height, last: i === arr.length - 1 };
+     });
+-    return { width: o.width, height: o.height, maxVal, bars };
++    return { width: o.width, height: o.height, padLeft: plotLeft, maxVal, bars };
+   }
+ 
+   function areaLineChart(daily, options) {
+@@ -419,10 +421,21 @@
+   }
+ 
+   function sparklineSvg(model, options) {
+-    const o = Object.assign({ radius: 1, titles: null, showZeroMarkers: false }, options || {});
++    const o = Object.assign({ radius: 1, titles: null, showZeroMarkers: false, yTicks: 0 }, options || {});
+     const titles = Array.isArray(o.titles) ? o.titles : null;
+     const bars = Array.isArray(model?.bars) ? model.bars : [];
+     const titleOf = (index) => titles && titles[index] ? `<title>${escapeXml(titles[index])}</title>` : '';
++    // The sparkline SVG stretches non-uniformly (preserveAspectRatio="none"), so
++    // tick labels must NOT be SVG text here — the caller overlays HTML labels.
++    // Horizontal grid lines survive the stretch; non-scaling-stroke keeps them 1px.
++    const padLeft = Math.max(0, Number(model?.padLeft) || 0);
++    let grid = '';
++    if (o.yTicks > 0) {
++      for (let i = 0; i <= o.yTicks; i++) {
++        const y = model.height - model.height * i / o.yTicks;
++        grid += `<line class="grid-line" vector-effect="non-scaling-stroke" x1="${svgRound(padLeft)}" y1="${svgRound(y)}" x2="${svgRound(model.width)}" y2="${svgRound(y)}"></line>`;
++      }
++    }
+     const zeroMarkers = o.showZeroMarkers
+       ? bars.map((b, i) => {
+         if (b.value !== 0) return '';
+@@ -434,7 +447,7 @@
+       const tip = o.showZeroMarkers && b.value === 0 ? '' : titleOf(i);
+       return `<rect x="${svgRound(b.x)}" y="${svgRound(b.y)}" width="${svgRound(b.width)}" height="${svgRound(Math.max(0, b.height))}" rx="${o.radius}" class="spark-bar${b.last ? ' spark-bar--last' : ''}">${tip}</rect>`;
+     }).join('');
+-    return `<svg class="sparkline" viewBox="0 0 ${model.width} ${model.height}" preserveAspectRatio="none" width="100%" height="${model.height}" aria-hidden="true">${zeroMarkers}${rects}</svg>`;
++    return `<svg class="sparkline" viewBox="0 0 ${model.width} ${model.height}" preserveAspectRatio="none" width="100%" height="${model.height}" aria-hidden="true">${grid}${zeroMarkers}${rects}</svg>`;
+   }
+ 
+   function areaLineSvg(model) {
 diff --git a/src/electron/tray.js b/src/electron/tray.js
 index 5d3191a..53321ff 100644
 --- a/src/electron/tray.js
@@ -2975,6 +3098,41 @@ index 53328eb..80376de 100644
  });
  
  test('tray context menu shows the macOS Quit shortcut on macOS only', () => {
+diff --git a/tests/electron/usageCharts.test.js b/tests/electron/usageCharts.test.js
+index ef72129..554ec4b 100644
+--- a/tests/electron/usageCharts.test.js
++++ b/tests/electron/usageCharts.test.js
+@@ -274,6 +274,30 @@ test('sparklinePreview keeps zero values at true zero height', () => {
+   ]);
+ });
+ 
++test('sparklinePreview padLeft reserves a gutter and shifts bars without rescaling', () => {
++  const plain = sparklinePreview([{ tokens: 10 }, { tokens: 20 }], { width: 30, height: 10, gap: 0, metric: 'tokens' });
++  const padded = sparklinePreview([{ tokens: 10 }, { tokens: 20 }], { width: 30, height: 10, gap: 0, metric: 'tokens', padLeft: 6 });
++
++  assert.equal(padded.padLeft, 6);
++  assert.equal(padded.maxVal, plain.maxVal);
++  // Bars live inside the narrowed plot (24 wide): same heights, shifted x.
++  assert.deepEqual(padded.bars.map((b) => b.x), [6, 18]);
++  assert.deepEqual(padded.bars.map((b) => b.width), [12, 12]);
++  assert.deepEqual(padded.bars.map((b) => b.height), plain.bars.map((b) => b.height));
++});
++
++test('sparklineSvg yTicks draws one grid line per tick edge, none by default', () => {
++  const model = sparklinePreview([{ tokens: 10 }, { tokens: 20 }], { width: 30, height: 10, gap: 0, metric: 'tokens', padLeft: 6 });
++
++  const withAxis = sparklineSvg(model, { yTicks: 4 });
++  assert.equal(withAxis.split('class="grid-line"').length - 1, 5, 'ticks+1 grid lines');
++  assert.equal(withAxis.split('vector-effect="non-scaling-stroke"').length - 1, 5);
++  assert.match(withAxis, /x1="6"/, 'lines start at the gutter edge');
++
++  const plain = sparklineSvg(model, {});
++  assert.equal(plain.split('class="grid-line"').length - 1, 0, 'default keeps the sparkline axis-free');
++});
++
+ test('sparklinePreview tolerates empty input', () => {
+   const s = sparklinePreview([], {});
+   assert.deepEqual(s.bars, []);
 diff --git a/tests/electron/windowBehavior.test.js b/tests/electron/windowBehavior.test.js
 index 3bdcbf1..13f29f2 100644
 --- a/tests/electron/windowBehavior.test.js
