@@ -315,6 +315,30 @@ test('sparklinePreview keeps zero values at true zero height', () => {
   ]);
 });
 
+test('sparklinePreview padLeft reserves a gutter and shifts bars without rescaling', () => {
+  const plain = sparklinePreview([{ tokens: 10 }, { tokens: 20 }], { width: 30, height: 10, gap: 0, metric: 'tokens' });
+  const padded = sparklinePreview([{ tokens: 10 }, { tokens: 20 }], { width: 30, height: 10, gap: 0, metric: 'tokens', padLeft: 6 });
+
+  assert.equal(padded.padLeft, 6);
+  assert.equal(padded.maxVal, plain.maxVal);
+  // Bars live inside the narrowed plot (24 wide): same heights, shifted x.
+  assert.deepEqual(padded.bars.map((b) => b.x), [6, 18]);
+  assert.deepEqual(padded.bars.map((b) => b.width), [12, 12]);
+  assert.deepEqual(padded.bars.map((b) => b.height), plain.bars.map((b) => b.height));
+});
+
+test('sparklineSvg yTicks draws one grid line per tick edge, none by default', () => {
+  const model = sparklinePreview([{ tokens: 10 }, { tokens: 20 }], { width: 30, height: 10, gap: 0, metric: 'tokens', padLeft: 6 });
+
+  const withAxis = sparklineSvg(model, { yTicks: 4 });
+  assert.equal(withAxis.split('class="grid-line"').length - 1, 5, 'ticks+1 grid lines');
+  assert.equal(withAxis.split('vector-effect="non-scaling-stroke"').length - 1, 5);
+  assert.match(withAxis, /x1="6"/, 'lines start at the gutter edge');
+
+  const plain = sparklineSvg(model, {});
+  assert.equal(plain.split('class="grid-line"').length - 1, 0, 'default keeps the sparkline axis-free');
+});
+
 test('sparklinePreview tolerates empty input', () => {
   const s = sparklinePreview([], {});
   assert.deepEqual(s.bars, []);

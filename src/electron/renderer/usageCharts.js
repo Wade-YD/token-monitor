@@ -316,18 +316,20 @@
   }
 
   function sparklinePreview(points, options) {
-    const o = Object.assign({ width: 120, height: 28, gap: 0.25, metric: 'tokens' }, options || {});
+    const o = Object.assign({ width: 120, height: 28, gap: 0.25, metric: 'tokens', padLeft: 0 }, options || {});
     const arr = Array.isArray(points) ? points : [];
     const valueOf = (p) => n(p && p[o.metric]);
     const maxVal = Math.max(1, ...arr.map(valueOf));
-    const slot = arr.length ? o.width / arr.length : o.width;
+    const plotLeft = Math.max(0, Number(o.padLeft) || 0);
+    const plotWidth = Math.max(0, o.width - plotLeft);
+    const slot = arr.length ? plotWidth / arr.length : plotWidth;
     const barWidth = slot * (1 - o.gap);
     const bars = arr.map((p, i) => {
       const value = valueOf(p);
       const height = o.height * value / maxVal;
-      return { value, x: i * slot + (slot - barWidth) / 2, width: barWidth, y: o.height - height, height, last: i === arr.length - 1 };
+      return { value, x: plotLeft + i * slot + (slot - barWidth) / 2, width: barWidth, y: o.height - height, height, last: i === arr.length - 1 };
     });
-    return { width: o.width, height: o.height, maxVal, bars };
+    return { width: o.width, height: o.height, padLeft: plotLeft, maxVal, bars };
   }
 
   function areaLineChart(daily, options) {
@@ -538,10 +540,21 @@
   }
 
   function sparklineSvg(model, options) {
-    const o = Object.assign({ radius: 1, titles: null, showZeroMarkers: false }, options || {});
+    const o = Object.assign({ radius: 1, titles: null, showZeroMarkers: false, yTicks: 0 }, options || {});
     const titles = Array.isArray(o.titles) ? o.titles : null;
     const bars = Array.isArray(model?.bars) ? model.bars : [];
     const titleOf = (index) => titles && titles[index] ? `<desc>${escapeXml(titles[index])}</desc>` : '';
+    // The sparkline SVG stretches non-uniformly (preserveAspectRatio="none"), so
+    // tick labels must NOT be SVG text here — the caller overlays HTML labels.
+    // Horizontal grid lines survive the stretch; non-scaling-stroke keeps them 1px.
+    const padLeft = Math.max(0, Number(model?.padLeft) || 0);
+    let grid = '';
+    if (o.yTicks > 0) {
+      for (let i = 0; i <= o.yTicks; i++) {
+        const y = model.height - model.height * i / o.yTicks;
+        grid += `<line class="grid-line" vector-effect="non-scaling-stroke" x1="${svgRound(padLeft)}" y1="${svgRound(y)}" x2="${svgRound(model.width)}" y2="${svgRound(y)}"></line>`;
+      }
+    }
     const zeroMarkers = o.showZeroMarkers
       ? bars.map((b, i) => {
         if (b.value !== 0) return '';
@@ -553,7 +566,7 @@
       const tip = o.showZeroMarkers && b.value === 0 ? '' : titleOf(i);
       return `<rect x="${svgRound(b.x)}" y="${svgRound(b.y)}" width="${svgRound(b.width)}" height="${svgRound(Math.max(0, b.height))}" rx="${o.radius}" class="spark-bar${b.last ? ' spark-bar--last' : ''}">${tip}</rect>`;
     }).join('');
-    return `<svg class="sparkline" viewBox="0 0 ${model.width} ${model.height}" preserveAspectRatio="none" width="100%" height="${model.height}" aria-hidden="true">${zeroMarkers}${rects}</svg>`;
+    return `<svg class="sparkline" viewBox="0 0 ${model.width} ${model.height}" preserveAspectRatio="none" width="100%" height="${model.height}" aria-hidden="true">${grid}${zeroMarkers}${rects}</svg>`;
   }
 
   function areaLineSvg(model) {
