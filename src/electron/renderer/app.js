@@ -6391,10 +6391,10 @@ function renderTrends() {
   const yTicks = 4;
   const svg = charts.sparklineSvg(model, { titles, showZeroMarkers: state.period === 'today', yTicks, formatTick: (v) => formatCompact(v) });
   // Tick values render as HTML (not SVG text): the sparkline stretches
-  // non-uniformly, which would distort glyphs. Each label sits at the same
-  // height fraction as its grid line; the gutter mirrors padLeft/width.
+  // non-uniformly, which would distort glyphs. Positions are set via CSSOM
+  // below — the app CSP (style-src 'self') drops inline style attributes.
   const yTickLabels = Array.from({ length: yTicks + 1 }, (_, i) =>
-    `<span style="top:${(100 - 100 * i / yTicks).toFixed(4)}%">${formatCompact(model.maxVal * i / yTicks)}</span>`
+    `<span>${formatCompact(model.maxVal * i / yTicks)}</span>`
   ).join('');
 
   const summary = homeOverviewApi.activityStatsForPeriod({
@@ -6422,9 +6422,21 @@ function renderTrends() {
   const next = document.createElement('div');
   next.innerHTML =
     `<div class="trends-cap"><span>${rangeLabel}</span><span class="trends-open-hint" aria-label="${t('trends.open')}">↗</span></div>`
-    + `<div class="trends-spark" role="button" tabindex="0" aria-label="${t('trends.open')}">${svg}<div class="spark-y-labels" style="--spark-gutter:${(100 * model.padLeft / model.width).toFixed(3)}%">${yTickLabels}</div></div>`
+    + `<div class="trends-spark" role="button" tabindex="0" aria-label="${t('trends.open')}">${svg}<div class="spark-y-labels">${yTickLabels}</div></div>`
     + `<div class="trends-axis"><span>${first}</span><span>${last}</span></div>`
     + `<div class="trends-stats">${statsHtml}</div>`;
+  // CSP forbids inline style attributes, so label positions go through CSSOM:
+  // each span lands on its grid line's height fraction, inside the gutter.
+  // Operates on `next` (detached): reconcile re-parents these nodes as-is,
+  // and CSSOM styles survive the move. data-key feeds domReconcile identity
+  // matching; data-motion-key feeds the trend-bar motion snapshot below.
+  const yLabelWrap = next.querySelector('.spark-y-labels');
+  if (yLabelWrap) {
+    yLabelWrap.style.setProperty('--spark-gutter', (100 * model.padLeft / model.width).toFixed(3) + '%');
+    Array.from(yLabelWrap.children).forEach((span, i) => {
+      span.style.setProperty('top', (100 - 100 * i / yTicks).toFixed(3) + '%');
+    });
+  }
   Array.from(next.querySelectorAll('.spark-bar')).forEach((bar, index) => {
     bar.dataset.key = String(finalPoints[index]?.[labelKey] || index);
     bar.dataset.motionKey = String(finalPoints[index]?.[labelKey] || index);
