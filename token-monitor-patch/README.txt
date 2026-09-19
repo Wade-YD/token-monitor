@@ -181,6 +181,8 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
      清掉 edgeAutoHideDebug 时应用仍在运行，几何同步把旧值写了回去（v0.57 时代
      同款教训）——本次已按「退应用→改设置→重启」正确清理。完整光标编排待空闲跑
      deliver_finalize.py（已适配 v0.59.0 路径）。
+  7) 完整回归（2026-09-18，22 断言）：**ALL GREEN 一次过**（用户手测通过后空闲执行）。
+     deliver_finalize.py 的 EXTRACTED/BAK 常量已适配 v0.59.0。
 
 【改动的 20 个交付文件（2026-09-18 轮更新）】
   src/electron/edgeAutoHide.js            （新增）
