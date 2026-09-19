@@ -6311,9 +6311,16 @@ function renderTrends() {
     return;
   }
 
-  const model = charts.sparklinePreview(finalPoints, { width: 300, height: 120, gap: 0.3, metric });
+  const model = charts.sparklinePreview(finalPoints, { width: 300, height: 120, gap: 0.3, metric, padLeft: 30 });
   const titles = finalPoints.map((p) => `${trendShortLabel(p[labelKey], labelKey)} · ${formatCompact(p[metric])}`);
-  const svg = charts.sparklineSvg(model, { titles, showZeroMarkers: state.period === 'today' });
+  const yTicks = 4;
+  const svg = charts.sparklineSvg(model, { titles, showZeroMarkers: state.period === 'today', yTicks, formatTick: (v) => formatCompact(v) });
+  // Tick values render as HTML (not SVG text): the sparkline stretches
+  // non-uniformly, which would distort glyphs. Each label sits at the same
+  // height fraction as its grid line; the gutter mirrors padLeft/width.
+  const yTickLabels = Array.from({ length: yTicks + 1 }, (_, i) =>
+    `<span style="top:${(100 - 100 * i / yTicks).toFixed(4)}%">${formatCompact(model.maxVal * i / yTicks)}</span>`
+  ).join('');
 
   const summary = homeOverviewApi.activityStatsForPeriod({
     period: state.period,
@@ -6340,7 +6347,7 @@ function renderTrends() {
   const next = document.createElement('div');
   next.innerHTML =
     `<div class="trends-cap"><span>${rangeLabel}</span><span class="trends-open-hint" aria-label="${t('trends.open')}">↗</span></div>`
-    + `<div class="trends-spark" role="button" tabindex="0" aria-label="${t('trends.open')}">${svg}</div>`
+    + `<div class="trends-spark" role="button" tabindex="0" aria-label="${t('trends.open')}">${svg}<div class="spark-y-labels" style="--spark-gutter:${(100 * model.padLeft / model.width).toFixed(3)}%">${yTickLabels}</div></div>`
     + `<div class="trends-axis"><span>${first}</span><span>${last}</span></div>`
     + `<div class="trends-stats">${statsHtml}</div>`;
   Array.from(next.querySelectorAll('.spark-bar')).forEach((bar, index) => {
