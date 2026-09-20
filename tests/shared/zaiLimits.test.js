@@ -13,6 +13,7 @@ const {
   zaiQuotaUrl,
   zaiSubscriptionUrl,
   parseZaiUsage,
+  dedupeZaiWindows,
   fetchZaiLimits
 } = require('../../src/shared/providers/zai/limits');
 
@@ -436,6 +437,55 @@ test('fetchZaiLimits serves Coding Plan quota from the ZCode mirror key', async 
   assert.equal(provider.accountLabel, 'GLM Coding Pro');
   assert.equal(provider.windows[0].kind, 'session');
   assert.equal(provider.windows[0].source, undefined);
+});
+
+test('fetchZaiLimits collapses identical windows answered by both lanes', async () => {
+  // Regression: the console-key lane and the ZCode mirror lane can both answer
+  // quota for the same plan. When BigModel only returns the 5-hour bucket to
+  // each of them, the merged row used to read "Session 9% / Session 9%".
+  const consoleKey = ['zai', 'token'].join('-'); // fixture value, not a credential
+  const quota = {
+    ok: true,
+    status: 200,
+    json: async () => ({ data: { limits: [{ type: 'CREDIT_LIMIT', unit: 3, number: 5, percentage: 10 }] } })
+  };
+  const provider = await fetchZaiLimits(
+    { zaiApiKey: consoleKey },
+    {
+      env: {},
+      now: () => Date.parse('2026-09-05T12:00:00Z'),
+      ...zcodeLaneDeps(async (url) => {
+        if (!String(url).includes('/quota/limit')) throw new Error('unexpected url ' + url);
+        return quota;
+      }, 'coding-plan')
+    }
+  );
+  assert.equal(provider.status, 'ok');
+  assert.deepEqual(
+    provider.windows.map((window) => [window.kind, window.usedPercent]),
+    [['session', 10]],
+    'the same window answered twice must render once'
+  );
+});
+
+test('dedupeZaiWindows keeps distinct buckets while collapsing identical ones', () => {
+  const session = { kind: 'session', label: '5-hour', resetsAt: '2026-09-05T18:00:00Z', usedPercent: 9 };
+  const sessionCopy = { kind: 'session', label: '5-hour', resetsAt: '2026-09-05T18:00:00Z', usedPercent: 9 };
+  const weekly = { kind: 'weekly', label: 'Weekly', resetsAt: '2026-09-25T05:38:00Z', usedPercent: 53 };
+  const bucket = { kind: 'billing', label: 'Start Plan', resetsAt: '2026-09-05T18:00:00Z', usedPercent: 9 };
+
+  assert.deepEqual(
+    dedupeZaiWindows([session, sessionCopy, weekly]).map((w) => w.kind),
+    ['session', 'weekly'],
+    'an identical duplicate collapses, distinct kinds survive'
+  );
+  // Same reset instant and usage but a different bucket identity stays distinct.
+  assert.deepEqual(
+    dedupeZaiWindows([session, bucket]).map((w) => w.label),
+    ['5-hour', 'Start Plan']
+  );
+  assert.equal(dedupeZaiWindows([]).length, 0);
+  assert.equal(dedupeZaiWindows(null).length, 0);
 });
 
 test('fetchZaiLimits keeps ZCode plan windows when the console key quota fails', async () => {
