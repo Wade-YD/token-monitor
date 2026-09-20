@@ -52,16 +52,16 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
         静默回退裸 id。openspec 变更 add-zcode-session-titles 已归档
 
 【零件位置】
-  完整 git 克隆   D:\桌面\私人图书馆\7-工具箱\1-project\token-monitor-workspace\token-monitor
+  完整 git 克隆   D:\桌面\私人图书馆\7-工具箱\1-project\token-monitor-suite\token-monitor-workspace\token-monitor
                   分支 feat/edge-auto-hide（基线 v0.59.0，含 19 个提交）
                   这是首选留档，含完整历史
-  本补丁          D:\桌面\私人图书馆\7-工具箱\1-project\token-monitor-workspace\token-monitor-patch\edge-auto-hide.patch
+  本补丁          D:\桌面\私人图书馆\7-工具箱\1-project\token-monitor-suite\token-monitor-workspace\token-monitor-patch\edge-auto-hide.patch
                   174 KB（基线 v0.59.0），含全部源码改动 + 测试改动
   已安装应用      C:\Users\29871\AppData\Local\Programs\Token Monitor（v0.59.0 + 补丁）
   官方原包备份    <安装位置>\resources\app.asar.v0590-official.bak   19,106,291 B
                   + 同名 .unpacked 双胞胎（勿删，解包该 bak 时必需）
   交付/验证脚本   已迁出本仓（本机运维工具，不随内容仓分发），新位置：
-                  D:\桌面\私人图书馆\7-工具箱\1-project\tooling\token-monitor-patch\
+                  D:\桌面\私人图书馆\7-工具箱\1-project\token-monitor-suite\tooling\token-monitor-patch\
                     deliver_finalize.py（22 项运行时断言；FILES 表 21 文件；已适配 v0.59.0）
                     verify_resize_affordance.py（调整大小场景，8 项断言）
                     verify_v0580.py（2026-09-16 v0.58.0 交付轮验证，7 项断言）
@@ -216,10 +216,10 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
                （旧 v0.57.0 的 app.asar.orig-backup 已被 v0.58.0 安装器清除，作废）
   补丁可重放   rebase 即重放（2026-09-18 于真标签 v0.59.0 完成零冲突重放）。
                事后抽验可重跑：
-                 cd "D:\桌面\私人图书馆\7-工具箱\1-project\token-monitor-workspace\token-monitor"
+                 cd "D:\桌面\私人图书馆\7-工具箱\1-project\token-monitor-suite\token-monitor-workspace\token-monitor"
                  git worktree add --detach "$TEMP/patch-check" v0.59.0
                  git -C "$TEMP/patch-check" apply --check --3way \
-                   "D:\桌面\私人图书馆\7-工具箱\1-project\token-monitor-workspace\token-monitor-patch\edge-auto-hide.patch"
+                   "D:\桌面\私人图书馆\7-工具箱\1-project\token-monitor-suite\token-monitor-workspace\token-monitor-patch\edge-auto-hide.patch"
                  git worktree remove --force "$TEMP/patch-check"
                （apply --check 退出码 0 = 补丁与基线仍吻合；非 0 = 先修正补丁再交付）
 
@@ -242,7 +242,7 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
 【重新应用 / 重建步骤】
   1) 拿到「基线 + 补丁」的工作树
        首选：直接用已留档的克隆
-             cd "D:\桌面\私人图书馆\7-工具箱\1-project\token-monitor-workspace\token-monitor"
+             cd "D:\桌面\私人图书馆\7-工具箱\1-project\token-monitor-suite\token-monitor-workspace\token-monitor"
        从零：git clone https://github.com/Javis603/token-monitor.git tm-work
              cd tm-work && git checkout v0.58.0          # = d426b8e
              git apply --3way "<本目录>\edge-auto-hide.patch"
