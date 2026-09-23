@@ -53,12 +53,12 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
 
 【零件位置】
   完整 git 克隆   D:\桌面\私人图书馆\7-工具箱\1-project\token-monitor-suite\token-monitor-workspace\token-monitor
-                  分支 feat/edge-auto-hide（基线 v0.59.0，含 19 个提交）
+                  分支 feat/edge-auto-hide（基线 v0.61.0，含 22 个提交）
                   这是首选留档，含完整历史
   本补丁          D:\桌面\私人图书馆\7-工具箱\1-project\token-monitor-suite\token-monitor-workspace\token-monitor-patch\edge-auto-hide.patch
-                  174 KB（基线 v0.59.0），含全部源码改动 + 测试改动
-  已安装应用      C:\Users\29871\AppData\Local\Programs\Token Monitor（v0.59.0 + 补丁）
-  官方原包备份    <安装位置>\resources\app.asar.v0590-official.bak   19,106,291 B
+                  179 KB（基线 v0.61.0），含全部源码改动 + 测试改动
+  已安装应用      C:\Users\29871\AppData\Local\Programs\Token Monitor（v0.61.0 + 补丁）
+  官方原包备份    <安装位置>\resources\app.asar.v0610-official.bak   19,441,847 B
                   + 同名 .unpacked 双胞胎（勿删，解包该 bak 时必需）
   交付/验证脚本   已迁出本仓（本机运维工具，不随内容仓分发），新位置：
                   D:\桌面\私人图书馆\7-工具箱\1-project\token-monitor-suite\tooling\token-monitor-patch\
@@ -69,7 +69,7 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
                   旧 git 路径下的内容可从本仓 git 历史找回。
 
 【基线（重要，别弄错）】
-  当前基线：tag v0.59.0 -> 提交 fa17225（chore: release v0.59.0；
+  当前基线：tag v0.61.0 -> 提交 dc3cc13（chore: release v0.59.0；
     注意 8d17051 是 annotated tag 对象号，别当提交号用——v0.57 时代同款坑）
     2026-09-18 已把整条补丁链 rebase 到 v0.59.0 并重新交付（见「升级记录 2026-09-18」）。
   历史基线：tag v0.58.0 -> 提交 d426b8e（chore: release v0.58.0）。
@@ -94,7 +94,7 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
     7cced1a feat(dashboard): 总览按工具列在前、按模型列在后（用户偏好）
     2cabdbd feat(dashboard): 仪表盘刷新按钮强制即时采集 + 转圈反馈（15s 有界等待）
     b32c532 feat(trends): 主窗口趋势图加纵轴刻度（padLeft 槽 + 网格线 + HTML 标签）
-  规模（相对 v0.59.0）：32 files changed, +2777/−43（21 个 src + 10 个测试文件 + .gitignore）
+  规模（相对 v0.61.0）：32 files changed, +2859/−44（21 个 src + 10 个测试文件 + .gitignore）
 
 【升级记录（2026-09-16，v0.57.0 → v0.58.0）】
   1) 官方 v0.58.0 当天 14:24 发布（新增 Amp 会话统计、Factory Droid 额度）。
@@ -149,6 +149,27 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
      拖边框防误收的设计行为）：守卫按设计保持展开且不打日志。已把偶数轮
      回收位改 x=500（脚本内已注释说明），重跑全绿。2026-09-16 那轮的
      2 个红疑因此同源（当时归因于鼠标污染，可能两种因素并存）。
+
+【升级记录（2026-09-21，v0.59.0 → v0.61.0）】
+  1) v0.60+v0.61 双版本跨度：26 提交、192 文件（+20178/−4072）——Devin/Cline 新提供方、
+     edge-dock 大改、`fix(zai): refuse the billing mirror once the account identity is known`
+     等。安装包经 API digest 校验（sha256:e483ba78…，119,543,928 B，MATCH）。
+  2) rebase：22 提交重放，3 处冲突全保留双方语义——
+     app.js（windowBehavior 白名单 +edge；上游已把 LIMIT_SOURCE_LABELS 移入
+     limitWindowsView.js，跟随上游删除）；sessionMetadata.js（devin 与 zcode 解析器并存）；
+     sessionRows.test.js（上游 running/context 测试 + 我们的排序测试并存）。
+  3) 验证：全量 4956 用例 4948 过（上游新增 294 例全绿），唯一失败仍是 macOS symlink
+     平台限制。共存抽查：zai 去重 + 上游 identity 修复、两套贴边机制（我们的
+     edgeAutoHide 91 处 + edge-dock 22 处）、usageCharts yTicks 全在。
+  4) 交付：全新解包 asar-extracted-v061 → overlay 21 文件（git diff v0.61.0 生成）
+     → 双向内容断言 17/17 → pack 46,289,248 B → 换装；启动零对话框、零错误日志。
+     新回退锚点 app.asar.v0610-official.bak（19,441,847 B）+ .unpacked 双胞胎；
+     v0.59 锚点移存 opencode0590-anchors\。
+  5) Command Code 行显示 "Sign in again"：cookie 被服务端拒绝（过期/轮换），非补丁
+     回归（git diff 证实补丁从未碰 commandcode 模块）；v0.60/0.61 也未改 commandcode。
+     处置：设置里重新粘贴新鲜 cookie。
+  6) 注：当前 settings 的 windowBehavior=floating（用户自行切换），贴边吸附在
+     设置→窗口 切回「贴边」即用；edge 仍在白名单（windowBehavior.js 已核）。
 
 【升级记录（2026-09-18，v0.58.0 → v0.59.0）】
   1) 应用内弹出 v0.59.0 更新面板（新增侧边栏 edgeDock、改进 Kimi/ZCode/Antigravity/

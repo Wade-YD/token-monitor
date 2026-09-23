@@ -1,21 +1,22 @@
-96efe90 feat(edge): add edge auto-hide window mode (rebased onto v0.57.0)
-bee7e88 fix(edge): keep the cursor poll alive so the window can re-hide
-f5fa770 fix(edge): add a slow watchdog so the window can always re-hide
-b2b1f97 fix(edge): guard geometry, expire the in-flight marker, single reconciler
-1ac651a fix(edge): contain a native setPosition rejection instead of crashing
-16b139c fix(edge): finalize edge auto-hide (startup, strip width, resize sync, opt-in debug)
-8cb444e fix(edge): keep a docked window revealed while the user resizes it
-b9dd968 fix(zai): hide the idle cash row behind an active coding plan
-4161512 fix(edge): keep the dock open while the user interacts with our native popups
-c1ede2e fix(edge): pass currentPid into the popup guard (probe caught it undefined)
-e785b27 fix(edge): convert cursor to physical pixels before the popup guard (completes 2f8f634)
-19ceecf fix(edge): exempt persistent app windows (dashboard) from the popup guard
-58fc73f feat(sessions): show ZCode session titles in the session list
-3928758 feat(sessions): label zcode child sessions by kind in the list title
-65df5eb feat(sessions): zcode session detail drill-down
-9e783e4 fix(sessions): zcode session rows get the pointer cursor and drill-in chevron
-c756447 feat(sessions): sort-mode toggle for the home session list
-490a03f feat(dashboard): put the by-tool column before by-model in the overview
-2645122 feat(dashboard): refresh button forces a fresh collection with busy feedback
-b32c532 feat(trends): y-axis ticks for the main-window trends chart
-051a40f fix(trends): set tick label positions via CSSOM - CSP drops inline styles
+f224ec4 feat(edge): add edge auto-hide window mode (rebased onto v0.57.0)
+e9a29df fix(edge): keep the cursor poll alive so the window can re-hide
+84dd849 fix(edge): add a slow watchdog so the window can always re-hide
+984edf1 fix(edge): guard geometry, expire the in-flight marker, single reconciler
+4653cd0 fix(edge): contain a native setPosition rejection instead of crashing
+1f5051b fix(edge): finalize edge auto-hide (startup, strip width, resize sync, opt-in debug)
+606637f fix(edge): keep a docked window revealed while the user resizes it
+5fbe705 fix(zai): hide the idle cash row behind an active coding plan
+96ae515 fix(edge): keep the dock open while the user interacts with our native popups
+b0b81f8 fix(edge): pass currentPid into the popup guard (probe caught it undefined)
+f591c88 fix(edge): convert cursor to physical pixels before the popup guard (completes 2f8f634)
+ef5c82d fix(edge): exempt persistent app windows (dashboard) from the popup guard
+c95f420 feat(sessions): show ZCode session titles in the session list
+c14d31c feat(sessions): label zcode child sessions by kind in the list title
+a5f377b feat(sessions): zcode session detail drill-down
+c1f7a18 fix(sessions): zcode session rows get the pointer cursor and drill-in chevron
+e432141 feat(sessions): sort-mode toggle for the home session list
+1fea6ae feat(dashboard): put the by-tool column before by-model in the overview
+04d51e5 feat(dashboard): refresh button forces a fresh collection with busy feedback
+456f398 feat(trends): y-axis ticks for the main-window trends chart
+506ecbc fix(trends): set tick label positions via CSSOM - CSP drops inline styles
+a05f545 fix(limits): dedupe zai windows merged from the console-key and ZCode mirror lanes

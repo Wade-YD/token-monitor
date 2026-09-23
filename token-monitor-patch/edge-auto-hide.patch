@@ -351,7 +351,7 @@ index 0000000..37b17eb
 +  popupHoldsCollapse
 +};
 diff --git a/src/electron/floatingBubble.js b/src/electron/floatingBubble.js
-index a2bede0..760750a 100644
+index 8c0c48b..13af9c2 100644
 --- a/src/electron/floatingBubble.js
 +++ b/src/electron/floatingBubble.js
 @@ -15,7 +15,8 @@ function clamp(value, min, max) {
@@ -365,7 +365,7 @@ index a2bede0..760750a 100644
  
  function floatingBubbleNativeGlassEnabled(settings = {}) {
 diff --git a/src/electron/main.js b/src/electron/main.js
-index 8f27290..f10a2f4 100644
+index e506d98..6fbe4ac 100644
 --- a/src/electron/main.js
 +++ b/src/electron/main.js
 @@ -23,6 +23,8 @@ const { exportFileSet, exportSignature, EXPORT_FILENAMES } = require('../shared/
@@ -377,7 +377,7 @@ index 8f27290..f10a2f4 100644
  const { createClientSourceIpcHandlers } = require('./clientSourceIpc');
  const { createClaudeWebFetch } = require('./providers/claude/webFetch');
  const { runAntigravityOAuthLogin } = require('./providers/antigravity/oauthLogin');
-@@ -510,6 +512,7 @@ function defaultSettings() {
+@@ -515,6 +517,7 @@ function defaultSettings() {
      liveTokenRateScope: 'all',
      compactTokenUnits: 'western',
      tokenRateMode: 'speed',
@@ -385,7 +385,7 @@ index 8f27290..f10a2f4 100644
      heatmapMetric: 'cost',
      modelRankingMetric: 'tokens',
      homeActiveDaysWindow: 'all',
-@@ -673,6 +676,10 @@ function normalizeTokenRateMode(value) {
+@@ -687,6 +690,10 @@ function normalizeTokenRateMode(value) {
    return value === 'burn' ? 'burn' : 'speed';
  }
  
@@ -396,7 +396,7 @@ index 8f27290..f10a2f4 100644
  function normalizeLiveTokenRateScope(value) {
    return value === 'device' ? 'device' : 'all';
  }
-@@ -2117,6 +2124,7 @@ function restoredBounds() {
+@@ -2180,6 +2187,7 @@ function restoredBounds() {
  let persistBoundsTimer = null;
  let floatingBubbleAutoCollapseTimer = null;
  const floatingBubbleState = { collapsed: false, side: null, collapsedBounds: null, expandedBounds: null, suppressNextCollapse: false, contentSize: null };
@@ -404,7 +404,7 @@ index 8f27290..f10a2f4 100644
  let mainWindowChrome = { collapsedFloatingBubble: false };
  
  function stopPersistBoundsTimer() {
-@@ -2363,6 +2371,451 @@ function syncFloatingBubbleAvailability() {
+@@ -2422,6 +2430,451 @@ function syncFloatingBubbleAvailability() {
    sendFloatingBubbleState();
  }
  
@@ -856,7 +856,7 @@ index 8f27290..f10a2f4 100644
  function persistBoundsSoon() {
    if (!mainWindow || mainWindow.isDestroyed()) return;
    if (!shouldPersistWindowBounds(mainWindow)) {
-@@ -2380,6 +2833,10 @@ function persistBoundsSoon() {
+@@ -2439,6 +2892,10 @@ function persistBoundsSoon() {
        // Popover x/y is anchored to the tray icon each open; only the size carries over.
        if (prev.width === next.width && prev.height === next.height) return;
        settings.windowBounds = { ...prev, width: next.width, height: next.height };
@@ -867,7 +867,7 @@ index 8f27290..f10a2f4 100644
      } else if (floatingBubbleState.collapsed && floatingBubbleState.expandedBounds) {
        floatingBubbleState.collapsedBounds = next;
        const display = displayForBounds(next);
-@@ -2600,6 +3057,7 @@ function readSettings() {
+@@ -2660,6 +3117,7 @@ function readSettings() {
      merged.interfaceFontFamily = fontSettingsApi.normalizeFontFamily(merged.interfaceFontFamily);
      merged.displayFontFamily = fontSettingsApi.normalizeFontFamily(merged.displayFontFamily);
      merged.tokenRateMode = normalizeTokenRateMode(merged.tokenRateMode);
@@ -875,7 +875,7 @@ index 8f27290..f10a2f4 100644
      if (saved.serviceProviderDisplayOrder !== undefined) {
        merged.serviceProviderDisplayOrder = String(saved.serviceProviderDisplayOrder || '');
      }
-@@ -2926,6 +3384,77 @@ function applyWindowSettings() {
+@@ -2987,6 +3445,77 @@ function applyWindowSettings() {
      applyCollapsedFloatingBubbleLimits(mainWindow.getBounds());
      return;
    }
@@ -953,7 +953,7 @@ index 8f27290..f10a2f4 100644
    const behavior = describeWindowBehavior(settings);
    mainWindow.setAlwaysOnTop(behavior.alwaysOnTop, floatingAlwaysOnTopLevel());
    if (typeof mainWindow.setMovable === 'function') mainWindow.setMovable(behavior.draggable);
-@@ -2937,6 +3466,17 @@ function applyWindowSettings() {
+@@ -2998,6 +3527,17 @@ function applyWindowSettings() {
    if (typeof mainWindow.setSkipTaskbar === 'function') mainWindow.setSkipTaskbar(skipTaskbarForSettings(settings));
    if (!behavior.focusable && typeof mainWindow.blur === 'function') mainWindow.blur();
    syncTaskbarZOrder();
@@ -971,7 +971,7 @@ index 8f27290..f10a2f4 100644
  }
  
  function nativeBlurEnabled(source = settings) {
-@@ -5483,6 +6023,8 @@ function setWindowPresentationFromMenu(value) {
+@@ -5674,6 +6214,8 @@ function setWindowPresentationFromMenu(value) {
    saveSettings();
    if (previousTrayMode) exitTrayMode();
    else {
@@ -980,7 +980,7 @@ index 8f27290..f10a2f4 100644
      applyWindowSettings();
      focusExistingWindow();
    }
-@@ -6611,6 +7153,7 @@ function createWindow(boundsOverride, options = {}) {
+@@ -6803,6 +7345,7 @@ function createWindow(boundsOverride, options = {}) {
    });
    mainWindow = win;
    mainWindowNativeBlurEnabled = null;
@@ -988,7 +988,7 @@ index 8f27290..f10a2f4 100644
    mainWindowChrome = { collapsedFloatingBubble };
    applyMacSpaceBehavior();
    applyWindowsChrome(win, { round: true });
-@@ -6652,17 +7195,83 @@ function createWindow(boundsOverride, options = {}) {
+@@ -6844,17 +7387,83 @@ function createWindow(boundsOverride, options = {}) {
    applyNativeMaterial();
    win.on('focus', () => {
      stopFloatingBubbleAutoCollapseTimer();
@@ -1077,7 +1077,7 @@ index 8f27290..f10a2f4 100644
    win.on('minimize', stopTaskbarZOrderKeeper);
    win.on('close', (event) => {
      if (quitRequested) return;
-@@ -6898,6 +7507,28 @@ function rebuildWindow() {
+@@ -7087,6 +7696,28 @@ function rebuildWindow() {
    });
  }
  
@@ -1106,7 +1106,7 @@ index 8f27290..f10a2f4 100644
  app.whenReady().then(() => {
    if (process.platform === 'darwin' && app.dock) app.dock.setIcon(APP_ICON_PATH);
    ensureSettingsLoaded();
-@@ -7124,6 +7755,7 @@ app.whenReady().then(() => {
+@@ -7332,6 +7963,7 @@ app.whenReady().then(() => {
          patch.displayFontFamily ?? settings.displayFontFamily
        ),
        tokenRateMode: normalizeTokenRateMode(patch.tokenRateMode ?? settings.tokenRateMode),
@@ -1114,7 +1114,7 @@ index 8f27290..f10a2f4 100644
        floatingBubbleEnabled: parseBoolean(patch.floatingBubbleEnabled ?? settings.floatingBubbleEnabled, false),
        edgeDockEnabled: parseBoolean(patch.edgeDockEnabled ?? settings.edgeDockEnabled, false),
        edgeDockSide: normalizeEdgeDockSide(patch.edgeDockSide ?? settings.edgeDockSide),
-@@ -7276,6 +7908,7 @@ app.whenReady().then(() => {
+@@ -7489,6 +8121,7 @@ app.whenReady().then(() => {
      applyWindowSettings();
      syncFloatingBubbleAvailability();
      syncEdgeDock();
@@ -1122,7 +1122,7 @@ index 8f27290..f10a2f4 100644
      const nextNativeMaterial = nativeBlurEnabled();
      const nextWindowsBackdrop = normalizeWindowsBackdropMode(settings?.windowsBackdrop);
      const windowsBackdropChanged = previousWindowsBackdrop !== nextWindowsBackdrop
-@@ -7373,6 +8006,27 @@ app.whenReady().then(() => {
+@@ -7586,6 +8219,27 @@ app.whenReady().then(() => {
    });
    ipcMain.handle('floatingBubble:expand', () => expandFloatingBubble());
    ipcMain.handle('floatingBubble:peek', () => expandFloatingBubble({ focus: false }));
@@ -1150,7 +1150,7 @@ index 8f27290..f10a2f4 100644
    ipcMain.handle('floatingBubble:collapseIfIdle', () => {
      if (!mainWindow || mainWindow.isDestroyed()) return false;
      if (floatingBubbleState.collapsed || !canUseFloatingBubble(settings)) return false;
-@@ -8622,6 +9276,20 @@ app.whenReady().then(() => {
+@@ -8842,6 +9496,20 @@ app.whenReady().then(() => {
    });
    ipcMain.handle('dashboard:open', () => { createDashboardWindow(); return true; });
    ipcMain.handle('dashboard:getHistory', (_event, options) => getDashboardHistory(options));
@@ -1172,7 +1172,7 @@ index 8f27290..f10a2f4 100644
      const win = BrowserWindow.fromWebContents(event.sender);
      if (!win || win !== dashboardWindow || win.isDestroyed()) return;
 diff --git a/src/electron/preload.js b/src/electron/preload.js
-index 6c79079..28b9147 100644
+index dd9ef5a..8365dbb 100644
 --- a/src/electron/preload.js
 +++ b/src/electron/preload.js
 @@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('tokenMonitor', {
@@ -1184,10 +1184,10 @@ index 6c79079..28b9147 100644
      const listener = () => { try { callback(); } catch (_) {} };
      ipcRenderer.on('dashboard:historyChanged', listener);
 diff --git a/src/electron/renderer/app.js b/src/electron/renderer/app.js
-index 1c3fcf3..4de3e3e 100644
+index f0fa44a..9d000b4 100644
 --- a/src/electron/renderer/app.js
 +++ b/src/electron/renderer/app.js
-@@ -196,8 +196,8 @@ const projectRowsApi = window.TokenMonitorProjectRows;
+@@ -203,8 +203,8 @@ const projectRowsApi = window.TokenMonitorProjectRows;
  const sessionDetailApi = window.TokenMonitorSessionDetail;
  const windowShortcutApi = window.TokenMonitorWindowShortcut;
  const LIMIT_REFRESH_OPTIONS = [60000, 120000, 300000, 900000, 1800000];
@@ -1195,10 +1195,10 @@ index 1c3fcf3..4de3e3e 100644
 -const WINDOW_BEHAVIOR_ICONS = { floating: '⇧', normal: '○', desktop: '⇩' };
 +const WINDOW_BEHAVIOR_VALUES = ['floating', 'normal', 'desktop', 'edge'];
 +const WINDOW_BEHAVIOR_ICONS = { floating: '⇧', normal: '○', desktop: '⇩', edge: '⫰' };
- const LIMIT_SOURCE_LABELS = { oauth: 'OAuth', cli: 'CLI', web: 'Web', rpc: 'RPC', local: 'Local', api: 'API' };
  const LIMIT_CAPABILITY_TAG_KEYS = {
    Auto: 'settings.limits.capability.auto',
-@@ -367,6 +367,8 @@ Object.assign(els, {
+   'OAuth/CLI': 'settings.limits.capability.oauthCli',
+@@ -377,6 +377,8 @@ Object.assign(els, {
    toolDetailFooter: document.getElementById('toolDetailFooter'),
    toolDetailFooterTokens: document.getElementById('toolDetailFooterTokens'),
    toolDetailFooterModels: document.getElementById('toolDetailFooterModels'),
@@ -1207,7 +1207,7 @@ index 1c3fcf3..4de3e3e 100644
    monthPeriodMenu: document.getElementById('monthPeriodMenu'),
    monthPeriodTab: document.getElementById('monthPeriodTab'),
    periodMonthModeInput: document.getElementById('periodMonthModeInput'),
-@@ -535,8 +537,15 @@ document.addEventListener('keydown', (event) => {
+@@ -547,8 +549,15 @@ document.addEventListener('keydown', (event) => {
    toggleAccordionRow(row);
  });
  
@@ -1225,7 +1225,7 @@ index 1c3fcf3..4de3e3e 100644
  
  document.addEventListener('pointerdown', (event) => {
    if (state.viewSwitcherOpen && !event.target.closest('#viewSwitcher')) {
-@@ -2334,7 +2343,7 @@ function updateRow(row, { name, subtitle, activity, detail, value, cost, barValu
+@@ -2390,7 +2399,7 @@ function updateRow(row, { name, subtitle, activity, detail, value, cost, barValu
    }
    const interactive = reviewGroup === true || (
      kind === 'session'
@@ -1234,7 +1234,7 @@ index 1c3fcf3..4de3e3e 100644
    ) || (kind === 'session' && client === 'reasonix' && sessionDetailAvailable === true);
    const mark = row.querySelector('.row-mark');
    const iconKind = iconKindFor({ key: row.dataset.key, platform: row.dataset.platform || '', client: row.dataset.client || '' }, state.breakdown);
-@@ -2738,7 +2747,23 @@ function modelRowsForPeriod(period, rankingMetric = state.settings?.modelRanking
+@@ -2804,7 +2813,23 @@ function modelRowsForPeriod(period, rankingMetric = state.settings?.modelRanking
    return toolRowsForPeriod(period);
  }
  
@@ -1258,7 +1258,7 @@ index 1c3fcf3..4de3e3e 100644
    const rows = sessionRowsApi.sessionRowsForPeriod(period, {
      clientLabels,
      clientColors,
-@@ -2746,10 +2771,11 @@ function sessionRowsForPeriod(period) {
+@@ -2812,10 +2837,11 @@ function sessionRowsForPeriod(period) {
      stableColor,
      fallbackColors: fallbackModelColors,
      archivedLabel: t('session.archived'),
@@ -1272,7 +1272,7 @@ index 1c3fcf3..4de3e3e 100644
      return sessionRowsApi.groupBackgroundReviewRows(rows, {
        label: t('sessions.backgroundReviews'),
        countLabel: (count) => t('sessions.backgroundReviewCount', { count }),
-@@ -6935,9 +6961,16 @@ function renderTrends() {
+@@ -4880,9 +4906,16 @@ function renderTrends() {
      return;
    }
  
@@ -1291,7 +1291,7 @@ index 1c3fcf3..4de3e3e 100644
  
    const summary = homeOverviewApi.activityStatsForPeriod({
      period: state.period,
-@@ -6963,9 +6996,19 @@ function renderTrends() {
+@@ -4908,9 +4941,19 @@ function renderTrends() {
  
    els.trendsPanel.innerHTML =
      `<div class="trends-cap"><span>${rangeLabel}</span><span class="trends-open-hint" title="${t('trends.open')}">↗</span></div>`
@@ -1312,7 +1312,7 @@ index 1c3fcf3..4de3e3e 100644
    const bars = Array.from(els.trendsPanel.querySelectorAll('.spark-bar'));
    bars.forEach((bar, index) => {
      bar.dataset.motionKey = String(finalPoints[index]?.[labelKey] || index);
-@@ -8444,6 +8487,7 @@ function render() {
+@@ -6393,6 +6436,7 @@ function render() {
    }
    
    renderFloatingBubbleContent();
@@ -1320,7 +1320,7 @@ index 1c3fcf3..4de3e3e 100644
    // Tell main the window has painted real content (not the static "0" defaults),
    // so a recreated window can stay hidden until it's populated. See loadWindowFile.
    signalContentReady();
-@@ -12849,7 +12893,7 @@ els.breakdown.addEventListener('click', (event) => {
+@@ -10875,7 +10919,7 @@ els.breakdown.addEventListener('click', (event) => {
    }
    const key = rowEl.dataset.key || '';            // "session:<client>:<sessionId>"
    const client = rowEl.dataset.client || '';
@@ -1368,10 +1368,10 @@ index 7265915..f80c999 100644
    </body>
  </html>
 diff --git a/src/electron/renderer/dashboard.js b/src/electron/renderer/dashboard.js
-index 0ef374a..b8c509b 100644
+index 2e42474..da35924 100644
 --- a/src/electron/renderer/dashboard.js
 +++ b/src/electron/renderer/dashboard.js
-@@ -419,7 +419,7 @@ function renderBreakdown() {
+@@ -424,7 +424,7 @@ function renderBreakdown() {
    const colModel = buildCol('dashboard.stack.model', modelTotals, charts.modelColor);
    const colClient = buildCol('dashboard.stack.client', clientTotals, (k) => charts.clientColors[k] || charts.clientColors.default);
    
@@ -1380,7 +1380,7 @@ index 0ef374a..b8c509b 100644
    applySwatchColors(elsBreakdown);
    if (state.motion !== 'none' && !prefersReducedMotion()) {
      for (const fill of elsBreakdown.querySelectorAll('.dash-bd-bar-fill[data-motion-key]')) {
-@@ -742,7 +742,12 @@ els.heatmapMetricBtns.forEach((b) => b.addEventListener('click', () => {
+@@ -747,7 +747,12 @@ els.heatmapMetricBtns.forEach((b) => b.addEventListener('click', () => {
    window.tokenMonitor.updateSettings({ heatmapMetric: state.heatmapMetric });
  }));
  els.themeToggle.addEventListener('click', () => { state.flat = !state.flat; els.body.classList.toggle('flat', state.flat); window.tokenMonitor.updateSettings({ dashboardFlat: state.flat }); });
@@ -1395,10 +1395,10 @@ index 0ef374a..b8c509b 100644
  els.closeBtn.addEventListener('click', () => window.tokenMonitor.dashboard.close());
  
 diff --git a/src/electron/renderer/i18n.js b/src/electron/renderer/i18n.js
-index 982b4dd..7564dd2 100644
+index 1a0c467..c8d227d 100644
 --- a/src/electron/renderer/i18n.js
 +++ b/src/electron/renderer/i18n.js
-@@ -453,6 +453,9 @@
+@@ -457,6 +457,9 @@
        'home.liveTokenRate.burnTitle': 'Live token burn ({scope}): {value}. Click to show live tok/s.',
        'home.liveTokenRate.speedIdleTitle': 'Last observed generation speed ({scope}): {value}. Click to show TPM.',
        'home.liveTokenRate.burnIdleTitle': 'Last observed token burn ({scope}): {value}. Click to show tok/s.',
@@ -1408,7 +1408,7 @@ index 982b4dd..7564dd2 100644
        'home.less': 'Less',
        'home.more': 'More',
        'home.used': 'used',
-@@ -1202,6 +1205,7 @@
+@@ -1243,6 +1246,7 @@
        'settings.windowBehavior.floating': 'Floating above apps',
        'settings.windowBehavior.normal': 'Normal window',
        'settings.windowBehavior.desktop': 'Desktop pinned',
@@ -1416,7 +1416,7 @@ index 982b4dd..7564dd2 100644
        'settings.windowBehavior.buttonTitle': '{current}; click for {next}',
        'settings.display.floatingBubble': 'Floating Bubble',
        'settings.display.floatingBubbleNote': 'Collapse the widget into a slim draggable mini-window; click it to reopen.',
-@@ -1442,6 +1446,7 @@
+@@ -1496,6 +1500,7 @@
        'trayMenu.presentation.floating': 'Floating Above Apps',
        'trayMenu.presentation.normal': 'Normal Window',
        'trayMenu.presentation.desktop': 'Desktop Pinned',
@@ -1424,7 +1424,7 @@ index 982b4dd..7564dd2 100644
        'settings.startup.title': 'Startup',
        'settings.startup.startAtLogin': 'Start at login',
        'settings.startup.available': 'Available in packaged builds. On Linux, run the AppImage build to enable.',
-@@ -2071,6 +2076,9 @@
+@@ -2134,6 +2139,9 @@
        'home.liveTokenRate.burnTitle': '即時 Token 消耗（{scope}）：{value}。點擊切換至即時 tok/s。',
        'home.liveTokenRate.speedIdleTitle': '最近一次生成速度（{scope}）：{value}。點擊切換至 TPM。',
        'home.liveTokenRate.burnIdleTitle': '最近一次 Token 消耗（{scope}）：{value}。點擊切換至 tok/s。',
@@ -1434,7 +1434,7 @@ index 982b4dd..7564dd2 100644
        'home.less': '較少',
        'home.more': '較多',
        'home.used': '已用',
-@@ -2820,6 +2828,7 @@
+@@ -2920,6 +2928,7 @@
        'settings.windowBehavior.floating': '浮在其他 app 上方',
        'settings.windowBehavior.normal': '一般視窗',
        'settings.windowBehavior.desktop': '固定在桌面',
@@ -1442,7 +1442,7 @@ index 982b4dd..7564dd2 100644
        'settings.windowBehavior.buttonTitle': '目前：{current}；點擊切換為 {next}',
        'settings.display.floatingBubble': '懸浮小窗',
        'settings.display.floatingBubbleNote': '將 widget 收成可拖曳的窄長小窗，點擊即可重新展開。',
-@@ -3060,6 +3069,7 @@
+@@ -3173,6 +3182,7 @@
        'trayMenu.presentation.floating': '浮動於其他 App 上方',
        'trayMenu.presentation.normal': '一般視窗',
        'trayMenu.presentation.desktop': '固定於桌面',
@@ -1450,7 +1450,7 @@ index 982b4dd..7564dd2 100644
        'settings.startup.title': '啟動',
        'settings.startup.startAtLogin': '登入時啟動',
        'settings.startup.available': '僅在打包後的版本可用；Linux 需以 AppImage 執行。',
-@@ -3689,6 +3699,9 @@
+@@ -3811,6 +3821,9 @@
        'home.liveTokenRate.burnTitle': '实时 Token 消耗（{scope}）：{value}。点击切换至实时 tok/s。',
        'home.liveTokenRate.speedIdleTitle': '最近一次生成速度（{scope}）：{value}。点击切换至 TPM。',
        'home.liveTokenRate.burnIdleTitle': '最近一次 Token 消耗（{scope}）：{value}。点击切换至 tok/s。',
@@ -1460,7 +1460,7 @@ index 982b4dd..7564dd2 100644
        'home.less': '较少',
        'home.more': '较多',
        'home.used': '已用',
-@@ -4438,6 +4451,7 @@
+@@ -4597,6 +4610,7 @@
        'settings.windowBehavior.floating': '浮在其他 app 上方',
        'settings.windowBehavior.normal': '普通窗口',
        'settings.windowBehavior.desktop': '固定在桌面',
@@ -1468,7 +1468,7 @@ index 982b4dd..7564dd2 100644
        'settings.windowBehavior.buttonTitle': '当前：{current}；点击切换为 {next}',
        'settings.display.floatingBubble': '悬浮小窗',
        'settings.display.floatingBubbleNote': '将组件收成可拖动的窄长小窗，点击即可重新展开。',
-@@ -4678,6 +4692,7 @@
+@@ -4850,6 +4864,7 @@
        'trayMenu.presentation.floating': '浮动于其他 App 上方',
        'trayMenu.presentation.normal': '普通窗口',
        'trayMenu.presentation.desktop': '固定到桌面',
@@ -1476,7 +1476,7 @@ index 982b4dd..7564dd2 100644
        'settings.startup.title': '启动',
        'settings.startup.startAtLogin': '登录时启动',
        'settings.startup.available': '仅在打包后的版本可用；Linux 需以 AppImage 运行。',
-@@ -4952,6 +4967,9 @@
+@@ -5134,6 +5149,9 @@
        'home.liveTokenRate.burnTitle': '실시간 토큰 소모량({scope}): {value}. 클릭하여 실시간 tok/s로 전환합니다.',
        'home.liveTokenRate.speedIdleTitle': '마지막으로 관찰된 생성 속도({scope}): {value}. 클릭하여 TPM으로 전환합니다.',
        'home.liveTokenRate.burnIdleTitle': '마지막으로 관찰된 토큰 소모량({scope}): {value}. 클릭하여 tok/s로 전환합니다.',
@@ -1486,7 +1486,7 @@ index 982b4dd..7564dd2 100644
        'home.reset': '{value} 초기화',
        'home.staleDevice': '오프라인',
        'home.tools': '도구',
-@@ -6434,6 +6452,7 @@
+@@ -6666,6 +6684,7 @@
        'trayMenu.presentation.floating': '다른 앱 위에 띄우기',
        'trayMenu.presentation.normal': '일반 창',
        'trayMenu.presentation.desktop': '데스크톱에 고정',
@@ -1494,7 +1494,7 @@ index 982b4dd..7564dd2 100644
        'settings.views.configureHome': '{name} 설정',
        'settings.views.configureTrend': '{name} 설정',
        'settings.views.enableTrend': '추이 활성화',
-@@ -6451,6 +6470,7 @@
+@@ -6687,6 +6706,7 @@
        'settings.views.trendIntervalMinutes': '{n}분',
        'settings.windowBehavior.buttonTitle': '{current}; {next}로 전환하려면 클릭',
        'settings.windowBehavior.desktop': '데스크톱 고정',
@@ -1502,7 +1502,7 @@ index 982b4dd..7564dd2 100644
        'settings.windowBehavior.floating': '앱 위에 플로팅',
        'settings.windowBehavior.normal': '일반 창',
        'sortMostTokens': '↕ 토큰 많은 순',
-@@ -6570,6 +6590,9 @@
+@@ -6811,6 +6831,9 @@
        'home.liveTokenRate.burnTitle': 'ライブ Token 消費（{scope}）：{value}。クリックするとライブ tok/s に切り替わります。',
        'home.liveTokenRate.speedIdleTitle': '直近の生成速度（{scope}）：{value}。クリックすると TPM に切り替わります。',
        'home.liveTokenRate.burnIdleTitle': '直近の Token 消費（{scope}）：{value}。クリックすると tok/s に切り替わります。',
@@ -1512,7 +1512,7 @@ index 982b4dd..7564dd2 100644
        'home.reset': '{value}をリセット',
        'home.staleDevice': 'オフライン',
        'home.tools': 'ツール',
-@@ -8052,6 +8075,7 @@
+@@ -8343,6 +8366,7 @@
        'trayMenu.presentation.floating': '他のアプリの前面に表示',
        'trayMenu.presentation.normal': '通常ウィンドウ',
        'trayMenu.presentation.desktop': 'デスクトップに固定',
@@ -1520,7 +1520,7 @@ index 982b4dd..7564dd2 100644
        'settings.views.configureHome': '{name}を設定',
        'settings.views.configureTrend': '{name}を設定',
        'settings.views.enableTrend': 'トレンドを有効化',
-@@ -8069,6 +8093,7 @@
+@@ -8364,6 +8388,7 @@
        'settings.views.trendIntervalMinutes': '{n}分',
        'settings.windowBehavior.buttonTitle': '{current}; {next}に切り替えるにはクリック',
        'settings.windowBehavior.desktop': 'デスクトップに固定',
@@ -1529,7 +1529,7 @@ index 982b4dd..7564dd2 100644
        'settings.windowBehavior.normal': '通常ウィンドウ',
        'sortMostTokens': '↕ トークン数順',
 diff --git a/src/electron/renderer/index.html b/src/electron/renderer/index.html
-index e20a183..5fae92c 100644
+index 16f3580..8094d52 100644
 --- a/src/electron/renderer/index.html
 +++ b/src/electron/renderer/index.html
 @@ -249,6 +249,7 @@
@@ -1540,7 +1540,7 @@ index e20a183..5fae92c 100644
                  </select>
                  <span class="settings-note settings-item-desc" data-i18n="settings.display.windowBehaviorNote">Desktop pinned keeps the widget below other apps and locks drag/resize while staying clickable.</span>
                </label>
-@@ -1802,6 +1803,10 @@
+@@ -1865,6 +1866,10 @@
        <div id="sessionPagerHost" class="session-pager-host hidden"></div>
        <footer class="footer">
          <div id="viewSwitcher" class="view-switcher"></div>
@@ -1600,10 +1600,10 @@ index 0000000..63fc442
 +  return { createManualRefreshController, delay };
 +});
 diff --git a/src/electron/renderer/sessionRows.js b/src/electron/renderer/sessionRows.js
-index 652a2dd..99d513d 100644
+index 41895a1..2cd5204 100644
 --- a/src/electron/renderer/sessionRows.js
 +++ b/src/electron/renderer/sessionRows.js
-@@ -189,6 +189,20 @@
+@@ -221,6 +221,20 @@
      };
    }
  
@@ -1624,7 +1624,7 @@ index 652a2dd..99d513d 100644
    function sessionRowsForPeriod(period, options = {}) {
      const labels = options.clientLabels || {};
      const colors = options.clientColors || {};
-@@ -234,7 +248,7 @@
+@@ -275,7 +289,7 @@
        const row = nativeSessionRow(session, key, options, now);
        if (row) rows.push(row);
      }
@@ -1633,7 +1633,7 @@ index 652a2dd..99d513d 100644
    }
  
    function groupBackgroundReviewRows(rows, options = {}) {
-@@ -302,8 +316,10 @@
+@@ -343,8 +357,10 @@
      applyBreakdownRowSemantics,
      archivedSessionCount,
      compactSessionTime,
@@ -1645,10 +1645,10 @@ index 652a2dd..99d513d 100644
      sessionIdLabel,
      sessionRowsForPeriod
 diff --git a/src/electron/renderer/styles.css b/src/electron/renderer/styles.css
-index 42ca95c..e50e27b 100644
+index 606e37e..13a8f36 100644
 --- a/src/electron/renderer/styles.css
 +++ b/src/electron/renderer/styles.css
-@@ -5579,8 +5579,8 @@ html.is-windows .limit-live-badge {
+@@ -5698,8 +5698,8 @@ html.is-windows .limit-live-badge {
  .background-review-totals { white-space: nowrap; color: var(--text); }
  .background-review-run:focus-visible,
  .row[role="button"]:focus-visible { outline: 2px solid rgba(var(--accent-rgb), 0.35); outline-offset: 2px; }
@@ -1659,7 +1659,7 @@ index 42ca95c..e50e27b 100644
  .row.summary-row[data-review-group="true"] { cursor: pointer; }
  .row.summary-row[data-review-group="true"] .row-metrics::after { content: '›'; color: var(--muted); font-size: 14px; line-height: 1; }
  .row.session-row[data-client="reasonix"][data-detail-unavailable="true"] { cursor: default; }
-@@ -5778,9 +5778,20 @@ html.is-windows .limit-live-badge {
+@@ -5897,9 +5897,20 @@ html.is-windows .limit-live-badge {
  .trends-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; padding-right: 2px; overflow: hidden; }
  .trends-cap { flex: none; display: flex; align-items: center; justify-content: space-between; font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; opacity: 0.6; }
  .trends-open-hint { opacity: 0.75; cursor: pointer; font-size: 13px; }
@@ -1682,10 +1682,10 @@ index 42ca95c..e50e27b 100644
    fill: #6ab4f0;
    opacity: 0.5;
 diff --git a/src/electron/renderer/usageCharts.js b/src/electron/renderer/usageCharts.js
-index cac982a..ec4ab54 100644
+index a4f226e..facd989 100644
 --- a/src/electron/renderer/usageCharts.js
 +++ b/src/electron/renderer/usageCharts.js
-@@ -251,18 +251,20 @@
+@@ -308,18 +308,20 @@
    }
  
    function sparklinePreview(points, options) {
@@ -1710,7 +1710,7 @@ index cac982a..ec4ab54 100644
    }
  
    function areaLineChart(daily, options) {
-@@ -419,10 +421,21 @@
+@@ -480,10 +482,21 @@
    }
  
    function sparklineSvg(model, options) {
@@ -1733,7 +1733,7 @@ index cac982a..ec4ab54 100644
      const zeroMarkers = o.showZeroMarkers
        ? bars.map((b, i) => {
          if (b.value !== 0) return '';
-@@ -434,7 +447,7 @@
+@@ -495,7 +508,7 @@
        const tip = o.showZeroMarkers && b.value === 0 ? '' : titleOf(i);
        return `<rect x="${svgRound(b.x)}" y="${svgRound(b.y)}" width="${svgRound(b.width)}" height="${svgRound(Math.max(0, b.height))}" rx="${o.radius}" class="spark-bar${b.last ? ' spark-bar--last' : ''}">${tip}</rect>`;
      }).join('');
@@ -1787,10 +1787,38 @@ index 45d9f84..11ad80f 100644
  };
  
 diff --git a/src/shared/providers/zai/limits.js b/src/shared/providers/zai/limits.js
-index 2594969..e2576d2 100644
+index fef37a3..0068597 100644
 --- a/src/shared/providers/zai/limits.js
 +++ b/src/shared/providers/zai/limits.js
-@@ -363,14 +363,31 @@ async function fetchZaiLimits(options = {}, deps = {}) {
+@@ -302,6 +302,27 @@ async function fetchJson(url, key, deps = {}) {
+   }, { signal: deps.signal, deadlineMs });
+ }
+ 
++// The console-key lane and the ZCode mirror lane can both answer quota for the
++// same underlying plan window, and a partial failure on either side (say the
++// weekly bucket missing from one response) leaves the shared window appearing
++// twice in the merged list — observed live as a limits row reading
++// "Session 9% / Session 9%". Collapse identical windows (same kind, label,
++// reset instant and usage) so a lane hiccup cannot double-render a row; two
++// genuinely distinct buckets always differ in at least one of those fields.
++function dedupeZaiWindows(windows) {
++  const seen = new Set();
++  const out = [];
++  for (const window of windows || []) {
++    const identity = [window?.kind, window?.label, window?.resetsAt, window?.usedPercent]
++      .map((value) => String(value ?? '\u0000'))
++      .join('\u0000');
++    if (seen.has(identity)) continue;
++    seen.add(identity);
++    out.push(window);
++  }
++  return out;
++}
++
+ // Three independent account pools feed one GLM row, in parallel: the paid
+ // subscription quota (console key), the cash balance (console key), and the
+ // ZCode Start/Weekend plan buckets (local ZCode login). A pool only renders
+@@ -363,14 +384,31 @@ async function fetchZaiLimits(options = {}, deps = {}) {
            })
          };
        }
@@ -1825,6 +1853,23 @@ index 2594969..e2576d2 100644
        };
      })()
      : Promise.resolve(emptyLane());
+@@ -479,7 +517,7 @@ async function fetchZaiLimits(options = {}, deps = {}) {
+   const [keyResult, planResult] = await Promise.allSettled([keyLane, planLane]);
+ 
+   const lanes = [keyResult, planResult].filter((result) => result.status === 'fulfilled');
+-  const windows = lanes.flatMap((result) => result.value.windows);
++  const windows = dedupeZaiWindows(lanes.flatMap((result) => result.value.windows));
+   const accountKey = lanes.map((result) => result.value.accountKey).filter(Boolean)[0] || '';
+   const accountLabel = lanes.map((result) => result.value.plan).filter(Boolean)[0] || '';
+   // Errors affect status, never the data from a healthy request. The user's
+@@ -843,6 +881,7 @@ module.exports = {
+   zaiDashboardUrl,
+   parseZaiUsage,
+   parseZcodeStartPlanBalances,
++  dedupeZaiWindows,
+   fetchZaiLimits,
+   // Shared with the team provider: the same BigModel gateways answer with the
+   // same HTTP 200 body envelopes, so the classification lives in one place.
 diff --git a/src/shared/providers/zcode/sessionMetadata.js b/src/shared/providers/zcode/sessionMetadata.js
 new file mode 100644
 index 0000000..178782c
@@ -2120,23 +2165,23 @@ index c2dee8c..51c9a56 100644
    const filePath = resolveSessionFile(client, sessionId, home, { env, useEnvRoots });
    if (!filePath) return { found: false, client, sessionId, period, exchanges: [], totals: totalsOf([], sessionCost) };
 diff --git a/src/shared/sessionMetadata.js b/src/shared/sessionMetadata.js
-index 2e992c6..769ac4a 100644
+index b195b74..f3f128e 100644
 --- a/src/shared/sessionMetadata.js
 +++ b/src/shared/sessionMetadata.js
-@@ -9,6 +9,7 @@ const droidSessionMetadata = require('./providers/droid/sessionMetadata');
- const opencodeSession = require('./providers/opencode/session');
+@@ -11,6 +11,7 @@ const opencodeSession = require('./providers/opencode/session');
  const kimiSessionMetadata = require('./providers/kimi/sessionMetadata');
  const dshSessionMetadata = require('./providers/dsh/sessionMetadata');
+ const devinSessionMetadata = require('./providers/devin/sessionMetadata');
 +const zcodeSessionMetadata = require('./providers/zcode/sessionMetadata');
  
  function isoFromDate(value) {
    const date = value instanceof Date ? value : new Date(value || '');
-@@ -224,7 +225,8 @@ const SESSION_METADATA_RESOLVERS = new Map([
-   ['opencode', { resolve: opencodeSession.resolveSessionMetadata, retryAfterTimestampFallback: true }],
+@@ -227,7 +228,8 @@ const SESSION_METADATA_RESOLVERS = new Map([
    ['droid', { resolve: droidSessionMetadata.resolveSessionMetadata, retryAfterTimestampFallback: true }],
    ['kimi', { resolve: kimiSessionMetadata.resolveSessionMetadata, retryAfterTimestampFallback: false }],
--  ['dsh', { resolve: dshSessionMetadata.resolveSessionMetadata, retryAfterTimestampFallback: true }]
-+  ['dsh', { resolve: dshSessionMetadata.resolveSessionMetadata, retryAfterTimestampFallback: true }],
+   ['dsh', { resolve: dshSessionMetadata.resolveSessionMetadata, retryAfterTimestampFallback: true }],
+-  ['devin', { resolve: devinSessionMetadata.resolveSessionMetadata, retryAfterTimestampFallback: true }]
++  ['devin', { resolve: devinSessionMetadata.resolveSessionMetadata, retryAfterTimestampFallback: true }],
 +  ['zcode', { resolve: zcodeSessionMetadata.resolveSessionMetadata, retryAfterTimestampFallback: true }]
  ]);
  
@@ -2970,7 +3015,7 @@ index 0000000..1dfb36f
 +  assert.deepEqual(events, ['on', 'pull', 'off']);
 +});
 diff --git a/tests/electron/sessionRows.test.js b/tests/electron/sessionRows.test.js
-index 6c063b1..df17a9a 100644
+index ca8ee90..a85075e 100644
 --- a/tests/electron/sessionRows.test.js
 +++ b/tests/electron/sessionRows.test.js
 @@ -8,8 +8,10 @@ const test = require('node:test');
@@ -2984,9 +3029,9 @@ index 6c063b1..df17a9a 100644
    sessionBreakdownIncomplete,
    sessionIdLabel,
    sessionRowsForPeriod
-@@ -461,3 +463,82 @@ test('session layout keeps page chrome consistent and scrolls long labels on one
-   assert.match(renderer, /function setHoverMarqueeText\([^]*?element\.removeAttribute\('title'\);\n}/);
-   assert.doesNotMatch(renderer, /function setHoverMarqueeText\([^]*?element\.title\s*=/);
+@@ -578,3 +580,82 @@ test('an archived session is never running and a half-read context is not shown'
+   assert.equal(windowless.running, true);
+   assert.equal(windowless.context, undefined);
  });
 +
 +test('compareSessionRows keeps the legacy recency order by default', () => {
@@ -3099,10 +3144,10 @@ index 53328eb..80376de 100644
  
  test('tray context menu shows the macOS Quit shortcut on macOS only', () => {
 diff --git a/tests/electron/usageCharts.test.js b/tests/electron/usageCharts.test.js
-index ef72129..554ec4b 100644
+index 8efe58a..27a75f0 100644
 --- a/tests/electron/usageCharts.test.js
 +++ b/tests/electron/usageCharts.test.js
-@@ -274,6 +274,30 @@ test('sparklinePreview keeps zero values at true zero height', () => {
+@@ -312,6 +312,30 @@ test('sparklinePreview keeps zero values at true zero height', () => {
    ]);
  });
  
@@ -3165,10 +3210,18 @@ index 3bdcbf1..13f29f2 100644
  
  test('migrates legacy alwaysOnTop settings when no behavior is saved', () => {
 diff --git a/tests/shared/zaiLimits.test.js b/tests/shared/zaiLimits.test.js
-index 4e46f05..a037a17 100644
+index 55c3a28..04b456c 100644
 --- a/tests/shared/zaiLimits.test.js
 +++ b/tests/shared/zaiLimits.test.js
-@@ -156,13 +156,23 @@ const noZcode = {
+@@ -13,6 +13,7 @@ const {
+   zaiQuotaUrl,
+   zaiSubscriptionUrl,
+   parseZaiUsage,
++  dedupeZaiWindows,
+   fetchZaiLimits
+ } = require('../../src/shared/providers/zai/limits');
+ 
+@@ -157,13 +158,23 @@ const noZcode = {
  };
  
  // Console-key lane responder: quota, finance report, subscription list.
@@ -3194,7 +3247,7 @@ index 4e46f05..a037a17 100644
      }
      return { ok: true, status: 200, json: async () => ({ data: [{ product_name: subscription }] }) };
    };
-@@ -241,7 +251,7 @@ test('fetchZaiLimits queries quota and balance, then enriches usable quota', asy
+@@ -254,7 +265,7 @@ test('fetchZaiLimits queries quota and balance, then enriches usable quota', asy
        fetch: async (url, init) => {
          urls.push(String(url));
          auth.push(init.headers.Authorization);
@@ -3203,7 +3256,7 @@ index 4e46f05..a037a17 100644
        }
      }
    );
-@@ -250,7 +260,7 @@ test('fetchZaiLimits queries quota and balance, then enriches usable quota', asy
+@@ -263,7 +274,7 @@ test('fetchZaiLimits queries quota and balance, then enriches usable quota', asy
    assert.equal(provider.accountLabel, 'GLM Coding');
    assert.equal(provider.windows.length, 2);
    const balance = provider.windows.find((window) => window.metric === 'credits');
@@ -3212,7 +3265,7 @@ index 4e46f05..a037a17 100644
    assert.equal(balance.currency, 'USD');
    assert.deepEqual(urls, [
      'https://api.z.ai/api/monitor/usage/quota/limit',
-@@ -260,6 +270,87 @@ test('fetchZaiLimits queries quota and balance, then enriches usable quota', asy
+@@ -273,6 +284,87 @@ test('fetchZaiLimits queries quota and balance, then enriches usable quota', asy
    assert.deepEqual(auth, ['Bearer zai-token', 'Bearer zai-token', 'Bearer zai-token']);
  });
  
@@ -3299,6 +3352,62 @@ index 4e46f05..a037a17 100644
 +
  test('fetchZaiLimits requests the selected BigModel CN region', async () => {
    const urls = [];
+   const provider = await fetchZaiLimits(
+@@ -347,6 +439,55 @@ test('fetchZaiLimits serves Coding Plan quota from the ZCode mirror key', async
+   assert.equal(provider.windows[0].source, undefined);
+ });
+ 
++test('fetchZaiLimits collapses identical windows answered by both lanes', async () => {
++  // Regression: the console-key lane and the ZCode mirror lane can both answer
++  // quota for the same plan. When BigModel only returns the 5-hour bucket to
++  // each of them, the merged row used to read "Session 9% / Session 9%".
++  const consoleKey = ['zai', 'token'].join('-'); // fixture value, not a credential
++  const quota = {
++    ok: true,
++    status: 200,
++    json: async () => ({ data: { limits: [{ type: 'CREDIT_LIMIT', unit: 3, number: 5, percentage: 10 }] } })
++  };
++  const provider = await fetchZaiLimits(
++    { zaiApiKey: consoleKey },
++    {
++      env: {},
++      now: () => Date.parse('2026-09-05T12:00:00Z'),
++      ...zcodeLaneDeps(async (url) => {
++        if (!String(url).includes('/quota/limit')) throw new Error('unexpected url ' + url);
++        return quota;
++      }, 'coding-plan')
++    }
++  );
++  assert.equal(provider.status, 'ok');
++  assert.deepEqual(
++    provider.windows.map((window) => [window.kind, window.usedPercent]),
++    [['session', 10]],
++    'the same window answered twice must render once'
++  );
++});
++
++test('dedupeZaiWindows keeps distinct buckets while collapsing identical ones', () => {
++  const session = { kind: 'session', label: '5-hour', resetsAt: '2026-09-05T18:00:00Z', usedPercent: 9 };
++  const sessionCopy = { kind: 'session', label: '5-hour', resetsAt: '2026-09-05T18:00:00Z', usedPercent: 9 };
++  const weekly = { kind: 'weekly', label: 'Weekly', resetsAt: '2026-09-25T05:38:00Z', usedPercent: 53 };
++  const bucket = { kind: 'billing', label: 'Start Plan', resetsAt: '2026-09-05T18:00:00Z', usedPercent: 9 };
++
++  assert.deepEqual(
++    dedupeZaiWindows([session, sessionCopy, weekly]).map((w) => w.kind),
++    ['session', 'weekly'],
++    'an identical duplicate collapses, distinct kinds survive'
++  );
++  // Same reset instant and usage but a different bucket identity stays distinct.
++  assert.deepEqual(
++    dedupeZaiWindows([session, bucket]).map((w) => w.label),
++    ['5-hour', 'Start Plan']
++  );
++  assert.equal(dedupeZaiWindows([]).length, 0);
++  assert.equal(dedupeZaiWindows(null).length, 0);
++});
++
+ test('fetchZaiLimits keeps ZCode plan windows when the console key quota fails', async () => {
+   // The lane merge used to throw a TDZ ReferenceError on this path.
    const provider = await fetchZaiLimits(
 diff --git a/tests/shared/zcodeSessionDetail.test.js b/tests/shared/zcodeSessionDetail.test.js
 new file mode 100644
