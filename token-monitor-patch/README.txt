@@ -168,8 +168,12 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
   5) Command Code 行显示 "Sign in again"：cookie 被服务端拒绝（过期/轮换），非补丁
      回归（git diff 证实补丁从未碰 commandcode 模块）；v0.60/0.61 也未改 commandcode。
      处置：设置里重新粘贴新鲜 cookie。
-  6) 注：当前 settings 的 windowBehavior=floating（用户自行切换），贴边吸附在
-     设置→窗口 切回「贴边」即用；edge 仍在白名单（windowBehavior.js 已核）。
+  6) ⚠️ windowBehavior 被官方版强制归化：官方 v0.61 的 WINDOW_BEHAVIORS 白名单只有
+     3 值（floating/normal/desktop），其设置归一化把我们的 edge 强制改成 floating 并
+     写回 settings.json——用户若经应用内更新器运行过官方版（或安装到换装的空窗期），
+     贴边模式就会被清掉、设置里也只剩 3 个选项。我们的补丁版仍是 4 值白名单，
+     重开设置切回「贴边自动隐藏」即可恢复（已验证 live DOM 有该选项）。
+     教训：应用内更新器 = 官方版短暂运行 = 自定义设置值被归化，优先走 README 流程。
 
 【升级记录（2026-09-18，v0.58.0 → v0.59.0）】
   1) 应用内弹出 v0.59.0 更新面板（新增侧边栏 edgeDock、改进 Kimi/ZCode/Antigravity/
