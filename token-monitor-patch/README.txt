@@ -53,12 +53,12 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
 
 【零件位置】
   完整 git 克隆   D:\桌面\私人图书馆\7-工具箱\1-project\token-monitor-suite\token-monitor-workspace\token-monitor
-                  分支 feat/edge-auto-hide（基线 v0.61.0，含 22 个提交）
+                  分支 feat/edge-auto-hide（基线 v0.63.0，含 22 个提交）
                   这是首选留档，含完整历史
   本补丁          D:\桌面\私人图书馆\7-工具箱\1-project\token-monitor-suite\token-monitor-workspace\token-monitor-patch\edge-auto-hide.patch
-                  179 KB（基线 v0.61.0），含全部源码改动 + 测试改动
-  已安装应用      C:\Users\29871\AppData\Local\Programs\Token Monitor（v0.61.0 + 补丁）
-  官方原包备份    <安装位置>\resources\app.asar.v0610-official.bak   19,441,847 B
+                  179 KB（基线 v0.63.0），含全部源码改动 + 测试改动
+  已安装应用      C:\Users\29871\AppData\Local\Programs\Token Monitor（v0.63.0 + 补丁）
+  官方原包备份    <安装位置>\resources\app.asar.v0630-official.bak   19,590,468 B
                   + 同名 .unpacked 双胞胎（勿删，解包该 bak 时必需）
   交付/验证脚本   已迁出本仓（本机运维工具，不随内容仓分发），新位置：
                   D:\桌面\私人图书馆\7-工具箱\1-project\token-monitor-suite\tooling\token-monitor-patch\
@@ -69,7 +69,7 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
                   旧 git 路径下的内容可从本仓 git 历史找回。
 
 【基线（重要，别弄错）】
-  当前基线：tag v0.61.0 -> 提交 dc3cc13（chore: release v0.59.0；
+  当前基线：tag v0.63.0 -> 提交（annotated，用 git rev-parse v0.63.0^{commit} 取）（chore: release v0.59.0；
     注意 8d17051 是 annotated tag 对象号，别当提交号用——v0.57 时代同款坑）
     2026-09-18 已把整条补丁链 rebase 到 v0.59.0 并重新交付（见「升级记录 2026-09-18」）。
   历史基线：tag v0.58.0 -> 提交 d426b8e（chore: release v0.58.0）。
@@ -94,7 +94,7 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
     7cced1a feat(dashboard): 总览按工具列在前、按模型列在后（用户偏好）
     2cabdbd feat(dashboard): 仪表盘刷新按钮强制即时采集 + 转圈反馈（15s 有界等待）
     b32c532 feat(trends): 主窗口趋势图加纵轴刻度（padLeft 槽 + 网格线 + HTML 标签）
-  规模（相对 v0.61.0）：32 files changed, +2859/−44（21 个 src + 10 个测试文件 + .gitignore）
+  规模（相对 v0.63.0）：32 files changed, +2859/−44（21 个 src + 10 个测试文件 + .gitignore）
 
 【升级记录（2026-09-16，v0.57.0 → v0.58.0）】
   1) 官方 v0.58.0 当天 14:24 发布（新增 Amp 会话统计、Factory Droid 额度）。
@@ -149,6 +149,24 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
      拖边框防误收的设计行为）：守卫按设计保持展开且不打日志。已把偶数轮
      回收位改 x=500（脚本内已注释说明），重跑全绿。2026-09-16 那轮的
      2 个红疑因此同源（当时归因于鼠标污染，可能两种因素并存）。
+
+【升级记录（2026-09-27，v0.61.0 → v0.63.0）】
+  1) v0.62+v0.63 双版本：44 提交、267 文件（+15711/−5565）——macOS Liquid Glass、
+     背景图片透明度、Cursor 会话标题、额度账号连接检查等。安装包 API digest 校验
+     MATCH（sha256:5c61d381…，119,656,200 B）。
+  2) rebase：22 提交重放，4 处冲突全保留双方语义——main.js require 区
+     （backgroundImage 与 edgeAutoHide 并存）；createWindow 两处（上游 v0.63 删除了
+     mainWindowNativeBlurEnabled 变量，跟随上游丢弃该行，仅保留 geometryReady 复位；
+     ⚠️ 此变量在我们的补丁文件中已零残留）；dashboard.html script 区
+     （glassRendering 与 manualRefresh 共存）。
+  3) 验证：全量 5217 用例 5208 过；两个失败均为 symlink EPERM 环境限制（macOS 专属
+     一个 + v0.63 新增的 Windows symlink 权限测试一个），非补丁问题。共存抽查全绿。
+  4) 交付：全新解包 asar-extracted-v063 → overlay 21 文件 → 双向断言 19/19 →
+     pack 46,660,109 B → 换装；启动零对话框、零错误日志（7 进程，v0.63 新窗口结构）。
+     新锚点 app.asar.v0630-official.bak（19,590,468 B）+ .unpacked 双胞胎；
+     v0.61 锚点移存 opencode0610-anchors\。deliver_finalize.py 已适配 v063 路径。
+  5) ⚠️ 续传下载注意：大安装包经 CDN 断流（两次 exit 28），`curl -C -` 续传后再校验
+     哈希，务必以 MATCH 为准——部分文件的哈希必然 MISMATCH。
 
 【升级记录（2026-09-21，v0.59.0 → v0.61.0）】
   1) v0.60+v0.61 双版本跨度：26 提交、192 文件（+20178/−4072）——Devin/Cline 新提供方、

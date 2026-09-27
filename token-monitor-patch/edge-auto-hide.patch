@@ -365,19 +365,19 @@ index 8c0c48b..13af9c2 100644
  
  function floatingBubbleNativeGlassEnabled(settings = {}) {
 diff --git a/src/electron/main.js b/src/electron/main.js
-index e506d98..6fbe4ac 100644
+index 1e10386..b8a4b58 100644
 --- a/src/electron/main.js
 +++ b/src/electron/main.js
-@@ -23,6 +23,8 @@ const { exportFileSet, exportSignature, EXPORT_FILENAMES } = require('../shared/
- const { createDefaultTrayLayout, normalizeTrayLayout } = require('../shared/trayLayout');
+@@ -24,6 +24,8 @@ const { createDefaultTrayLayout, normalizeTrayLayout } = require('../shared/tray
  const fontSettingsApi = require('../shared/fontSettings');
  const motionPreferenceApi = require('./motionPreference');
+ const { clearBackgroundImage, getBackgroundImage, importBackgroundImage } = require('./backgroundImage');
 +const edgeAutoHideApi = require('./edgeAutoHide');
 +const edgePopupGuardApi = require('./edgePopupGuard');
  const { createClientSourceIpcHandlers } = require('./clientSourceIpc');
  const { createClaudeWebFetch } = require('./providers/claude/webFetch');
  const { runAntigravityOAuthLogin } = require('./providers/antigravity/oauthLogin');
-@@ -515,6 +517,7 @@ function defaultSettings() {
+@@ -548,6 +550,7 @@ function defaultSettings() {
      liveTokenRateScope: 'all',
      compactTokenUnits: 'western',
      tokenRateMode: 'speed',
@@ -385,7 +385,7 @@ index e506d98..6fbe4ac 100644
      heatmapMetric: 'cost',
      modelRankingMetric: 'tokens',
      homeActiveDaysWindow: 'all',
-@@ -687,6 +690,10 @@ function normalizeTokenRateMode(value) {
+@@ -680,6 +683,10 @@ function normalizeTokenRateMode(value) {
    return value === 'burn' ? 'burn' : 'speed';
  }
  
@@ -396,7 +396,7 @@ index e506d98..6fbe4ac 100644
  function normalizeLiveTokenRateScope(value) {
    return value === 'device' ? 'device' : 'all';
  }
-@@ -2180,6 +2187,7 @@ function restoredBounds() {
+@@ -1972,6 +1979,7 @@ function restoredBounds() {
  let persistBoundsTimer = null;
  let floatingBubbleAutoCollapseTimer = null;
  const floatingBubbleState = { collapsed: false, side: null, collapsedBounds: null, expandedBounds: null, suppressNextCollapse: false, contentSize: null };
@@ -404,7 +404,7 @@ index e506d98..6fbe4ac 100644
  let mainWindowChrome = { collapsedFloatingBubble: false };
  
  function stopPersistBoundsTimer() {
-@@ -2422,6 +2430,451 @@ function syncFloatingBubbleAvailability() {
+@@ -2222,6 +2230,451 @@ function syncFloatingBubbleAvailability() {
    sendFloatingBubbleState();
  }
  
@@ -856,7 +856,7 @@ index e506d98..6fbe4ac 100644
  function persistBoundsSoon() {
    if (!mainWindow || mainWindow.isDestroyed()) return;
    if (!shouldPersistWindowBounds(mainWindow)) {
-@@ -2439,6 +2892,10 @@ function persistBoundsSoon() {
+@@ -2239,6 +2692,10 @@ function persistBoundsSoon() {
        // Popover x/y is anchored to the tray icon each open; only the size carries over.
        if (prev.width === next.width && prev.height === next.height) return;
        settings.windowBounds = { ...prev, width: next.width, height: next.height };
@@ -867,7 +867,7 @@ index e506d98..6fbe4ac 100644
      } else if (floatingBubbleState.collapsed && floatingBubbleState.expandedBounds) {
        floatingBubbleState.collapsedBounds = next;
        const display = displayForBounds(next);
-@@ -2660,6 +3117,7 @@ function readSettings() {
+@@ -2489,6 +2946,7 @@ function readSettings() {
      merged.interfaceFontFamily = fontSettingsApi.normalizeFontFamily(merged.interfaceFontFamily);
      merged.displayFontFamily = fontSettingsApi.normalizeFontFamily(merged.displayFontFamily);
      merged.tokenRateMode = normalizeTokenRateMode(merged.tokenRateMode);
@@ -875,7 +875,7 @@ index e506d98..6fbe4ac 100644
      if (saved.serviceProviderDisplayOrder !== undefined) {
        merged.serviceProviderDisplayOrder = String(saved.serviceProviderDisplayOrder || '');
      }
-@@ -2987,6 +3445,77 @@ function applyWindowSettings() {
+@@ -2817,6 +3275,77 @@ function applyWindowSettings() {
      applyCollapsedFloatingBubbleLimits(mainWindow.getBounds());
      return;
    }
@@ -953,7 +953,7 @@ index e506d98..6fbe4ac 100644
    const behavior = describeWindowBehavior(settings);
    mainWindow.setAlwaysOnTop(behavior.alwaysOnTop, floatingAlwaysOnTopLevel());
    if (typeof mainWindow.setMovable === 'function') mainWindow.setMovable(behavior.draggable);
-@@ -2998,6 +3527,17 @@ function applyWindowSettings() {
+@@ -2828,6 +3357,17 @@ function applyWindowSettings() {
    if (typeof mainWindow.setSkipTaskbar === 'function') mainWindow.setSkipTaskbar(skipTaskbarForSettings(settings));
    if (!behavior.focusable && typeof mainWindow.blur === 'function') mainWindow.blur();
    syncTaskbarZOrder();
@@ -971,7 +971,7 @@ index e506d98..6fbe4ac 100644
  }
  
  function nativeBlurEnabled(source = settings) {
-@@ -5674,6 +6214,8 @@ function setWindowPresentationFromMenu(value) {
+@@ -5291,6 +5831,8 @@ function setWindowPresentationFromMenu(value) {
    saveSettings();
    if (previousTrayMode) exitTrayMode();
    else {
@@ -980,15 +980,15 @@ index e506d98..6fbe4ac 100644
      applyWindowSettings();
      focusExistingWindow();
    }
-@@ -6803,6 +7345,7 @@ function createWindow(boundsOverride, options = {}) {
+@@ -6393,6 +6935,7 @@ function createWindow(boundsOverride, options = {}) {
+     }
    });
    mainWindow = win;
-   mainWindowNativeBlurEnabled = null;
 +  edgeAutoHideState.geometryReady = false;
    mainWindowChrome = { collapsedFloatingBubble };
    applyMacSpaceBehavior();
    applyWindowsChrome(win, { round: true });
-@@ -6844,17 +7387,83 @@ function createWindow(boundsOverride, options = {}) {
+@@ -6434,17 +6977,83 @@ function createWindow(boundsOverride, options = {}) {
    applyNativeMaterial();
    win.on('focus', () => {
      stopFloatingBubbleAutoCollapseTimer();
@@ -1077,7 +1077,7 @@ index e506d98..6fbe4ac 100644
    win.on('minimize', stopTaskbarZOrderKeeper);
    win.on('close', (event) => {
      if (quitRequested) return;
-@@ -7087,6 +7696,28 @@ function rebuildWindow() {
+@@ -6675,6 +7284,28 @@ function rebuildWindow() {
    });
  }
  
@@ -1106,7 +1106,7 @@ index e506d98..6fbe4ac 100644
  app.whenReady().then(() => {
    if (process.platform === 'darwin' && app.dock) app.dock.setIcon(APP_ICON_PATH);
    ensureSettingsLoaded();
-@@ -7332,6 +7963,7 @@ app.whenReady().then(() => {
+@@ -6909,6 +7540,7 @@ app.whenReady().then(() => {
          patch.displayFontFamily ?? settings.displayFontFamily
        ),
        tokenRateMode: normalizeTokenRateMode(patch.tokenRateMode ?? settings.tokenRateMode),
@@ -1114,7 +1114,7 @@ index e506d98..6fbe4ac 100644
        floatingBubbleEnabled: parseBoolean(patch.floatingBubbleEnabled ?? settings.floatingBubbleEnabled, false),
        edgeDockEnabled: parseBoolean(patch.edgeDockEnabled ?? settings.edgeDockEnabled, false),
        edgeDockSide: normalizeEdgeDockSide(patch.edgeDockSide ?? settings.edgeDockSide),
-@@ -7489,6 +8121,7 @@ app.whenReady().then(() => {
+@@ -7037,6 +7669,7 @@ app.whenReady().then(() => {
      applyWindowSettings();
      syncFloatingBubbleAvailability();
      syncEdgeDock();
@@ -1122,7 +1122,7 @@ index e506d98..6fbe4ac 100644
      const nextNativeMaterial = nativeBlurEnabled();
      const nextWindowsBackdrop = normalizeWindowsBackdropMode(settings?.windowsBackdrop);
      const windowsBackdropChanged = previousWindowsBackdrop !== nextWindowsBackdrop
-@@ -7586,6 +8219,27 @@ app.whenReady().then(() => {
+@@ -7137,6 +7770,27 @@ app.whenReady().then(() => {
    });
    ipcMain.handle('floatingBubble:expand', () => expandFloatingBubble());
    ipcMain.handle('floatingBubble:peek', () => expandFloatingBubble({ focus: false }));
@@ -1150,7 +1150,7 @@ index e506d98..6fbe4ac 100644
    ipcMain.handle('floatingBubble:collapseIfIdle', () => {
      if (!mainWindow || mainWindow.isDestroyed()) return false;
      if (floatingBubbleState.collapsed || !canUseFloatingBubble(settings)) return false;
-@@ -8842,6 +9496,20 @@ app.whenReady().then(() => {
+@@ -8331,6 +8985,20 @@ app.whenReady().then(() => {
    });
    ipcMain.handle('dashboard:open', () => { createDashboardWindow(); return true; });
    ipcMain.handle('dashboard:getHistory', (_event, options) => getDashboardHistory(options));
@@ -1172,10 +1172,10 @@ index e506d98..6fbe4ac 100644
      const win = BrowserWindow.fromWebContents(event.sender);
      if (!win || win !== dashboardWindow || win.isDestroyed()) return;
 diff --git a/src/electron/preload.js b/src/electron/preload.js
-index dd9ef5a..8365dbb 100644
+index 0a2cc21..e37d599 100644
 --- a/src/electron/preload.js
 +++ b/src/electron/preload.js
-@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('tokenMonitor', {
+@@ -31,6 +31,7 @@ contextBridge.exposeInMainWorld('tokenMonitor', {
    getCodexResetForecast: (options) => ipcRenderer.invoke('codexResetForecast:get', options),
    openDashboard: () => ipcRenderer.invoke('dashboard:open'),
    getDashboardHistory: (options) => ipcRenderer.invoke('dashboard:getHistory', options),
@@ -1184,10 +1184,10 @@ index dd9ef5a..8365dbb 100644
      const listener = () => { try { callback(); } catch (_) {} };
      ipcRenderer.on('dashboard:historyChanged', listener);
 diff --git a/src/electron/renderer/app.js b/src/electron/renderer/app.js
-index f0fa44a..9d000b4 100644
+index cfb4241..9c78ea5 100644
 --- a/src/electron/renderer/app.js
 +++ b/src/electron/renderer/app.js
-@@ -203,8 +203,8 @@ const projectRowsApi = window.TokenMonitorProjectRows;
+@@ -177,8 +177,8 @@ const projectRowsApi = window.TokenMonitorProjectRows;
  const sessionDetailApi = window.TokenMonitorSessionDetail;
  const windowShortcutApi = window.TokenMonitorWindowShortcut;
  const LIMIT_REFRESH_OPTIONS = [60000, 120000, 300000, 900000, 1800000];
@@ -1198,7 +1198,7 @@ index f0fa44a..9d000b4 100644
  const LIMIT_CAPABILITY_TAG_KEYS = {
    Auto: 'settings.limits.capability.auto',
    'OAuth/CLI': 'settings.limits.capability.oauthCli',
-@@ -377,6 +377,8 @@ Object.assign(els, {
+@@ -363,6 +363,8 @@ Object.assign(els, {
    toolDetailFooter: document.getElementById('toolDetailFooter'),
    toolDetailFooterTokens: document.getElementById('toolDetailFooterTokens'),
    toolDetailFooterModels: document.getElementById('toolDetailFooterModels'),
@@ -1207,7 +1207,7 @@ index f0fa44a..9d000b4 100644
    monthPeriodMenu: document.getElementById('monthPeriodMenu'),
    monthPeriodTab: document.getElementById('monthPeriodTab'),
    periodMonthModeInput: document.getElementById('periodMonthModeInput'),
-@@ -547,8 +549,15 @@ document.addEventListener('keydown', (event) => {
+@@ -540,8 +542,15 @@ document.addEventListener('keydown', (event) => {
    toggleAccordionRow(row);
  });
  
@@ -1225,7 +1225,7 @@ index f0fa44a..9d000b4 100644
  
  document.addEventListener('pointerdown', (event) => {
    if (state.viewSwitcherOpen && !event.target.closest('#viewSwitcher')) {
-@@ -2390,7 +2399,7 @@ function updateRow(row, { name, subtitle, activity, detail, value, cost, barValu
+@@ -2383,7 +2392,7 @@ function updateRow(row, { name, subtitle, activity, detail, value, cost, barValu
    }
    const interactive = reviewGroup === true || (
      kind === 'session'
@@ -1234,7 +1234,7 @@ index f0fa44a..9d000b4 100644
    ) || (kind === 'session' && client === 'reasonix' && sessionDetailAvailable === true);
    const mark = row.querySelector('.row-mark');
    const iconKind = iconKindFor({ key: row.dataset.key, platform: row.dataset.platform || '', client: row.dataset.client || '' }, state.breakdown);
-@@ -2804,7 +2813,23 @@ function modelRowsForPeriod(period, rankingMetric = state.settings?.modelRanking
+@@ -2797,7 +2806,23 @@ function modelRowsForPeriod(period, rankingMetric = state.settings?.modelRanking
    return toolRowsForPeriod(period);
  }
  
@@ -1258,7 +1258,7 @@ index f0fa44a..9d000b4 100644
    const rows = sessionRowsApi.sessionRowsForPeriod(period, {
      clientLabels,
      clientColors,
-@@ -2812,10 +2837,11 @@ function sessionRowsForPeriod(period) {
+@@ -2805,10 +2830,11 @@ function sessionRowsForPeriod(period) {
      stableColor,
      fallbackColors: fallbackModelColors,
      archivedLabel: t('session.archived'),
@@ -1272,7 +1272,7 @@ index f0fa44a..9d000b4 100644
      return sessionRowsApi.groupBackgroundReviewRows(rows, {
        label: t('sessions.backgroundReviews'),
        countLabel: (count) => t('sessions.backgroundReviewCount', { count }),
-@@ -4880,9 +4906,16 @@ function renderTrends() {
+@@ -4869,9 +4895,16 @@ function renderTrends() {
      return;
    }
  
@@ -1291,7 +1291,7 @@ index f0fa44a..9d000b4 100644
  
    const summary = homeOverviewApi.activityStatsForPeriod({
      period: state.period,
-@@ -4908,9 +4941,19 @@ function renderTrends() {
+@@ -4897,9 +4930,19 @@ function renderTrends() {
  
    els.trendsPanel.innerHTML =
      `<div class="trends-cap"><span>${rangeLabel}</span><span class="trends-open-hint" title="${t('trends.open')}">↗</span></div>`
@@ -1312,7 +1312,7 @@ index f0fa44a..9d000b4 100644
    const bars = Array.from(els.trendsPanel.querySelectorAll('.spark-bar'));
    bars.forEach((bar, index) => {
      bar.dataset.motionKey = String(finalPoints[index]?.[labelKey] || index);
-@@ -6393,6 +6436,7 @@ function render() {
+@@ -6382,6 +6425,7 @@ function render() {
    }
    
    renderFloatingBubbleContent();
@@ -1320,7 +1320,7 @@ index f0fa44a..9d000b4 100644
    // Tell main the window has painted real content (not the static "0" defaults),
    // so a recreated window can stay hidden until it's populated. See loadWindowFile.
    signalContentReady();
-@@ -10875,7 +10919,7 @@ els.breakdown.addEventListener('click', (event) => {
+@@ -11124,7 +11168,7 @@ els.breakdown.addEventListener('click', (event) => {
    }
    const key = rowEl.dataset.key || '';            // "session:<client>:<sessionId>"
    const client = rowEl.dataset.client || '';
@@ -1330,10 +1330,10 @@ index f0fa44a..9d000b4 100644
    const match = key.match(/^session:([^:]+):(.+)$/);
    if (!match) return;
 diff --git a/src/electron/renderer/dashboard.css b/src/electron/renderer/dashboard.css
-index dea5d1d..f0d0fcb 100644
+index 9d992a8..7ccf3f4 100644
 --- a/src/electron/renderer/dashboard.css
 +++ b/src/electron/renderer/dashboard.css
-@@ -40,6 +40,12 @@ body.flat { background: rgb(var(--glass-rgb)); }
+@@ -50,6 +50,12 @@ html.native-high-contrast .dash-cards { border-color: var(--line-strong); }
    width: 26px; height: 26px; border-radius: 6px; font-size: 14px; line-height: 1;
  }
  .icon-button:hover { background: rgba(var(--overlay-rgb), 0.12); }
@@ -1347,7 +1347,7 @@ index dea5d1d..f0d0fcb 100644
  .dash-tabs { display: flex; gap: 4px; padding: 10px 14px 0; }
  .dash-tab {
 diff --git a/src/electron/renderer/dashboard.html b/src/electron/renderer/dashboard.html
-index 7265915..f80c999 100644
+index ea4a076..7614329 100644
 --- a/src/electron/renderer/dashboard.html
 +++ b/src/electron/renderer/dashboard.html
 @@ -12,7 +12,7 @@
@@ -1359,19 +1359,19 @@ index 7265915..f80c999 100644
          <button id="minBtn" class="icon-button" title="Minimize">−</button>
          <button id="closeBtn" class="icon-button" title="Close">×</button>
        </div>
-@@ -68,6 +68,7 @@
-     <script src="../../shared/fontSettings.js"></script>
+@@ -71,6 +71,7 @@
      <script src="../motionPreference.js"></script>
      <script src="statsRenderScheduler.js"></script>
+     <script src="glassRendering.js"></script>
 +    <script src="manualRefresh.js"></script>
      <script src="dashboard.js"></script>
    </body>
  </html>
 diff --git a/src/electron/renderer/dashboard.js b/src/electron/renderer/dashboard.js
-index 2e42474..da35924 100644
+index 714f442..614a046 100644
 --- a/src/electron/renderer/dashboard.js
 +++ b/src/electron/renderer/dashboard.js
-@@ -424,7 +424,7 @@ function renderBreakdown() {
+@@ -428,7 +428,7 @@ function renderBreakdown() {
    const colModel = buildCol('dashboard.stack.model', modelTotals, charts.modelColor);
    const colClient = buildCol('dashboard.stack.client', clientTotals, (k) => charts.clientColors[k] || charts.clientColors.default);
    
@@ -1380,7 +1380,7 @@ index 2e42474..da35924 100644
    applySwatchColors(elsBreakdown);
    if (state.motion !== 'none' && !prefersReducedMotion()) {
      for (const fill of elsBreakdown.querySelectorAll('.dash-bd-bar-fill[data-motion-key]')) {
-@@ -747,7 +747,12 @@ els.heatmapMetricBtns.forEach((b) => b.addEventListener('click', () => {
+@@ -774,7 +774,12 @@ els.heatmapMetricBtns.forEach((b) => b.addEventListener('click', () => {
    window.tokenMonitor.updateSettings({ heatmapMetric: state.heatmapMetric });
  }));
  els.themeToggle.addEventListener('click', () => { state.flat = !state.flat; els.body.classList.toggle('flat', state.flat); window.tokenMonitor.updateSettings({ dashboardFlat: state.flat }); });
@@ -1395,10 +1395,10 @@ index 2e42474..da35924 100644
  els.closeBtn.addEventListener('click', () => window.tokenMonitor.dashboard.close());
  
 diff --git a/src/electron/renderer/i18n.js b/src/electron/renderer/i18n.js
-index 1a0c467..c8d227d 100644
+index 23bb8c0..9719b64 100644
 --- a/src/electron/renderer/i18n.js
 +++ b/src/electron/renderer/i18n.js
-@@ -457,6 +457,9 @@
+@@ -462,6 +462,9 @@
        'home.liveTokenRate.burnTitle': 'Live token burn ({scope}): {value}. Click to show live tok/s.',
        'home.liveTokenRate.speedIdleTitle': 'Last observed generation speed ({scope}): {value}. Click to show TPM.',
        'home.liveTokenRate.burnIdleTitle': 'Last observed token burn ({scope}): {value}. Click to show tok/s.',
@@ -1408,7 +1408,7 @@ index 1a0c467..c8d227d 100644
        'home.less': 'Less',
        'home.more': 'More',
        'home.used': 'used',
-@@ -1243,6 +1246,7 @@
+@@ -1261,6 +1264,7 @@
        'settings.windowBehavior.floating': 'Floating above apps',
        'settings.windowBehavior.normal': 'Normal window',
        'settings.windowBehavior.desktop': 'Desktop pinned',
@@ -1416,7 +1416,7 @@ index 1a0c467..c8d227d 100644
        'settings.windowBehavior.buttonTitle': '{current}; click for {next}',
        'settings.display.floatingBubble': 'Floating Bubble',
        'settings.display.floatingBubbleNote': 'Collapse the widget into a slim draggable mini-window; click it to reopen.',
-@@ -1496,6 +1500,7 @@
+@@ -1516,6 +1520,7 @@
        'trayMenu.presentation.floating': 'Floating Above Apps',
        'trayMenu.presentation.normal': 'Normal Window',
        'trayMenu.presentation.desktop': 'Desktop Pinned',
@@ -1424,7 +1424,7 @@ index 1a0c467..c8d227d 100644
        'settings.startup.title': 'Startup',
        'settings.startup.startAtLogin': 'Start at login',
        'settings.startup.available': 'Available in packaged builds. On Linux, run the AppImage build to enable.',
-@@ -2134,6 +2139,9 @@
+@@ -2173,6 +2178,9 @@
        'home.liveTokenRate.burnTitle': '即時 Token 消耗（{scope}）：{value}。點擊切換至即時 tok/s。',
        'home.liveTokenRate.speedIdleTitle': '最近一次生成速度（{scope}）：{value}。點擊切換至 TPM。',
        'home.liveTokenRate.burnIdleTitle': '最近一次 Token 消耗（{scope}）：{value}。點擊切換至 tok/s。',
@@ -1434,7 +1434,7 @@ index 1a0c467..c8d227d 100644
        'home.less': '較少',
        'home.more': '較多',
        'home.used': '已用',
-@@ -2920,6 +2928,7 @@
+@@ -2972,6 +2980,7 @@
        'settings.windowBehavior.floating': '浮在其他 app 上方',
        'settings.windowBehavior.normal': '一般視窗',
        'settings.windowBehavior.desktop': '固定在桌面',
@@ -1442,7 +1442,7 @@ index 1a0c467..c8d227d 100644
        'settings.windowBehavior.buttonTitle': '目前：{current}；點擊切換為 {next}',
        'settings.display.floatingBubble': '懸浮小窗',
        'settings.display.floatingBubbleNote': '將 widget 收成可拖曳的窄長小窗，點擊即可重新展開。',
-@@ -3173,6 +3182,7 @@
+@@ -3227,6 +3236,7 @@
        'trayMenu.presentation.floating': '浮動於其他 App 上方',
        'trayMenu.presentation.normal': '一般視窗',
        'trayMenu.presentation.desktop': '固定於桌面',
@@ -1450,7 +1450,7 @@ index 1a0c467..c8d227d 100644
        'settings.startup.title': '啟動',
        'settings.startup.startAtLogin': '登入時啟動',
        'settings.startup.available': '僅在打包後的版本可用；Linux 需以 AppImage 執行。',
-@@ -3811,6 +3821,9 @@
+@@ -3884,6 +3894,9 @@
        'home.liveTokenRate.burnTitle': '实时 Token 消耗（{scope}）：{value}。点击切换至实时 tok/s。',
        'home.liveTokenRate.speedIdleTitle': '最近一次生成速度（{scope}）：{value}。点击切换至 TPM。',
        'home.liveTokenRate.burnIdleTitle': '最近一次 Token 消耗（{scope}）：{value}。点击切换至 tok/s。',
@@ -1460,7 +1460,7 @@ index 1a0c467..c8d227d 100644
        'home.less': '较少',
        'home.more': '较多',
        'home.used': '已用',
-@@ -4597,6 +4610,7 @@
+@@ -4683,6 +4696,7 @@
        'settings.windowBehavior.floating': '浮在其他 app 上方',
        'settings.windowBehavior.normal': '普通窗口',
        'settings.windowBehavior.desktop': '固定在桌面',
@@ -1468,7 +1468,7 @@ index 1a0c467..c8d227d 100644
        'settings.windowBehavior.buttonTitle': '当前：{current}；点击切换为 {next}',
        'settings.display.floatingBubble': '悬浮小窗',
        'settings.display.floatingBubbleNote': '将组件收成可拖动的窄长小窗，点击即可重新展开。',
-@@ -4850,6 +4864,7 @@
+@@ -4938,6 +4952,7 @@
        'trayMenu.presentation.floating': '浮动于其他 App 上方',
        'trayMenu.presentation.normal': '普通窗口',
        'trayMenu.presentation.desktop': '固定到桌面',
@@ -1476,7 +1476,7 @@ index 1a0c467..c8d227d 100644
        'settings.startup.title': '启动',
        'settings.startup.startAtLogin': '登录时启动',
        'settings.startup.available': '仅在打包后的版本可用；Linux 需以 AppImage 运行。',
-@@ -5134,6 +5149,9 @@
+@@ -5236,6 +5251,9 @@
        'home.liveTokenRate.burnTitle': '실시간 토큰 소모량({scope}): {value}. 클릭하여 실시간 tok/s로 전환합니다.',
        'home.liveTokenRate.speedIdleTitle': '마지막으로 관찰된 생성 속도({scope}): {value}. 클릭하여 TPM으로 전환합니다.',
        'home.liveTokenRate.burnIdleTitle': '마지막으로 관찰된 토큰 소모량({scope}): {value}. 클릭하여 tok/s로 전환합니다.',
@@ -1486,7 +1486,7 @@ index 1a0c467..c8d227d 100644
        'home.reset': '{value} 초기화',
        'home.staleDevice': '오프라인',
        'home.tools': '도구',
-@@ -6666,6 +6684,7 @@
+@@ -6802,6 +6820,7 @@
        'trayMenu.presentation.floating': '다른 앱 위에 띄우기',
        'trayMenu.presentation.normal': '일반 창',
        'trayMenu.presentation.desktop': '데스크톱에 고정',
@@ -1494,7 +1494,7 @@ index 1a0c467..c8d227d 100644
        'settings.views.configureHome': '{name} 설정',
        'settings.views.configureTrend': '{name} 설정',
        'settings.views.enableTrend': '추이 활성화',
-@@ -6687,6 +6706,7 @@
+@@ -6823,6 +6842,7 @@
        'settings.views.trendIntervalMinutes': '{n}분',
        'settings.windowBehavior.buttonTitle': '{current}; {next}로 전환하려면 클릭',
        'settings.windowBehavior.desktop': '데스크톱 고정',
@@ -1502,7 +1502,7 @@ index 1a0c467..c8d227d 100644
        'settings.windowBehavior.floating': '앱 위에 플로팅',
        'settings.windowBehavior.normal': '일반 창',
        'sortMostTokens': '↕ 토큰 많은 순',
-@@ -6811,6 +6831,9 @@
+@@ -6947,6 +6967,9 @@
        'home.liveTokenRate.burnTitle': 'ライブ Token 消費（{scope}）：{value}。クリックするとライブ tok/s に切り替わります。',
        'home.liveTokenRate.speedIdleTitle': '直近の生成速度（{scope}）：{value}。クリックすると TPM に切り替わります。',
        'home.liveTokenRate.burnIdleTitle': '直近の Token 消費（{scope}）：{value}。クリックすると tok/s に切り替わります。',
@@ -1512,7 +1512,7 @@ index 1a0c467..c8d227d 100644
        'home.reset': '{value}をリセット',
        'home.staleDevice': 'オフライン',
        'home.tools': 'ツール',
-@@ -8343,6 +8366,7 @@
+@@ -8513,6 +8536,7 @@
        'trayMenu.presentation.floating': '他のアプリの前面に表示',
        'trayMenu.presentation.normal': '通常ウィンドウ',
        'trayMenu.presentation.desktop': 'デスクトップに固定',
@@ -1520,7 +1520,7 @@ index 1a0c467..c8d227d 100644
        'settings.views.configureHome': '{name}を設定',
        'settings.views.configureTrend': '{name}を設定',
        'settings.views.enableTrend': 'トレンドを有効化',
-@@ -8364,6 +8388,7 @@
+@@ -8534,6 +8558,7 @@
        'settings.views.trendIntervalMinutes': '{n}分',
        'settings.windowBehavior.buttonTitle': '{current}; {next}に切り替えるにはクリック',
        'settings.windowBehavior.desktop': 'デスクトップに固定',
@@ -1529,7 +1529,7 @@ index 1a0c467..c8d227d 100644
        'settings.windowBehavior.normal': '通常ウィンドウ',
        'sortMostTokens': '↕ トークン数順',
 diff --git a/src/electron/renderer/index.html b/src/electron/renderer/index.html
-index 16f3580..8094d52 100644
+index c87c81b..01a680f 100644
 --- a/src/electron/renderer/index.html
 +++ b/src/electron/renderer/index.html
 @@ -249,6 +249,7 @@
@@ -1540,7 +1540,7 @@ index 16f3580..8094d52 100644
                  </select>
                  <span class="settings-note settings-item-desc" data-i18n="settings.display.windowBehaviorNote">Desktop pinned keeps the widget below other apps and locks drag/resize while staying clickable.</span>
                </label>
-@@ -1865,6 +1866,10 @@
+@@ -1442,6 +1443,10 @@
        <div id="sessionPagerHost" class="session-pager-host hidden"></div>
        <footer class="footer">
          <div id="viewSwitcher" class="view-switcher"></div>
@@ -1600,7 +1600,7 @@ index 0000000..63fc442
 +  return { createManualRefreshController, delay };
 +});
 diff --git a/src/electron/renderer/sessionRows.js b/src/electron/renderer/sessionRows.js
-index 41895a1..2cd5204 100644
+index c331d2e..9709a06 100644
 --- a/src/electron/renderer/sessionRows.js
 +++ b/src/electron/renderer/sessionRows.js
 @@ -221,6 +221,20 @@
@@ -1643,12 +1643,12 @@ index 41895a1..2cd5204 100644
 +    normalizeSessionSortMode,
      sessionBreakdownIncomplete,
      sessionIdLabel,
-     sessionRowsForPeriod
+     // Exported for the edge dock's session rows: a card that shows the top
 diff --git a/src/electron/renderer/styles.css b/src/electron/renderer/styles.css
-index 606e37e..13a8f36 100644
+index 2ba33ab..e8a45da 100644
 --- a/src/electron/renderer/styles.css
 +++ b/src/electron/renderer/styles.css
-@@ -5698,8 +5698,8 @@ html.is-windows .limit-live-badge {
+@@ -5720,8 +5720,8 @@ html.native-liquid-glass .view-switcher-menu-item { border-radius: 9px; }
  .background-review-totals { white-space: nowrap; color: var(--text); }
  .background-review-run:focus-visible,
  .row[role="button"]:focus-visible { outline: 2px solid rgba(var(--accent-rgb), 0.35); outline-offset: 2px; }
@@ -1659,7 +1659,7 @@ index 606e37e..13a8f36 100644
  .row.summary-row[data-review-group="true"] { cursor: pointer; }
  .row.summary-row[data-review-group="true"] .row-metrics::after { content: '›'; color: var(--muted); font-size: 14px; line-height: 1; }
  .row.session-row[data-client="reasonix"][data-detail-unavailable="true"] { cursor: default; }
-@@ -5897,9 +5897,20 @@ html.is-windows .limit-live-badge {
+@@ -5919,9 +5919,20 @@ html.native-liquid-glass .view-switcher-menu-item { border-radius: 9px; }
  .trends-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; padding-right: 2px; overflow: hidden; }
  .trends-cap { flex: none; display: flex; align-items: center; justify-content: space-between; font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; opacity: 0.6; }
  .trends-open-hint { opacity: 0.75; cursor: pointer; font-size: 13px; }
@@ -1682,10 +1682,10 @@ index 606e37e..13a8f36 100644
    fill: #6ab4f0;
    opacity: 0.5;
 diff --git a/src/electron/renderer/usageCharts.js b/src/electron/renderer/usageCharts.js
-index a4f226e..facd989 100644
+index 441ca2b..6fdbd4e 100644
 --- a/src/electron/renderer/usageCharts.js
 +++ b/src/electron/renderer/usageCharts.js
-@@ -308,18 +308,20 @@
+@@ -309,18 +309,20 @@
    }
  
    function sparklinePreview(points, options) {
@@ -1710,7 +1710,7 @@ index a4f226e..facd989 100644
    }
  
    function areaLineChart(daily, options) {
-@@ -480,10 +482,21 @@
+@@ -484,10 +486,21 @@
    }
  
    function sparklineSvg(model, options) {
@@ -1733,7 +1733,7 @@ index a4f226e..facd989 100644
      const zeroMarkers = o.showZeroMarkers
        ? bars.map((b, i) => {
          if (b.value !== 0) return '';
-@@ -495,7 +508,7 @@
+@@ -499,7 +512,7 @@
        const tip = o.showZeroMarkers && b.value === 0 ? '' : titleOf(i);
        return `<rect x="${svgRound(b.x)}" y="${svgRound(b.y)}" width="${svgRound(b.width)}" height="${svgRound(Math.max(0, b.height))}" rx="${o.radius}" class="spark-bar${b.last ? ' spark-bar--last' : ''}">${tip}</rect>`;
      }).join('');
@@ -1743,7 +1743,7 @@ index a4f226e..facd989 100644
  
    function areaLineSvg(model) {
 diff --git a/src/electron/tray.js b/src/electron/tray.js
-index 5d3191a..53321ff 100644
+index e7ea83b..7f264f6 100644
 --- a/src/electron/tray.js
 +++ b/src/electron/tray.js
 @@ -273,7 +273,8 @@ const WINDOW_PRESENTATION_MENU_ITEMS = [
@@ -1787,7 +1787,7 @@ index 45d9f84..11ad80f 100644
  };
  
 diff --git a/src/shared/providers/zai/limits.js b/src/shared/providers/zai/limits.js
-index fef37a3..0068597 100644
+index 767443f..b043cc4 100644
 --- a/src/shared/providers/zai/limits.js
 +++ b/src/shared/providers/zai/limits.js
 @@ -302,6 +302,27 @@ async function fetchJson(url, key, deps = {}) {
@@ -2165,10 +2165,10 @@ index c2dee8c..51c9a56 100644
    const filePath = resolveSessionFile(client, sessionId, home, { env, useEnvRoots });
    if (!filePath) return { found: false, client, sessionId, period, exchanges: [], totals: totalsOf([], sessionCost) };
 diff --git a/src/shared/sessionMetadata.js b/src/shared/sessionMetadata.js
-index b195b74..f3f128e 100644
+index a93155f..6c4aaec 100644
 --- a/src/shared/sessionMetadata.js
 +++ b/src/shared/sessionMetadata.js
-@@ -11,6 +11,7 @@ const opencodeSession = require('./providers/opencode/session');
+@@ -12,6 +12,7 @@ const opencodeSession = require('./providers/opencode/session');
  const kimiSessionMetadata = require('./providers/kimi/sessionMetadata');
  const dshSessionMetadata = require('./providers/dsh/sessionMetadata');
  const devinSessionMetadata = require('./providers/devin/sessionMetadata');
@@ -2176,7 +2176,7 @@ index b195b74..f3f128e 100644
  
  function isoFromDate(value) {
    const date = value instanceof Date ? value : new Date(value || '');
-@@ -227,7 +228,8 @@ const SESSION_METADATA_RESOLVERS = new Map([
+@@ -229,7 +230,8 @@ const SESSION_METADATA_RESOLVERS = new Map([
    ['droid', { resolve: droidSessionMetadata.resolveSessionMetadata, retryAfterTimestampFallback: true }],
    ['kimi', { resolve: kimiSessionMetadata.resolveSessionMetadata, retryAfterTimestampFallback: false }],
    ['dsh', { resolve: dshSessionMetadata.resolveSessionMetadata, retryAfterTimestampFallback: true }],
@@ -3113,10 +3113,10 @@ index ca8ee90..a85075e 100644
 +  assert.equal((i18n.match(/'home\.sessionSort\.tokens'/g) || []).length, 5);
 +});
 diff --git a/tests/electron/tray.test.js b/tests/electron/tray.test.js
-index 53328eb..80376de 100644
+index 032aab9..9458c06 100644
 --- a/tests/electron/tray.test.js
 +++ b/tests/electron/tray.test.js
-@@ -369,14 +369,14 @@ test('Linux tray re-exports the checked window presentation after a menu action'
+@@ -387,14 +387,14 @@ test('Linux tray re-exports the checked window presentation after a menu action'
  
    const presentationItems = calls.contextMenus[0].template
      .find((item) => item.label === 'Window Presentation').submenu;
@@ -3133,7 +3133,7 @@ index 53328eb..80376de 100644
  });
  
  test('tray menu actions publish both in-flight transitions', async () => {
-@@ -497,7 +497,8 @@ test('tray context menu uses the selected locale for every visible level', () =>
+@@ -515,7 +515,8 @@ test('tray context menu uses the selected locale for every visible level', () =>
      '自訂'
    ]);
    assert.equal(template[4].submenu[0].label, '托盤彈出視窗');
