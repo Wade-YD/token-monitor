@@ -168,6 +168,13 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
   5) ⚠️ 续传下载注意：大安装包经 CDN 断流（两次 exit 28），`curl -C -` 续传后再校验
      哈希，务必以 MATCH 为准——部分文件的哈希必然 MISMATCH。
 
+  6) 完整回归（2026-09-27，22 断言）：**ALL GREEN**（v0.61/v0.63 两轮折叠验收）。
+     首跑 19/21——cycle 1/3/5 收回失败，debug 日志显示那几秒零决策记录：窗口本轮
+     停在 x=22（跨度 22-458），硬编码回收点 x=300 落进跨度内部且距底边 697 仅
+     4-8px，正踩 ±10px 交互余量带（与 2026-09-18 的 x=768 案例互为镜像）。
+     教训升级：**回收点一律按实时跨度动态计算**（span±260 且避开屏幕边缘），
+     已改入 deliver_finalize.py，重跑全绿。settings 无 debug 写回残留。
+
 【升级记录（2026-09-21，v0.59.0 → v0.61.0）】
   1) v0.60+v0.61 双版本跨度：26 提交、192 文件（+20178/−4072）——Devin/Cline 新提供方、
      edge-dock 大改、`fix(zai): refuse the billing mirror once the account identity is known`
