@@ -167,6 +167,12 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
      v0.61 锚点移存 opencode0610-anchors\。deliver_finalize.py 已适配 v063 路径。
   5) ⚠️ 续传下载注意：大安装包经 CDN 断流（两次 exit 28），`curl -C -` 续传后再校验
      哈希，务必以 MATCH 为准——部分文件的哈希必然 MISMATCH。
+  7) 侧边栏告警色修复（用户反馈：0% 用量显示成橙红）：上游设计是「颜色按最紧池、
+     数字按主窗口」，两者分裂导致刚重置的会话读 0% 却穿著 Weekly/Monthly 的告警色。
+     改为颜色与数字同源（都按主窗口剩余量，dock.js 的 dataset.severity 不再读
+     severityPercent）；最紧池的早期告警保留在额度列表。补丁集增至 33 文件
+     （+edgeDock/dock.js），overlay 22 文件、pack 46,660,143 B；CDP 实测 rail 的
+     data-severity=ok、文本色恢复正常。edgeDock 131 测试全绿。
 
   6) 完整回归（2026-09-27，22 断言）：**ALL GREEN**（v0.61/v0.63 两轮折叠验收）。
      首跑 19/21——cycle 1/3/5 收回失败，debug 日志显示那几秒零决策记录：窗口本轮

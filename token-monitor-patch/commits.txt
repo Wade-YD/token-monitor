@@ -20,3 +20,4 @@ a455f47 feat(dashboard): refresh button forces a fresh collection with busy feed
 194cf49 feat(trends): y-axis ticks for the main-window trends chart
 5a41617 fix(trends): set tick label positions via CSSOM - CSP drops inline styles
 39850cc fix(limits): dedupe zai windows merged from the console-key and ZCode mirror lanes
+1e1e23a fix(edge-dock): colour the rail figure by its own window, not the tightest pool

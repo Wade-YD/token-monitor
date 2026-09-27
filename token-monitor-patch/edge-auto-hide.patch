@@ -1394,6 +1394,28 @@ index 714f442..614a046 100644
  els.minBtn.addEventListener('click', () => window.tokenMonitor.dashboard.minimize());
  els.closeBtn.addEventListener('click', () => window.tokenMonitor.dashboard.close());
  
+diff --git a/src/electron/renderer/edgeDock/dock.js b/src/electron/renderer/edgeDock/dock.js
+index 734bbc0..2ce953a 100644
+--- a/src/electron/renderer/edgeDock/dock.js
++++ b/src/electron/renderer/edgeDock/dock.js
+@@ -529,11 +529,12 @@ function providerCellNode(cell) {
+   } else {
+     value.textContent = percentText(cell.remainingPercent);
+   }
+-  // Colour answers "how close is the closest quota to empty"; the figure itself
+-  // answers "what does the primary window say" (0% when a quota is spent).
+-  // Splitting the two lets a tight secondary window warn without turning the
+-  // headline into whichever window is lowest this minute.
+-  value.dataset.severity = displaySeverity(cell.severityPercent ?? cell.remainingPercent);
++  // Colour and figure answer the SAME question - what does the primary window
++  // say - so a barely-used session never wears a warning colour borrowed from
++  // a different pool (a 0%-used headline beside an orange warn read as broken;
++  // the tightest-pool early warning stays in the Limits list, which shows
++  // every window with its own meter).
++  value.dataset.severity = displaySeverity(cell.remainingPercent);
+   node.append(ringNode(cell.remainingPercent, color, markNode(cell.provider)), value);
+   // The halo is decorative and carries no text, so the state it announces is
+   // spoken here instead, from the same reading it is drawn from.
 diff --git a/src/electron/renderer/i18n.js b/src/electron/renderer/i18n.js
 index 23bb8c0..9719b64 100644
 --- a/src/electron/renderer/i18n.js
