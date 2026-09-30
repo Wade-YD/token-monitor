@@ -1311,7 +1311,26 @@ function createEdgeDockController(deps) {
   // flag. The native SetWindowPos is the enforcer because Electron's own
   // setAlwaysOnTop stops landing on these transparent frameless windows; the
   // Electron call stays as the cross-platform path.
+  // A surface that was faded out keeps WS_EX_TRANSPARENT (setIgnoreMouseEvents)
+  // until something clears it. Every re-show path clears it, but a state
+  // divergence (retract racing a mode flip, a rebuild mid-fade) could leave a
+  // visible rail permanently input-dead: painted fine, invisible to the
+  // pointer - reads as "the dock cannot be dragged or clicked". The poll
+  // restores input for whatever surface is actually shown.
+  function ensureInputMatchesVisibility() {
+    const shown = { rail: railVisible, peek: peeking, bubble: bubbleVisible };
+    for (const surface of SURFACES) {
+      const win = windows[surface];
+      if (!alive(win) || !win.isVisible()) continue;
+      if (shown[surface] && typeof win.isIgnoreMouseEvents === 'function' && win.isIgnoreMouseEvents()) {
+        win.setIgnoreMouseEvents(false);
+        logger(`[edge-dock] ${surface} was shown with mouse events ignored - input restored`);
+      }
+    }
+  }
+
   function ensureTopmost() {
+    ensureInputMatchesVisibility();
     if (typeof deps.forceTopmostDockWindows === 'function') {
       try {
         const raised = deps.forceTopmostDockWindows();
