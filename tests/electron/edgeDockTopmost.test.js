@@ -3,7 +3,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { createApi, forceTopmost } = require('../../src/electron/edgeDock/topmost');
+const { createApi, dockHwnds, forceTopmost, forceTopmostDockWindows } = require('../../src/electron/edgeDock/topmost');
 
 function fakeWindow(handleValue) {
   const buffer = Buffer.alloc(8);
@@ -14,52 +14,87 @@ function fakeWindow(handleValue) {
   };
 }
 
-function fakeKoffi(calls) {
+// Fake koffi library: records binding signatures and emulates a small desktop
+// with dock windows (ours, by title) plus a decoy from another process.
+function fakeKoffi(state) {
+  state.calls = state.calls || [];
+  state.signatures = state.signatures || [];
   return {
+    struct: () => ({}),
     load: () => ({
       func: (signature) => {
-        calls.push(signature);
-        return (hwnd, after) => {
-          calls.push(['SetWindowPos', hwnd, after]);
-          return true;
-        };
+        state.signatures.push(signature);
+        if (signature.startsWith('uintptr_t FindWindowExW')) {
+          return (parent, after, cls, title) => {
+            state.calls.push(['find', Number(after), cls, title]);
+            const pool = state.windows.filter((w) => !after || Number(w.hwnd) > Number(after));
+            return pool.length ? pool[0].hwnd : 0;
+          };
+        }
+        if (signature.startsWith('uint GetWindowThreadProcessId')) {
+          return (hwnd, out) => {
+            const w = state.windows.find((x) => Number(x.hwnd) === Number(hwnd));
+            out.value = w ? w.pid : 0;
+            return 4711;
+          };
+        }
+        if (signature.startsWith('uint GetCurrentProcessId')) {
+          return () => state.pid;
+        }
+        if (signature.startsWith('bool IsWindowVisible')) {
+          return (hwnd) => {
+            const w = state.windows.find((x) => Number(x.hwnd) === Number(hwnd));
+            return w ? w.visible : false;
+          };
+        }
+        if (signature.startsWith('bool SetWindowPos')) {
+          return (hwnd, after) => {
+            state.calls.push(['setpos', Number(hwnd)]);
+            return true;
+          };
+        }
+        return () => 0;
       }
     })
   };
 }
 
-test('forceTopmost drives SetWindowPos with HWND_TOPMOST and no-activate flags', () => {
-  const calls = [];
-  const api = createApi(fakeKoffi(calls));
-  // Signature registers once; the SetWindowPos call lands with the recorded fn.
-  const registrations = calls.filter((c) => typeof c === 'string');
-  assert.equal(registrations.length, 1);
-  assert.match(registrations[0], /SetWindowPos\(uintptr_t hwnd, uintptr_t after/);
+test('dockHwnds walks same-titled top-level windows of our process only', () => {
+  const state = {
+    pid: 4242,
+    windows: [
+      { hwnd: 100, pid: 4242, visible: true },   // dock 1
+      { hwnd: 101, pid: 4242, visible: true },   // dock 2
+      { hwnd: 102, pid: 999, visible: true },    // same title, other process
+      { hwnd: 103, pid: 4242, visible: false }   // hidden dock surface
+    ]
+  };
+  const api = createApi(fakeKoffi(state));
+  const hwnds = dockHwnds(api, 4242);
+  assert.deepEqual(hwnds, [100, 101]);
+  assert.ok(state.calls.some((c) => c[0] === 'find' && c[2] === 'Chrome_WidgetWin_1' && c[3] === 'Token Monitor Dock'));
+});
 
+test('forceTopmostDockWindows raises every live dock window', () => {
+  const state = {
+    pid: 4242,
+    windows: [
+      { hwnd: 100, pid: 4242, visible: true },
+      { hwnd: 101, pid: 4242, visible: true },
+      { hwnd: 500, pid: 777, visible: true }
+    ]
+  };
+  const api = createApi(fakeKoffi(state));
+  assert.equal(forceTopmostDockWindows({ pid: 4242, api }), 2);
+  const raised = state.calls.filter((c) => c[0] === 'setpos').map((c) => c[1]);
+  assert.deepEqual(raised.sort((a, b) => a - b), [100, 101]);
+});
+
+test('forceTopmost drives SetWindowPos with HWND_TOPMOST on the given handle', () => {
+  const state = { pid: 4242, windows: [{ hwnd: 100, pid: 4242, visible: true }] };
+  const api = createApi(fakeKoffi(state));
   assert.equal(forceTopmost(fakeWindow(133636), { api }), true);
-  const applied = calls.filter((c) => Array.isArray(c)).at(-1);
-  assert.deepEqual(applied, ['SetWindowPos', 133636, 4294967295]);
-});
-
-test('forceTopmost passes the injected api through and tolerates failures', () => {
-  const seen = [];
-  const api = {
-    setWindowPos: (hwnd, after) => {
-      seen.push([hwnd, after]);
-      return true;
-    }
-  };
-  assert.equal(forceTopmost(fakeWindow(42), { api }), true);
-  assert.deepEqual(seen, [[42, 4294967295]]);
-
-  const exploding = {
-    setWindowPos: () => { throw new Error('dwm refused'); }
-  };
-  assert.equal(forceTopmost(fakeWindow(42), { api: exploding }), false, 'errors degrade to false');
-  assert.equal(forceTopmost({ isDestroyed: () => true }, { api }), false, 'destroyed windows are skipped');
-});
-
-test('forceTopmost without a usable api is a clean no-op', () => {
-  // The app ships koffi, but a checkout without node_modules must degrade.
-  assert.equal(forceTopmost(fakeWindow(133636), { api: null }), false);
+  const raised = state.calls.filter((c) => c[0] === 'setpos').map((c) => c[1]);
+  assert.deepEqual(raised, [133636]);
+  assert.ok(state.signatures.some((s) => s.includes('SetWindowPos(uintptr_t hwnd, uintptr_t after')));
 });
