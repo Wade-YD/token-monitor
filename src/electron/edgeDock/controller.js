@@ -1301,17 +1301,25 @@ function createEdgeDockController(deps) {
     }
   }
 
-  // Windows strips WS_EX_TOPMOST from the dock surfaces over a session (shell
-  // z-order banding when other apps activate), and a dock that lost topmost is
-  // invisible-input-dead: painted under whatever normal window covers the edge,
-  // so it reads but cannot be dragged or clicked. isAlwaysOnTop() is a cheap
-  // flag read; re-asserting restores the level the surfaces were built with.
+  // Windows strips WS_EX_TOPMOST from the dock surfaces over a session, and on
+  // v0.63 the constructor's alwaysOnTop never sticks at all (the rail is born
+  // non-topmost and dies as a drag target the moment any normal window covers
+  // the edge - observed as "visible but cannot be dragged"). Electron's
+  // isAlwaysOnTop() reports the stale cached state, so the poll re-asserts
+  // unconditionally: SetWindowPos into the band it already occupies is a cheap
+  // visual no-op, and the guard cannot be defeated by whatever stripped the
+  // flag. The native SetWindowPos is the enforcer because Electron's own
+  // setAlwaysOnTop stops landing on these transparent frameless windows; the
+  // Electron call stays as the cross-platform path.
   function ensureTopmost() {
     for (const surface of SURFACES) {
       const win = windows[surface];
-      if (alive(win) && typeof win.isAlwaysOnTop === 'function' && !win.isAlwaysOnTop()) {
-        win.setAlwaysOnTop(true, 'floating');
+      if (!alive(win)) continue;
+      if (typeof deps.forceTopmost === 'function') {
+        try { deps.forceTopmost(win); } catch (error) { logger(`[edge-dock] forceTopmost failed: ${error.message}`); }
+        continue;
       }
+      win.setAlwaysOnTop(true, 'floating');
     }
   }
 

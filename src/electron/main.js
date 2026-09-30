@@ -450,6 +450,7 @@ const { NOTCH_PANEL_STAT_ITEMS, notchLimitItems, notchPanelItems, notchWeek } = 
 const { createNotchHistory } = require('./notch/history');
 const trayLayoutApi = require('../shared/trayLayout');
 const { createFullScreenProbe } = require('./edgeDock/fullScreenProbe');
+const edgeDockTopmost = require('./edgeDock/topmost');
 const {
   normalizeEdgeDockCustomScale,
   normalizeEdgeDockDisplayId,
@@ -6542,6 +6543,7 @@ function ensureEdgeDockController() {
     rendererDir: path.join(__dirname, 'renderer'),
     preloadPath: path.join(__dirname, 'edgeDock', 'preload.js'),
     getSettings: () => settings,
+    forceTopmost: edgeDockTopmost.forceTopmost,
     nativeGlass: () => nativeBlurEnabled(),
     // The dock follows the widget's glass style unless it has its own; the
     // controller decides whether there is material at all. Reduce Transparency
