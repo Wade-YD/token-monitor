@@ -173,6 +173,11 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
      severityPercent）；最紧池的早期告警保留在额度列表。补丁集增至 33 文件
      （+edgeDock/dock.js），overlay 22 文件、pack 46,660,143 B；CDP 实测 rail 的
      data-severity=ok、文本色恢复正常。edgeDock 131 测试全绿。
+  8) 「侧边栏无法上下拖动」排查（用户手测确认可拖，非应用 bug）：ZCode 本体窗口
+     （1549×925）与 dock rail 重叠时，其视觉透明区仍可命中（Electron 透明区默认
+     吞输入），rail 收不到 pointerdown——表现为看得见拖不动。ZCode 移开或最小化
+     后拖拽正常。教训：挂件可拖拽面失灵时，先用 WindowFromPoint 查命中了谁的
+     窗口，再怀疑应用自身。
 
   6) 完整回归（2026-09-27，22 断言）：**ALL GREEN**（v0.61/v0.63 两轮折叠验收）。
      首跑 19/21——cycle 1/3/5 收回失败，debug 日志显示那几秒零决策记录：窗口本轮
