@@ -1312,6 +1312,16 @@ function createEdgeDockController(deps) {
   // setAlwaysOnTop stops landing on these transparent frameless windows; the
   // Electron call stays as the cross-platform path.
   function ensureTopmost() {
+    if (typeof deps.forceTopmostDockWindows === 'function') {
+      try {
+        const raised = deps.forceTopmostDockWindows();
+        if (deps.dockTopmostDebug) {
+          ensureTopmost.calls = (ensureTopmost.calls || 0) + 1;
+          if (ensureTopmost.calls <= 6) deps.dockTopmostDebug(`[ensureTopmost #${ensureTopmost.calls}] sweep raised=${raised}`);
+        }
+        if (raised > 0) return;
+      } catch (error) { logger(`[edge-dock] forceTopmostDockWindows failed: ${error.message}`); }
+    }
     for (const surface of SURFACES) {
       const win = windows[surface];
       if (!alive(win)) continue;

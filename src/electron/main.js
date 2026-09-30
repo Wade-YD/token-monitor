@@ -6544,6 +6544,12 @@ function ensureEdgeDockController() {
     preloadPath: path.join(__dirname, 'edgeDock', 'preload.js'),
     getSettings: () => settings,
     forceTopmost: edgeDockTopmost.forceTopmost,
+    forceTopmostDockWindows: () => edgeDockTopmost.forceTopmostDockWindows({ pid: process.pid }),
+    // TEMP diagnostic: file-backed logger so the poll's topmost enforcer is
+    // observable without a console. Remove with the topmost stabilization.
+    dockTopmostDebug: (message) => {
+      try { require('fs').appendFileSync(path.join(os.tmpdir(), 'dock-topmost-debug.log'), message + '\n'); } catch (_) {}
+    },
     nativeGlass: () => nativeBlurEnabled(),
     // The dock follows the widget's glass style unless it has its own; the
     // controller decides whether there is material at all. Reduce Transparency
