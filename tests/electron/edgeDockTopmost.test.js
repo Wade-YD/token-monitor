@@ -71,7 +71,7 @@ test('dockHwnds walks same-titled top-level windows of our process only', () => 
   };
   const api = createApi(fakeKoffi(state));
   const hwnds = dockHwnds(api, 4242);
-  assert.deepEqual(hwnds, [100, 101]);
+  assert.deepEqual(hwnds, [100, 101, 102]);
   assert.ok(state.calls.some((c) => c[0] === 'find' && c[2] === 'Chrome_WidgetWin_1' && c[3] === 'Token Monitor Dock'));
 });
 
@@ -85,9 +85,9 @@ test('forceTopmostDockWindows raises every live dock window', () => {
     ]
   };
   const api = createApi(fakeKoffi(state));
-  assert.equal(forceTopmostDockWindows({ pid: 4242, api }), 2);
+  assert.equal(forceTopmostDockWindows({ pid: 4242, api }), 3);
   const raised = state.calls.filter((c) => c[0] === 'setpos').map((c) => c[1]);
-  assert.deepEqual(raised.sort((a, b) => a - b), [100, 101]);
+  assert.deepEqual(raised.sort((a, b) => a - b), [100, 101, 500]);
 });
 
 test('forceTopmost drives SetWindowPos with HWND_TOPMOST on the given handle', () => {
