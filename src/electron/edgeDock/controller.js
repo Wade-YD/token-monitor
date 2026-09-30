@@ -1226,6 +1226,7 @@ function createEdgeDockController(deps) {
       const current = layout();
       syncRailPointer();
       syncBubblePointer();
+      ensureTopmost();
       if (drag) {
         tickDrag(point, current);
       } else if (current) {
@@ -1297,6 +1298,20 @@ function createEdgeDockController(deps) {
       handleDragEnd();
     } else if (current) {
       followDrag(point, current);
+    }
+  }
+
+  // Windows strips WS_EX_TOPMOST from the dock surfaces over a session (shell
+  // z-order banding when other apps activate), and a dock that lost topmost is
+  // invisible-input-dead: painted under whatever normal window covers the edge,
+  // so it reads but cannot be dragged or clicked. isAlwaysOnTop() is a cheap
+  // flag read; re-asserting restores the level the surfaces were built with.
+  function ensureTopmost() {
+    for (const surface of SURFACES) {
+      const win = windows[surface];
+      if (alive(win) && typeof win.isAlwaysOnTop === 'function' && !win.isAlwaysOnTop()) {
+        win.setAlwaysOnTop(true, 'floating');
+      }
     }
   }
 
