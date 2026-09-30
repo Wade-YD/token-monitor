@@ -888,6 +888,28 @@ test('a drag on a larger dock keeps the grab point under the pointer', async (t)
   assert.equal(fixture.placements.at(-1).offset, expected.offset);
 });
 
+test('the poll re-asserts topmost when Windows strips the flag', async (t) => {
+  // Windows removes WS_EX_TOPMOST from the dock surfaces over a session
+  // (shell z-order banding when other apps activate); a dock that lost
+  // topmost still paints but is input-dead under whatever covers the edge.
+  const fixture = createFixture();
+  t.after(() => fixture.controller.stop());
+  for (const win of FakeBrowserWindow.instances) {
+    win.isAlwaysOnTop = () => win.topmostRestored === true;
+    const original = win.setAlwaysOnTop.bind(win);
+    win.setAlwaysOnTop = (...args) => {
+      win.topmostRestored = args[0] === true;
+      return original(...args);
+    };
+  }
+  // One idle poll tick (90ms) is enough to run the guard on every surface.
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.ok(
+    FakeBrowserWindow.instances.every((win) => win.topmostRestored === true),
+    'the poll restores topmost on every dock surface'
+  );
+});
+
 test('Windows Edge Dock falls back to the shaped renderer when native hosting is unavailable', (t) => {
   const fixture = createFixture({ nativeGlass: true });
   t.after(() => fixture.controller.stop());
