@@ -22,16 +22,12 @@ function createApi(koffi) {
   koffi.struct('TOKEN_MONITOR_TOPMOST_PID', { value: 'uint32_t' });
   return {
     findWindowExW: user32.func(
-      'uintptr_t FindWindowExW(uintptr_t parent, uintptr_t after, str class, str title)'
-    ),
-    getWindowThreadProcessId: user32.func(
-      'uint GetWindowThreadProcessId(uintptr_t hwnd, _Out_ TOKEN_MONITOR_TOPMOST_PID *pid)'
+      'uintptr_t FindWindowExW(uintptr_t parent, uintptr_t after, str16 class, str16 title)'
     ),
     setWindowPos: user32.func(
       'bool SetWindowPos(uintptr_t hwnd, uintptr_t after, int x, int y, int cx, int cy, uint flags)'
     ),
-    isWindowVisible: user32.func('bool IsWindowVisible(uintptr_t hwnd)'),
-    currentProcessId: kernel32.func('uint GetCurrentProcessId()')
+    isWindowVisible: user32.func('bool IsWindowVisible(uintptr_t hwnd)')
   };
 }
 
@@ -52,16 +48,16 @@ function loadApi() {
 // main window is titled "Token Monitor"), live in the same window class, and
 // are top-level - so FindWindowExW over that pair finds exactly our dock
 // windows, whichever native shell the JS window currently fronts.
-function dockHwnds(a, pid) {
+function dockHwnds(a) {
   const out = [];
   let after = 0;
   for (;;) {
     const hwnd = a.findWindowExW(0, after, 'Chrome_WidgetWin_1', 'Token Monitor Dock');
     if (!hwnd) break;
     after = hwnd;
-    const owner = { value: 0 };
-    a.getWindowThreadProcessId(hwnd, owner);
-    if (Number(owner.value) !== pid) continue;
+    // The class+title pair is unique to this app's dock surfaces, so no
+    // per-window process check is needed here (and the koffi _Out_ fill was
+    // unreliable on this call path - it silently filtered every match).
     if (!a.isWindowVisible(hwnd)) continue;
     out.push(Number(hwnd));
   }
@@ -74,9 +70,8 @@ function dockHwnds(a, pid) {
 function forceTopmostDockWindows(deps = {}) {
   const a = deps.api || loadApi();
   if (!a) return 0;
-  const pid = deps.pid || a.currentProcessId();
   let raised = 0;
-  for (const hwnd of dockHwnds(a, pid)) {
+  for (const hwnd of dockHwnds(a)) {
     try {
       if (a.setWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE)) raised += 1;
     } catch (_) { /* one bad window must not stop the sweep */ }

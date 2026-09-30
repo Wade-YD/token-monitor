@@ -6163,7 +6163,7 @@ function ensureEdgeDockController() {
     preloadPath: path.join(__dirname, 'edgeDock', 'preload.js'),
     getSettings: () => settings,
     forceTopmost: edgeDockTopmost.forceTopmost,
-    forceTopmostDockWindows: () => edgeDockTopmost.forceTopmostDockWindows({ pid: process.pid }),
+    forceTopmostDockWindows: () => edgeDockTopmost.forceTopmostDockWindows({ pid: process.pid, firstProbe: (m) => { try { require('fs').appendFileSync(require('path').join(require('os').tmpdir(), 'dock-topmost-debug.log'), '[firstProbe] ' + m + String.fromCharCode(10)); } catch (_) {} } }),
     // TEMP diagnostic: file-backed logger so the poll's topmost enforcer is
     // observable without a console. Remove with the topmost stabilization.
     dockTopmostDebug: (message) => {
