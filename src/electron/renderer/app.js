@@ -427,6 +427,8 @@ Object.assign(els, {
   projectBreakdownFooter: document.getElementById('projectBreakdownFooter'),
   projectBreakdownFooterTools: document.getElementById('projectBreakdownFooterTools'),
   projectBreakdownFooterModels: document.getElementById('projectBreakdownFooterModels'),
+  sessionSortToggle: document.getElementById('sessionSortToggle'),
+  sessionSortToggleLabel: document.getElementById('sessionSortToggleLabel'),
   monthPeriodMenu: document.getElementById('monthPeriodMenu'),
   monthPeriodTab: document.getElementById('monthPeriodTab'),
   periodMonthModeInput: document.getElementById('periodMonthModeInput')
@@ -716,6 +718,14 @@ els.toolDetailFooterTokens.addEventListener('click', () => setActiveToolDetailMo
 els.toolDetailFooterModels.addEventListener('click', () => setActiveToolDetailMode('models'));
 els.projectBreakdownFooterTools.addEventListener('click', () => { void saveSettings({ projectBreakdownMode: 'tool' }).catch(() => {}); });
 els.projectBreakdownFooterModels.addEventListener('click', () => { void saveSettings({ projectBreakdownMode: 'model' }).catch(() => {}); });
+
+els.sessionSortToggle?.addEventListener('click', () => {
+  const next = sessionSortMode() === 'tokens' ? 'recent' : 'tokens';
+  if (state.settings) state.settings.sessionSortMode = next;
+  updateSessionSortToggle();
+  render();
+  saveSettings({ sessionSortMode: next }).catch(() => {});
+});
 
 document.addEventListener('pointerdown', (event) => {
   if (state.viewSwitcherOpen && !event.target.closest('#viewSwitcher')) {
@@ -1156,6 +1166,7 @@ function scheduleDisplayLiveTokenRateExpiry() {
     void maybeUpdateBarsIcon({ refreshComposers: false });
     renderFloatingBubbleContent();
     if (isSettingsSurfaceVisible()) refreshTrayComposers();
+    updateSessionSortToggle();
     scheduleDisplayLiveTokenRateExpiry();
   }, Math.max(0, Math.min(...expiries) - Date.now()) + 10);
 }
@@ -3648,6 +3659,21 @@ function modelRowsForPeriod(period, rankingMetric = state.settings?.modelRanking
   return toolRowsForPeriod(period);
 }
 
+function sessionSortMode() {
+  return sessionRowsApi.normalizeSessionSortMode(state.settings?.sessionSortMode);
+}
+
+function updateSessionSortToggle() {
+  if (!els.sessionSortToggle) return;
+  const visible = state.breakdown === 'session';
+  els.sessionSortToggle.classList.toggle('hidden', !visible);
+  const mode = sessionSortMode();
+  els.sessionSortToggleLabel.textContent = mode === 'tokens'
+    ? t('home.sessionSort.tokens')
+    : t('home.sessionSort.recent');
+  els.sessionSortToggle.setAttribute('aria-pressed', String(mode === 'tokens'));
+}
+
 function sessionPresentationOptions() {
   const localDevice = state.stats?.devices?.find(device => device.deviceId === state.settings?.deviceId);
   return {
@@ -3665,6 +3691,9 @@ function sessionPresentationOptions() {
     nativeSessions: state.stats?.nativeSessions?.[state.period] || {},
     localSourceDevice: localDevice ? { deviceId: localDevice.deviceId,
       name: deviceBreakdownApi.deviceLabel(localDevice), platform: localDevice.platform || '', deviceKind: localDevice.deviceKind || 'computer' } : undefined,
+
+    sortMode: sessionSortMode(),
+
     subagents: {
       countLabel: (count) => t('sessions.subagentCount', { count }),
       latestModelLabel: t('session.latestModel'),
@@ -3697,7 +3726,11 @@ function sessionRowsForPeriod(period) {
   const options = sessionPresentationOptions();
   if (state.breakdown === 'session') options.rowLabelCache = sessionRowLabelCache;
   const rows = rawSessionRowsForPeriod(period, options);
-  if (rows.length > 0) return sessionRowsApi.groupSessionRows(rows, options);
+  if (rows.length > 0) {
+    const sortMode = sessionSortMode();
+    rows.sort((a, b) => sessionRowsApi.compareSessionRows(a, b, sortMode));
+    return sessionRowsApi.groupSessionRows(rows, options);
+  }
   if (Number(period?.totalTokens || 0) === 0) return [];
   return modelRowsForPeriod(period);
 }
