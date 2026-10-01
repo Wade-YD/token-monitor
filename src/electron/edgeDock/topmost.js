@@ -106,7 +106,9 @@ function forceTopmostDockWindows(deps = {}) {
   }
   if (typeof deps.onHwndSetChange === 'function') {
     const all = dockHwnds(a, { includeHidden: true });
-    const key = all.join(',');
+    // FindWindowExW walks in z-order, which our own sweep rotates every tick -
+    // compare (and report) the identity SET, order-insensitively.
+    const key = [...all].sort((x, y) => x - y).join(',');
     if (lastHwndKey !== null && key !== lastHwndKey) {
       try { deps.onHwndSetChange({ hwnds: all, previous: lastHwndKey }); } catch (_) {}
     }
