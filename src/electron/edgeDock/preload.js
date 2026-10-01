@@ -9,6 +9,9 @@ contextBridge.exposeInMainWorld('tokenMonitorEdgeDock', {
   ready: () => ipcRenderer.send('edgeDock:ready'),
   click: (cellIndex) => ipcRenderer.send('edgeDock:click', { cellIndex }),
   pointer: () => ipcRenderer.send('edgeDock:pointer'),
+  // Fired on every pointerdown the page actually receives; the main process
+  // uses it as a liveness ack for the input replay fallback.
+  inputAck: () => ipcRenderer.send('edgeDock:inputAck'),
   dragStart: (grabOffsetY, grabOffsetX, gestureId) => ipcRenderer.send('edgeDock:dragStart', { grabOffsetY, grabOffsetX, gestureId }),
   dragFrame: (gestureId) => ipcRenderer.send('edgeDock:dragFrame', { gestureId }),
   dragEnd: () => ipcRenderer.send('edgeDock:dragEnd'),

@@ -3,7 +3,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { createApi, dockHwnds, forceTopmost, forceTopmostDockWindows } = require('../../src/electron/edgeDock/topmost');
+const { createApi, dockHwnds, forceTopmost, forceTopmostDockWindows, probeDockInput } = require('../../src/electron/edgeDock/topmost');
 
 function fakeWindow(handleValue) {
   const buffer = Buffer.alloc(8);
@@ -47,10 +47,17 @@ function fakeKoffi(state) {
             return w ? w.visible : false;
           };
         }
-        if (signature.startsWith('bool SetWindowPos')) {
+        if (signature.startsWith('bool SetWindowPos') || signature.startsWith('int SetWindowPos')) {
           return (hwnd, after) => {
-            state.calls.push(['setpos', Number(hwnd)]);
-            return true;
+            state.calls.push(['setpos', Number(hwnd), Number(after)]);
+            return 1;
+          };
+        }
+        if (signature.startsWith('intptr_t SendMessageW')) {
+          return (hwnd, msg, wp, lp) => {
+            state.calls.push(['sendmsg', Number(hwnd), Number(msg), Number(lp)]);
+            const w = state.windows.find((x) => Number(x.hwnd) === Number(hwnd));
+            return w ? w.mouseActivate : 3;
           };
         }
         return () => 0;
@@ -96,5 +103,58 @@ test('forceTopmost drives SetWindowPos with HWND_TOPMOST on the given handle', (
   assert.equal(forceTopmost(fakeWindow(133636), { api }), true);
   const raised = state.calls.filter((c) => c[0] === 'setpos').map((c) => c[1]);
   assert.deepEqual(raised, [133636]);
-  assert.ok(state.signatures.some((s) => s.includes('SetWindowPos(uintptr_t hwnd, uintptr_t after')));
+  // The "after" parameter must be intptr_t: uintptr_t zero-extends a JS
+  // 0xFFFFFFFF into an invalid 64-bit handle and SetWindowPos never lands.
+  assert.ok(state.signatures.some((s) => s.includes('SetWindowPos(uintptr_t hwnd, intptr_t after')));
+  assert.ok(state.calls.some((c) => c[0] === 'setpos' && c[2] === -1));
+});
+
+test('probeDockInput reports the eat-clicks state from WM_MOUSEACTIVATE answers', () => {
+  const state = {
+    pid: 4242,
+    windows: [
+      { hwnd: 100, pid: 4242, visible: true, mouseActivate: 4 },
+      { hwnd: 101, pid: 4242, visible: true, mouseActivate: 3 },
+      { hwnd: 102, pid: 4242, visible: false, mouseActivate: 4 } // hidden: not probed
+    ]
+  };
+  const api = createApi(fakeKoffi(state));
+  const probe = probeDockInput({ api });
+  assert.equal(probe.broken, true);
+  assert.deepEqual(probe.hwnds, [100, 101]);
+  assert.deepEqual(probe.codes, [4, 3]);
+  assert.ok(state.calls.some((c) => c[0] === 'sendmsg' && c[1] === 100 && c[2] === 0x0021));
+});
+
+test('probeDockInput reports healthy when every visible window answers MA_NOACTIVATE', () => {
+  const state = {
+    pid: 4242,
+    windows: [
+      { hwnd: 100, pid: 4242, visible: true, mouseActivate: 3 },
+      { hwnd: 101, pid: 4242, visible: true, mouseActivate: 3 }
+    ]
+  };
+  const api = createApi(fakeKoffi(state));
+  const probe = probeDockInput({ api });
+  assert.equal(probe.broken, false);
+});
+
+test('forceTopmostDockWindows reports hwnd set changes for rebuild tracking', () => {
+  const state = {
+    pid: 4242,
+    windows: [
+      { hwnd: 100, pid: 4242, visible: true },
+      { hwnd: 101, pid: 4242, visible: true }
+    ]
+  };
+  const changes = [];
+  const api = createApi(fakeKoffi(state));
+  forceTopmostDockWindows({ api, onHwndSetChange: (info) => changes.push(info) });
+  assert.deepEqual(changes, []); // first observation records silently
+  state.windows[0].visible = false; // hidden surfaces stay in the tracked set: a rebuild swaps every hwnd
+  state.windows.push({ hwnd: 500, pid: 4242, visible: true });
+  forceTopmostDockWindows({ api, onHwndSetChange: (info) => changes.push(info) });
+  assert.equal(changes.length, 1);
+  assert.deepEqual(changes[0].hwnds, [100, 101, 500]);
+  assert.equal(changes[0].previous, '100,101');
 });
