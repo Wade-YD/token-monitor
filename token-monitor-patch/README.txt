@@ -412,3 +412,31 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
      应用级状态（嫌疑：锁屏/显示器事件引发的 shell 重建）。已布好的探针网：
      hwnd 集变更日志 + MA 状态变化日志 + 页面 ack 时间戳，下次复发直接读
      %TEMP%\token-monitor-edge-error.log 时间线。
+
+【升级记录（2026-10-01，v0.63.0 → v0.64.0）】
+  1) 上游 v0.64.0：20+ 提交、205 文件（+17193/−1027）。两个 edge-dock 提交正落
+     我们改动区：bc603e6 全屏自动隐藏（新 fullScreenProbe.js，Windows 走 DWM
+     cloaked+z 序探测）+ 590b964 rail 配额窗口选择。Electron 依赖不变（43.4.0），
+     原生层修复全部继续有效。
+  2) 安装包：API digest sha256 d8a715c1… 实测 MATCH（Token-Monitor-Setup-0.64.0.exe，
+     119,729,968 B，CDP 直链一次拉满）。旧锚点先移存 opencode\v0630-anchors\ →
+     /S 静默安装 → 重建锚点 app.asar.v0640-official.bak + .unpacked 双胞胎。
+  3) rebase 30 提交，4 处冲突全语义合并：sessionMetadata（grok+zcode 共存，照
+     devin+zcode 先例）；app.js sort-mode（⚠️ 我们与上游各实现了同型切换——但
+     上游 v0.64.0 实际没有 sessionSortMode，冲突另一侧是我们自己的历史结构，
+     取上游版把功能整个丢了：app.js 接线全部丢失、上游 grep 测试红。已用
+     7 处外科手术补回并加修复提交 8b67fd5；教训：**解决冲突前先
+     git grep <标识符> v0.64.0 -- src/ 验证"上游侧"到底是谁的**）；main.js
+     require 区（fullScreenProbe 与 edgeDockTopmost 并存）；controller.js 状态
+     区（fullScreen 与 inputHeal 并存，poll 里两个新调用错行自动共存）。
+  4) 测试：5489 用例 5476 过；3 红均为 symlink EPERM 环境限制（与 v0.63 轮相同）。
+     中途两个源码结构测试被 sort-mode 恢复打地鼠（render 切片求值 + 紧邻断言），
+     最终把 updateSessionSortToggle() 放在 refreshTrayComposers() 之后解决。
+  5) 交付：全新解包 asar-extracted-v064（含上游 fullScreenProbe.js）→ overlay
+     25 文件（git diff 派生，脚本已加 makedirs）→ 双向内容断言 10/10（我们的
+     输入回放/ack/topmost + 上游全屏模式/grok）→ pack 46,939,873 B → 换装 →
+     启动零对话框。真实 SendInput 拖拽 moved=True（y=170→525 跟手），恢复拖拽
+     正常。deliver_finalize.py 常量已适配 v064。
+  6) 待办：22 断言全量回归留机器空闲时跑；上游新功能「侧边栏全屏自动隐藏」
+     （edgeDockMode: 'alwaysExceptFullScreen'）留用户手测——它复用同一 poll，
+     自动获得我们的输入回放与 topmost 保护。
