@@ -5,6 +5,13 @@
 // projected data and reports input and measured content size.
 
 const bridge = window.tokenMonitorEdgeDock;
+// Liveness ack: the main process compares this timestamp against the OS button
+// state to tell a healthy input path from the eat-clicks state (Electron
+// answers WM_MOUSEACTIVATE with MA_NOACTIVATEANDEAT after a native shell
+// rebuild) and only replays presses over the debugger while this is missing.
+document.addEventListener('pointerdown', () => {
+  try { bridge.inputAck(); } catch (_) {}
+}, true);
 const presentation = window.TokenMonitorEdgeDockPresentation;
 // The running reading is derived from the projected rows at paint time rather than
 // frozen into the cell, so the rail and the card answer at the same clock (see

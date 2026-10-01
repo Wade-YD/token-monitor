@@ -6163,12 +6163,14 @@ function ensureEdgeDockController() {
     preloadPath: path.join(__dirname, 'edgeDock', 'preload.js'),
     getSettings: () => settings,
     forceTopmost: edgeDockTopmost.forceTopmost,
-    forceTopmostDockWindows: () => edgeDockTopmost.forceTopmostDockWindows({ pid: process.pid, firstProbe: (m) => { try { require('fs').appendFileSync(require('path').join(require('os').tmpdir(), 'dock-topmost-debug.log'), '[firstProbe] ' + m + String.fromCharCode(10)); } catch (_) {} } }),
-    // TEMP diagnostic: file-backed logger so the poll's topmost enforcer is
-    // observable without a console. Remove with the topmost stabilization.
-    dockTopmostDebug: (message) => {
-      try { require('fs').appendFileSync(path.join(os.tmpdir(), 'dock-topmost-debug.log'), message + '\n'); } catch (_) {}
-    },
+    clearMouseTransparent: edgeDockTopmost.clearMouseTransparent,
+    forceTopmostDockWindows: () => edgeDockTopmost.forceTopmostDockWindows({
+      onHwndSetChange: (info) => edgeLog('edge-dock', `dock hwnd set changed: ${info.hwnds.join(',')} (was ${info.previous})`)
+    }),
+    // Asks the dock windows how they treat a real click; the controller uses
+    // it to detect and self-heal the MA_NOACTIVATEANDEAT state that eats every
+    // hardware click after a native shell rebuild.
+    probeDockInput: () => edgeDockTopmost.probeDockInput(),
     nativeGlass: () => nativeBlurEnabled(),
     // The dock follows the widget's glass style unless it has its own; the
     // controller decides whether there is material at all. Reduce Transparency

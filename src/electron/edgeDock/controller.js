@@ -90,6 +90,7 @@ function createEdgeDockController(deps) {
     applyShapeMask,
     installNonActivatingInput = () => {},
     primaryButtonDown = () => null,
+    probeDockInput = null,
     onToggleRateMode,
     onSwitchCodexAccount,
     canRefreshLimits = () => false,
@@ -176,6 +177,20 @@ function createEdgeDockController(deps) {
   let placementOverride = null;
   let fullScreen = false;
   let fullScreenCheckedAt = -Infinity;
+  // Dock input health. Electron 43 answers WM_MOUSEACTIVATE with
+  // MA_NOACTIVATEANDEAT on these windows after a native shell rebuild, which
+  // eats every hardware click while hover moves keep flowing ("paints fine,
+  // cannot be dragged"). The poll probes for that state, tries to recover via
+  // a focusable toggle, and otherwise replays presses into the page through
+  // the debugger protocol, which bypasses the broken OS activation path.
+  const inputHeal = {
+    broken: false,
+    lastProbeAt: 0,
+    replayArmed: false,
+    lastAckAt: { peek: 0, rail: 0, bubble: 0 },
+    // { surface, pendingSince, replaying, lastX, lastY } while a press is held
+    replay: null
+  };
   let ipcRegistered = false;
   let displayListenersAttached = false;
   const shapes = { peek: null, rail: null, bubble: null };
@@ -1212,7 +1227,9 @@ function createEdgeDockController(deps) {
     const snapshot = intent.snapshot();
     // The approach zone is on the way to the handle, and only the poll lets the
     // handle take the pointer, so it runs at the active rate from there on.
-    const delay = edgeDockPollDelay({ drag, revealed: snapshot.revealed, near: peekNear });
+    // The approach zone is on the way to the handle, and only the poll lets the
+    // handle take the pointer, so it runs at the active rate from there on.
+    const delay = edgeDockPollDelay({ drag, replay: Boolean(inputHeal.replayArmed), revealed: snapshot.revealed, near: peekNear });
     pollTimer = setTimeout(poll, delay);
   }
 
@@ -1225,6 +1242,7 @@ function createEdgeDockController(deps) {
       syncRailPointer();
       syncBubblePointer();
       ensureTopmost();
+      tickInputReplay(point, current);
       if (drag) {
         tickDrag(point, current);
       } else if (current) {
@@ -1315,23 +1333,194 @@ function createEdgeDockController(deps) {
     for (const surface of SURFACES) {
       const win = windows[surface];
       if (!alive(win) || !win.isVisible()) continue;
-      if (shown[surface] && typeof win.isIgnoreMouseEvents === 'function' && win.isIgnoreMouseEvents()) {
+      // The native clear is unconditional for shown surfaces: Electron's
+      // isIgnoreMouseEvents() reports its cached flag (which lies after a
+      // rebuild) while the OS style can still be click-through.
+      if (!shown[surface]) continue;
+      let cleared = false;
+      if (typeof deps.clearMouseTransparent === 'function') {
+        try { cleared = deps.clearMouseTransparent(win); } catch (_) { cleared = false; }
+      }
+      if (typeof win.isIgnoreMouseEvents === 'function' && win.isIgnoreMouseEvents()) {
         win.setIgnoreMouseEvents(false);
-        logger(`[edge-dock] ${surface} was shown with mouse events ignored - input restored`);
+        cleared = true;
+      }
+      if (cleared && surface === 'rail') {
+        logger(`[edge-dock] rail was shown with mouse events ignored - input restored`);
       }
     }
   }
 
+  const INPUT_PROBE_INTERVAL_MS = 2000;
+  // How long a held press may stay un-acked before the poll concludes the page
+  // never received it and replays the press over the debugger protocol.
+  const REPLAY_ACK_WAIT_MS = 120;
+
+  function probeBroken() {
+    if (typeof deps.probeDockInput !== 'function') return null;
+    try {
+      return deps.probeDockInput();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // Electron's focusable flag feeds the same views state that answers
+  // WM_MOUSEACTIVATE; toggling it re-applies the activation policy that the
+  // native shell rebuild left in the eat-clicks state. If dropping back to
+  // focusable=false re-brokes the probe, focus stays on: clicks then activate
+  // the dock (reveals use showInactive, so they still never steal focus),
+  // which is far less bad than a dead surface.
+  function tryInputRecovery() {
+    const win = windows.rail;
+    if (!alive(win)) return false;
+    for (const wantFocusable of [true, false]) {
+      try {
+        win.setFocusable(wantFocusable);
+      } catch (_) {
+        return false;
+      }
+      const probe = probeBroken();
+      if (probe && !probe.broken) {
+        if (!wantFocusable) return true;
+        try { win.setFocusable(false); } catch (_) {}
+        const again = probeBroken();
+        if (again && !again.broken) return true;
+        logger('[edge-dock] input recovery: keeping focusable=true (focusable=false re-brokes clicks; dock clicks will activate the window)');
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function ensureInputAlive() {
+    if (typeof deps.probeDockInput !== 'function') return;
+    const now = Date.now();
+    if (now - inputHeal.lastProbeAt < INPUT_PROBE_INTERVAL_MS) return;
+    inputHeal.lastProbeAt = now;
+    const probe = probeBroken();
+    if (!probe) return;
+    if (probe.broken === inputHeal.broken) return;
+    if (!probe.broken) {
+      inputHeal.broken = false;
+      inputHeal.replayArmed = false;
+      logger('[edge-dock] dock input healthy again (WM_MOUSEACTIVATE = MA_NOACTIVATE)');
+      return;
+    }
+    inputHeal.broken = true;
+    logger('[edge-dock] dock input dead: WM_MOUSEACTIVATE = MA_NOACTIVATEANDEAT (native shell rebuild flip) - attempting recovery');
+    if (tryInputRecovery()) {
+      inputHeal.broken = false;
+      logger('[edge-dock] dock input recovered via focusable toggle');
+    } else {
+      inputHeal.replayArmed = true;
+      logger('[edge-dock] recovery failed - pointer replay fallback armed (presses injected via debugger)');
+    }
+  }
+
+  function replayClientPoint(point, surface) {
+    const win = windows[surface];
+    if (!alive(win)) return null;
+    const bounds = win.getContentBounds();
+    return { x: Math.round(point.x - bounds.x), y: Math.round(point.y - bounds.y) };
+  }
+
+  function dispatchReplayMouse(surface, type, x, y) {
+    const win = windows[surface];
+    if (!alive(win)) return false;
+    try {
+      const dbg = win.webContents.debugger;
+      if (!dbg.isAttached()) dbg.attach('1.3');
+      dbg.sendCommand('Input.dispatchMouseEvent', {
+        type,
+        x,
+        y,
+        button: 'left',
+        buttons: type === 'mouseReleased' ? 0 : 1,
+        clickCount: 1,
+        pointerType: 'mouse'
+      });
+      return true;
+    } catch (error) {
+      logger(`[edge-dock] input replay ${type} failed: ${error.message}`);
+      inputHeal.replayArmed = false;
+      inputHeal.replay = null;
+      return false;
+    }
+  }
+
+  function surfaceAtPoint(point, current) {
+    if (!current) return null;
+    if (bubbleVisible && current.bubble && rectContains(current.bubble, point)) return 'bubble';
+    if (railVisible && rectContains(current.rail, point)) return 'rail';
+    if (peeking && current.peek && rectContains(current.peek, point)) return 'peek';
+    return null;
+  }
+
+  // Press-replay fallback, driven from the poll while replayArmed. The OS
+  // eats button presses in the broken state, so the poll injects them into the
+  // page itself; the page keeps every gesture semantic (threshold,
+  // click-vs-drag, capture) because the injected events are indistinguishable
+  // from real ones there. Replay only fires while the page's own pointerdown
+  // ack is missing, so a healthy input path never sees a double press.
+  function tickInputReplay(point, current) {
+    if (!inputHeal.replayArmed) return;
+    const down = primaryButtonDown();
+    if (down === null) return;
+    const state = inputHeal.replay;
+    if (down === false) {
+      if (state && state.replaying) {
+        const at = replayClientPoint(point, state.surface);
+        if (at) dispatchReplayMouse(state.surface, 'mouseReleased', at.x, at.y);
+      }
+      inputHeal.replay = null;
+      return;
+    }
+    if (state && state.replaying) {
+      const at = replayClientPoint(point, state.surface);
+      if (at && (at.x !== state.lastX || at.y !== state.lastY)) {
+        state.lastX = at.x;
+        state.lastY = at.y;
+        dispatchReplayMouse(state.surface, 'mouseMoved', at.x, at.y);
+      }
+      return;
+    }
+    const surface = surfaceAtPoint(point, current);
+    if (!surface) {
+      inputHeal.replay = null;
+      return;
+    }
+    const now = Date.now();
+    if (!state) {
+      // A healthy page acks its pointerdown within a few milliseconds, so an
+      // ack this fresh means this very press (or one a beat earlier) already
+      // arrived natively and replay would only double it.
+      if (inputHeal.lastAckAt[surface] > now - 300) return;
+      inputHeal.replay = { surface, pendingSince: now, replaying: false, lastX: -1, lastY: -1 };
+      return;
+    }
+    if (inputHeal.lastAckAt[surface] > state.pendingSince) {
+      inputHeal.replay = null;
+      return;
+    }
+    if (now - state.pendingSince < REPLAY_ACK_WAIT_MS) return;
+    const at = replayClientPoint(point, surface);
+    if (!at) {
+      inputHeal.replay = null;
+      return;
+    }
+    state.replaying = true;
+    state.lastX = at.x;
+    state.lastY = at.y;
+    dispatchReplayMouse(surface, 'mousePressed', at.x, at.y);
+  }
+
   function ensureTopmost() {
     ensureInputMatchesVisibility();
+    ensureInputAlive();
     if (typeof deps.forceTopmostDockWindows === 'function') {
       try {
-        const raised = deps.forceTopmostDockWindows();
-        if (deps.dockTopmostDebug) {
-          ensureTopmost.calls = (ensureTopmost.calls || 0) + 1;
-          if (ensureTopmost.calls <= 6) deps.dockTopmostDebug(`[ensureTopmost #${ensureTopmost.calls}] sweep raised=${raised}`);
-        }
-        if (raised > 0) return;
+        if (deps.forceTopmostDockWindows() > 0) return;
       } catch (error) { logger(`[edge-dock] forceTopmostDockWindows failed: ${error.message}`); }
     }
     for (const surface of SURFACES) {
@@ -1493,6 +1682,15 @@ function createEdgeDockController(deps) {
     });
     ipcMain.on('edgeDock:cardFrame', (event, payload) => {
       if (surfaceFor(event.sender) === 'bubble') cardFrameDriver.frame(payload?.motionId);
+    });
+    // The page pings this on every pointerdown it actually receives. The input
+    // replay fallback compares the timestamp against the OS button state to
+    // tell a healthy input path from the eat-clicks state, so it must stay a
+    // bare notification - the page reports that it heard the press and nothing
+    // more.
+    ipcMain.on('edgeDock:inputAck', (event) => {
+      const surface = surfaceFor(event.sender);
+      if (surface) inputHeal.lastAckAt[surface] = Date.now();
     });
     ipcMain.on('edgeDock:dragEnd', (event) => {
       if (surfaceFor(event.sender) !== 'rail') return;

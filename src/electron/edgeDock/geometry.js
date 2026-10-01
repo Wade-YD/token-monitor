@@ -72,8 +72,10 @@ const EDGE_DOCK_TIMING = Object.freeze({
   bubbleDelayMs: 70
 });
 
-function edgeDockPollDelay({ drag, revealed, near }) {
-  return drag ? 16 : (revealed || near ? 40 : 90);
+function edgeDockPollDelay({ drag, replay, revealed, near }) {
+  // The input replay fallback needs the drag cadence while a press is held,
+  // or the injected drag would stutter.
+  return (drag || replay) ? 16 : (revealed || near ? 40 : 90);
 }
 
 // `alwaysExceptFullScreen` behaves as `always` on the desktop and as
