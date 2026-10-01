@@ -186,7 +186,6 @@ function createEdgeDockController(deps) {
   const inputHeal = {
     broken: false,
     lastProbeAt: 0,
-    replayArmed: false,
     lastAckAt: { peek: 0, rail: 0, bubble: 0 },
     // { surface, pendingSince, replaying, lastX, lastY } while a press is held
     replay: null
@@ -1227,9 +1226,7 @@ function createEdgeDockController(deps) {
     const snapshot = intent.snapshot();
     // The approach zone is on the way to the handle, and only the poll lets the
     // handle take the pointer, so it runs at the active rate from there on.
-    // The approach zone is on the way to the handle, and only the poll lets the
-    // handle take the pointer, so it runs at the active rate from there on.
-    const delay = edgeDockPollDelay({ drag, replay: Boolean(inputHeal.replayArmed), revealed: snapshot.revealed, near: peekNear });
+    const delay = edgeDockPollDelay({ drag, replay: Boolean(inputHeal.replay), revealed: snapshot.revealed, near: peekNear });
     pollTimer = setTimeout(poll, delay);
   }
 
@@ -1365,34 +1362,14 @@ function createEdgeDockController(deps) {
     }
   }
 
-  // Electron's focusable flag feeds the same views state that answers
-  // WM_MOUSEACTIVATE; toggling it re-applies the activation policy that the
-  // native shell rebuild left in the eat-clicks state. If dropping back to
-  // focusable=false re-brokes the probe, focus stays on: clicks then activate
-  // the dock (reveals use showInactive, so they still never steal focus),
-  // which is far less bad than a dead surface.
-  function tryInputRecovery() {
-    const win = windows.rail;
-    if (!alive(win)) return false;
-    for (const wantFocusable of [true, false]) {
-      try {
-        win.setFocusable(wantFocusable);
-      } catch (_) {
-        return false;
-      }
-      const probe = probeBroken();
-      if (probe && !probe.broken) {
-        if (!wantFocusable) return true;
-        try { win.setFocusable(false); } catch (_) {}
-        const again = probeBroken();
-        if (again && !again.broken) return true;
-        logger('[edge-dock] input recovery: keeping focusable=true (focusable=false re-brokes clicks; dock clicks will activate the window)');
-        return true;
-      }
-    }
-    return false;
-  }
-
+  // Observability only. WM_MOUSEACTIVATE answers were once suspected as the
+  // eat-clicks mechanism, but a controlled experiment (SendInput clicks against
+  // a focusable:false window reporting its own events) showed the real input
+  // path reaches the page with MA=4, so the answer is not the gate. The dock's
+  // actual resilience comes from the ack-gated replay below: a healthy page
+  // acks its presses and the replay stays dormant; a page that stops acking
+  // gets its presses injected over the debugger protocol, which reaches it in
+  // every state we have been able to produce.
   function ensureInputAlive() {
     if (typeof deps.probeDockInput !== 'function') return;
     const now = Date.now();
@@ -1401,21 +1378,8 @@ function createEdgeDockController(deps) {
     const probe = probeBroken();
     if (!probe) return;
     if (probe.broken === inputHeal.broken) return;
-    if (!probe.broken) {
-      inputHeal.broken = false;
-      inputHeal.replayArmed = false;
-      logger('[edge-dock] dock input healthy again (WM_MOUSEACTIVATE = MA_NOACTIVATE)');
-      return;
-    }
-    inputHeal.broken = true;
-    logger('[edge-dock] dock input dead: WM_MOUSEACTIVATE = MA_NOACTIVATEANDEAT (native shell rebuild flip) - attempting recovery');
-    if (tryInputRecovery()) {
-      inputHeal.broken = false;
-      logger('[edge-dock] dock input recovered via focusable toggle');
-    } else {
-      inputHeal.replayArmed = true;
-      logger('[edge-dock] recovery failed - pointer replay fallback armed (presses injected via debugger)');
-    }
+    inputHeal.broken = probe.broken;
+    logger(`[edge-dock] dock windows answer WM_MOUSEACTIVATE with ${probe.broken ? 'MA_NOACTIVATEANDEAT (expected on this Electron; input replay fallback covers presses)' : 'MA_NOACTIVATE'}; codes=${probe.codes.join(',')}`);
   }
 
   function replayClientPoint(point, surface) {
@@ -1443,7 +1407,6 @@ function createEdgeDockController(deps) {
       return true;
     } catch (error) {
       logger(`[edge-dock] input replay ${type} failed: ${error.message}`);
-      inputHeal.replayArmed = false;
       inputHeal.replay = null;
       return false;
     }
@@ -1457,14 +1420,14 @@ function createEdgeDockController(deps) {
     return null;
   }
 
-  // Press-replay fallback, driven from the poll while replayArmed. The OS
-  // eats button presses in the broken state, so the poll injects them into the
-  // page itself; the page keeps every gesture semantic (threshold,
+  // Press-replay fallback, driven from the poll. When the dock's input path
+  // dies (the recurring "paints fine, cannot be dragged" state), the OS never
+  // delivers button presses, so the poll injects them into the page through
+  // the debugger protocol; the page keeps every gesture semantic (threshold,
   // click-vs-drag, capture) because the injected events are indistinguishable
-  // from real ones there. Replay only fires while the page's own pointerdown
-  // ack is missing, so a healthy input path never sees a double press.
+  // from real ones there. The page's own pointerdown ack is the health signal:
+  // while acks flow the replay never fires, so a healthy dock pays nothing.
   function tickInputReplay(point, current) {
-    if (!inputHeal.replayArmed) return;
     const down = primaryButtonDown();
     if (down === null) return;
     const state = inputHeal.replay;
