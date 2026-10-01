@@ -232,6 +232,468 @@ index 0000000..20381e1
 +  edgeSnapToBounds,
 +  edgeTriggerHitTest
 +};
+diff --git a/src/electron/edgeDock/controller.js b/src/electron/edgeDock/controller.js
+index 550728f..9d68dc2 100644
+--- a/src/electron/edgeDock/controller.js
++++ b/src/electron/edgeDock/controller.js
+@@ -64,6 +64,7 @@ function createEdgeDockController(deps) {
+     onPlacementChange,
+     applyShapeMask,
+     primaryButtonDown = () => null,
++    probeDockInput = null,
+     onToggleRateMode,
+     onSwitchCodexAccount,
+     onOpenResetForecastSource,
+@@ -100,6 +101,19 @@ function createEdgeDockController(deps) {
+   let peeking = false;
+   let drag = null;
+   let placementOverride = null;
++  // Dock input health. Electron 43 answers WM_MOUSEACTIVATE with
++  // MA_NOACTIVATEANDEAT on these windows after a native shell rebuild, which
++  // eats every hardware click while hover moves keep flowing ("paints fine,
++  // cannot be dragged"). The poll probes for that state, tries to recover via
++  // a focusable toggle, and otherwise replays presses into the page through
++  // the debugger protocol, which bypasses the broken OS activation path.
++  const inputHeal = {
++    broken: false,
++    lastProbeAt: 0,
++    lastAckAt: { peek: 0, rail: 0, bubble: 0 },
++    // { surface, pendingSince, replaying, lastX, lastY } while a press is held
++    replay: null
++  };
+   let ipcRegistered = false;
+   let displayListenersAttached = false;
+   const shapes = { peek: null, rail: null, bubble: null };
+@@ -599,7 +613,9 @@ function createEdgeDockController(deps) {
+     if (!running) return;
+     clearTimeout(pollTimer);
+     const snapshot = intent.snapshot();
+-    const delay = drag ? POLL_DRAG_MS : (snapshot.revealed ? POLL_ACTIVE_MS : POLL_IDLE_MS);
++    const delay = (drag || inputHeal.replay)
++      ? POLL_DRAG_MS
++      : (snapshot.revealed ? POLL_ACTIVE_MS : POLL_IDLE_MS);
+     pollTimer = setTimeout(poll, delay);
+   }
+ 
+@@ -609,6 +625,8 @@ function createEdgeDockController(deps) {
+     try {
+       const point = screen.getCursorScreenPoint();
+       const current = layout();
++      ensureTopmost();
++      tickInputReplay(point, current);
+       // The renderer can miss the pointerup of a drag, because the window it is
+       // dragging moves out from under the captured pointer; the OS button
+       // state is the authoritative end of the gesture.
+@@ -640,6 +658,194 @@ function createEdgeDockController(deps) {
+     schedulePoll();
+   }
+ 
++  // Windows strips WS_EX_TOPMOST from the dock surfaces over a session, and on
++  // v0.63 the constructor's alwaysOnTop never sticks at all (the rail is born
++  // non-topmost and dies as a drag target the moment any normal window covers
++  // the edge - observed as "visible but cannot be dragged"). Electron's
++  // isAlwaysOnTop() reports the stale cached state, so the poll re-asserts
++  // unconditionally: SetWindowPos into the band it already occupies is a cheap
++  // visual no-op, and the guard cannot be defeated by whatever stripped the
++  // flag. The native SetWindowPos is the enforcer because Electron's own
++  // setAlwaysOnTop stops landing on these transparent frameless windows; the
++  // Electron call stays as the cross-platform path.
++  // A surface that was faded out keeps WS_EX_TRANSPARENT (setIgnoreMouseEvents)
++  // until something clears it. Every re-show path clears it, but a state
++  // divergence (retract racing a mode flip, a rebuild mid-fade) could leave a
++  // visible rail permanently input-dead: painted fine, invisible to the
++  // pointer - reads as "the dock cannot be dragged or clicked". The poll
++  // restores input for whatever surface is actually shown.
++  function ensureInputMatchesVisibility() {
++    const shown = { rail: railVisible, peek: peeking, bubble: bubbleVisible };
++    for (const surface of SURFACES) {
++      const win = windows[surface];
++      if (!alive(win) || !win.isVisible()) continue;
++      // The native clear is unconditional for shown surfaces: Electron's
++      // isIgnoreMouseEvents() reports its cached flag (which lies after a
++      // rebuild) while the OS style can still be click-through.
++      if (!shown[surface]) continue;
++      let cleared = false;
++      if (typeof deps.clearMouseTransparent === 'function') {
++        try { cleared = deps.clearMouseTransparent(win); } catch (_) { cleared = false; }
++      }
++      if (typeof win.isIgnoreMouseEvents === 'function' && win.isIgnoreMouseEvents()) {
++        win.setIgnoreMouseEvents(false);
++        cleared = true;
++      }
++      if (cleared && surface === 'rail') {
++        logger(`[edge-dock] rail was shown with mouse events ignored - input restored`);
++      }
++    }
++  }
++
++  const INPUT_PROBE_INTERVAL_MS = 2000;
++  // How long a held press may stay un-acked before the poll concludes the page
++  // never received it and replays the press over the debugger protocol.
++  const REPLAY_ACK_WAIT_MS = 120;
++
++  function probeBroken() {
++    if (typeof deps.probeDockInput !== 'function') return null;
++    try {
++      return deps.probeDockInput();
++    } catch (_) {
++      return null;
++    }
++  }
++
++  // Observability only. WM_MOUSEACTIVATE answers were once suspected as the
++  // eat-clicks mechanism, but a controlled experiment (SendInput clicks against
++  // a focusable:false window reporting its own events) showed the real input
++  // path reaches the page with MA=4, so the answer is not the gate. The dock's
++  // actual resilience comes from the ack-gated replay below: a healthy page
++  // acks its presses and the replay stays dormant; a page that stops acking
++  // gets its presses injected over the debugger protocol, which reaches it in
++  // every state we have been able to produce.
++  function ensureInputAlive() {
++    if (typeof deps.probeDockInput !== 'function') return;
++    const now = Date.now();
++    if (now - inputHeal.lastProbeAt < INPUT_PROBE_INTERVAL_MS) return;
++    inputHeal.lastProbeAt = now;
++    const probe = probeBroken();
++    if (!probe) return;
++    if (probe.broken === inputHeal.broken) return;
++    inputHeal.broken = probe.broken;
++    logger(`[edge-dock] dock windows answer WM_MOUSEACTIVATE with ${probe.broken ? 'MA_NOACTIVATEANDEAT (expected on this Electron; input replay fallback covers presses)' : 'MA_NOACTIVATE'}; codes=${probe.codes.join(',')}`);
++  }
++
++  function replayClientPoint(point, surface) {
++    const win = windows[surface];
++    if (!alive(win)) return null;
++    const bounds = win.getContentBounds();
++    return { x: Math.round(point.x - bounds.x), y: Math.round(point.y - bounds.y) };
++  }
++
++  function dispatchReplayMouse(surface, type, x, y) {
++    const win = windows[surface];
++    if (!alive(win)) return false;
++    try {
++      const dbg = win.webContents.debugger;
++      if (!dbg.isAttached()) dbg.attach('1.3');
++      dbg.sendCommand('Input.dispatchMouseEvent', {
++        type,
++        x,
++        y,
++        button: 'left',
++        buttons: type === 'mouseReleased' ? 0 : 1,
++        clickCount: 1,
++        pointerType: 'mouse'
++      });
++      return true;
++    } catch (error) {
++      logger(`[edge-dock] input replay ${type} failed: ${error.message}`);
++      inputHeal.replay = null;
++      return false;
++    }
++  }
++
++  function surfaceAtPoint(point, current) {
++    if (!current) return null;
++    if (bubbleVisible && current.bubble && rectContains(current.bubble, point)) return 'bubble';
++    if (railVisible && rectContains(current.rail, point)) return 'rail';
++    if (peeking && current.peek && rectContains(current.peek, point)) return 'peek';
++    return null;
++  }
++
++  // Press-replay fallback, driven from the poll. When the dock's input path
++  // dies (the recurring "paints fine, cannot be dragged" state), the OS never
++  // delivers button presses, so the poll injects them into the page through
++  // the debugger protocol; the page keeps every gesture semantic (threshold,
++  // click-vs-drag, capture) because the injected events are indistinguishable
++  // from real ones there. The page's own pointerdown ack is the health signal:
++  // while acks flow the replay never fires, so a healthy dock pays nothing.
++  function tickInputReplay(point, current) {
++    const down = primaryButtonDown();
++    if (down === null) return;
++    const state = inputHeal.replay;
++    if (down === false) {
++      if (state && state.replaying) {
++        const at = replayClientPoint(point, state.surface);
++        if (at) dispatchReplayMouse(state.surface, 'mouseReleased', at.x, at.y);
++      }
++      inputHeal.replay = null;
++      return;
++    }
++    if (state && state.replaying) {
++      const at = replayClientPoint(point, state.surface);
++      if (at && (at.x !== state.lastX || at.y !== state.lastY)) {
++        state.lastX = at.x;
++        state.lastY = at.y;
++        dispatchReplayMouse(state.surface, 'mouseMoved', at.x, at.y);
++      }
++      return;
++    }
++    const surface = surfaceAtPoint(point, current);
++    if (!surface) {
++      inputHeal.replay = null;
++      return;
++    }
++    const now = Date.now();
++    if (!state) {
++      // A healthy page acks its pointerdown within a few milliseconds, so an
++      // ack this fresh means this very press (or one a beat earlier) already
++      // arrived natively and replay would only double it.
++      if (inputHeal.lastAckAt[surface] > now - 300) return;
++      inputHeal.replay = { surface, pendingSince: now, replaying: false, lastX: -1, lastY: -1 };
++      return;
++    }
++    if (inputHeal.lastAckAt[surface] > state.pendingSince) {
++      inputHeal.replay = null;
++      return;
++    }
++    if (now - state.pendingSince < REPLAY_ACK_WAIT_MS) return;
++    const at = replayClientPoint(point, surface);
++    if (!at) {
++      inputHeal.replay = null;
++      return;
++    }
++    state.replaying = true;
++    state.lastX = at.x;
++    state.lastY = at.y;
++    dispatchReplayMouse(surface, 'mousePressed', at.x, at.y);
++  }
++
++  function ensureTopmost() {
++    ensureInputMatchesVisibility();
++    ensureInputAlive();
++    if (typeof deps.forceTopmostDockWindows === 'function') {
++      try {
++        if (deps.forceTopmostDockWindows() > 0) return;
++      } catch (error) { logger(`[edge-dock] forceTopmostDockWindows failed: ${error.message}`); }
++    }
++    for (const surface of SURFACES) {
++      const win = windows[surface];
++      if (!alive(win)) continue;
++      if (typeof deps.forceTopmost === 'function') {
++        try { deps.forceTopmost(win); } catch (error) { logger(`[edge-dock] forceTopmost failed: ${error.message}`); }
++        continue;
++      }
++      win.setAlwaysOnTop(true, 'floating');
++    }
++  }
++
+   function followDrag(point, current) {
+     let targetDisplay;
+     try { targetDisplay = screen.getDisplayNearestPoint?.(point) || display(); } catch (_) { targetDisplay = display(); }
+@@ -718,6 +924,15 @@ function createEdgeDockController(deps) {
+       if (surfaceFor(event.sender) !== 'rail') return;
+       handleDragStart(payload?.grabOffsetY);
+     });
++    // The page pings this on every pointerdown it actually receives. The input
++    // replay fallback compares the timestamp against the OS button state to
++    // tell a healthy input path from the eat-clicks state, so it must stay a
++    // bare notification - the page reports that it heard the press and nothing
++    // more.
++    ipcMain.on('edgeDock:inputAck', (event) => {
++      const surface = surfaceFor(event.sender);
++      if (surface) inputHeal.lastAckAt[surface] = Date.now();
++    });
+     ipcMain.on('edgeDock:dragEnd', (event) => {
+       if (surfaceFor(event.sender) !== 'rail') return;
+       handleDragEnd();
+diff --git a/src/electron/edgeDock/preload.js b/src/electron/edgeDock/preload.js
+index 806337f..ecc4f57 100644
+--- a/src/electron/edgeDock/preload.js
++++ b/src/electron/edgeDock/preload.js
+@@ -8,6 +8,9 @@ const { contextBridge, ipcRenderer } = require('electron');
+ contextBridge.exposeInMainWorld('tokenMonitorEdgeDock', {
+   ready: () => ipcRenderer.send('edgeDock:ready'),
+   click: (cellIndex) => ipcRenderer.send('edgeDock:click', { cellIndex }),
++  // Fired on every pointerdown the page actually receives; the main process
++  // uses it as a liveness ack for the input replay fallback.
++  inputAck: () => ipcRenderer.send('edgeDock:inputAck'),
+   dragStart: (grabOffsetY) => ipcRenderer.send('edgeDock:dragStart', { grabOffsetY }),
+   dragEnd: () => ipcRenderer.send('edgeDock:dragEnd'),
+   reportBubbleSize: (cellId, height) => ipcRenderer.send('edgeDock:bubbleSize', { cellId, height }),
+diff --git a/src/electron/edgeDock/topmost.js b/src/electron/edgeDock/topmost.js
+new file mode 100644
+index 0000000..17fe9fe
+--- /dev/null
++++ b/src/electron/edgeDock/topmost.js
+@@ -0,0 +1,179 @@
++'use strict';
++
++// Electron's setAlwaysOnTop stops landing on the dock's transparent frameless
++// windows after upstream rebuilds their native shells (observed on Electron 43
++// / v0.63: getNativeWindowHandle() keeps returning a stale handle, GLE=1400
++// ERROR_INVALID_WINDOW_HANDLE, while the JS window still paints), so the poll
++// enforces the band by locating the live dock windows through FindWindowExW
++// and driving SetWindowPos(HWND_TOPMOST) on the real handles directly.
++// Lazy koffi like windowsBackdrop; a load failure degrades to a no-op because
++// the Electron call still runs alongside it.
++//
++// HWND_TOPMOST must be -1 (all 64 bits set). Declaring the SetWindowPos "after"
++// parameter as uintptr_t zero-extends a JS 0xFFFFFFFF into 0x00000000FFFFFFFF,
++// which is an invalid window handle and fails every call - the sweep silently
++// raised nothing for its whole first life. intptr_t + -1 encodes correctly.
++const SWP_NOSIZE = 0x0001;
++const SWP_NOMOVE = 0x0002;
++const SWP_NOACTIVATE = 0x0010;
++const HWND_TOPMOST = -1; // (HWND)-1
++const GWL_EXSTYLE = -20;
++const WS_EX_TRANSPARENT = 0x00000020;
++// WM_MOUSEACTIVATE with wParam=the window and lParam=MAKELPARAM(HTCLIENT,
++// WM_LBUTTONDOWN): asking a window how it will treat a real click. Healthy
++// non-activating windows answer MA_NOACTIVATE (3) and the click is delivered;
++// Electron 43 flipped to MA_NOACTIVATEANDEAT (4) after native shell rebuilds,
++// which eats every hardware click while hover moves keep flowing - the "dock
++// paints fine but cannot be dragged" state. The probe is a pure query: the
++// activation decision is made by win32k from the return value, not by the
++// handler, so asking costs nothing and changes nothing.
++const WM_MOUSEACTIVATE = 0x0021;
++const MA_PROBE_LPARAM = (1 << 16) | 0x0201; // HTCLIENT | WM_LBUTTONDOWN
++const MA_NOACTIVATEANDEAT = 4;
++
++let api;
++let lastHwndKey = null;
++
++function createApi(koffi) {
++  const user32 = koffi.load('user32.dll');
++  return {
++    findWindowExW: user32.func(
++      'uintptr_t FindWindowExW(uintptr_t parent, uintptr_t after, str16 class, str16 title)'
++    ),
++    getWindowLongPtrW: user32.func('intptr_t GetWindowLongPtrW(uintptr_t hwnd, int index)'),
++    setWindowLongPtrW: user32.func(
++      'intptr_t SetWindowLongPtrW(uintptr_t hwnd, int index, intptr_t value)'
++    ),
++    setWindowPos: user32.func(
++      'int SetWindowPos(uintptr_t hwnd, intptr_t after, int x, int y, int cx, int cy, uint flags)'
++    ),
++    isWindowVisible: user32.func('bool IsWindowVisible(uintptr_t hwnd)'),
++    isWindow: user32.func('bool IsWindow(uintptr_t hwnd)'),
++    sendMessage: user32.func(
++      'intptr_t SendMessageW(uintptr_t hwnd, uint msg, uintptr_t wp, intptr_t lp)'
++    )
++  };
++}
++
++function loadApi() {
++  if (api !== undefined) return api;
++  api = null;
++  try {
++    if (process.platform === 'win32') {
++      api = createApi(require('koffi'));
++    }
++  } catch (_) {
++    api = null;
++  }
++  return api;
++}
++
++// The three dock surfaces share the visible title "Token Monitor Dock" (the
++// main window is titled "Token Monitor"), live in the same window class, and
++// are top-level - so FindWindowExW over that pair finds exactly our dock
++// windows, whichever native shell the JS window currently fronts.
++function dockHwnds(a, options = {}) {
++  const out = [];
++  let after = 0;
++  for (;;) {
++    const hwnd = a.findWindowExW(0, after, 'Chrome_WidgetWin_1', 'Token Monitor Dock');
++    if (!hwnd) break;
++    after = hwnd;
++    // The class+title pair is unique to this app's dock surfaces, so no
++    // per-window process check is needed here (and the koffi _Out_ fill was
++    // unreliable on this call path - it silently filtered every match).
++    if (!options.includeHidden && !a.isWindowVisible(hwnd)) continue;
++    out.push(Number(hwnd));
++  }
++  return out;
++}
++
++// Enforces TOPMOST on every live dock window of this process. Returns the
++// number of windows successfully raised; 0 means the guard found nothing (or
++// the native calls are unavailable) and the caller may fall back. The hidden
++// window set is tracked separately so the caller can log native shell rebuilds
++// (the hwnd identities change while the JS windows keep running).
++function forceTopmostDockWindows(deps = {}) {
++  const a = deps.api || loadApi();
++  if (!a) return 0;
++  let raised = 0;
++  const visible = [];
++  for (const hwnd of dockHwnds(a)) {
++    visible.push(hwnd);
++    try {
++      if (a.setWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE)) raised += 1;
++    } catch (_) { /* one bad window must not stop the sweep */ }
++  }
++  if (typeof deps.onHwndSetChange === 'function') {
++    const all = dockHwnds(a, { includeHidden: true });
++    // FindWindowExW walks in z-order, which our own sweep rotates every tick -
++    // compare (and report) the identity SET, order-insensitively.
++    const key = [...all].sort((x, y) => x - y).join(',');
++    if (lastHwndKey !== null && key !== lastHwndKey) {
++      try { deps.onHwndSetChange({ hwnds: all, previous: lastHwndKey }); } catch (_) {}
++    }
++    lastHwndKey = key;
++  }
++  return raised;
++}
++
++// Asks every visible dock window how it treats a real click. `broken` means at
++// least one answers MA_NOACTIVATEANDEAT, i.e. hardware clicks on that surface
++// never reach the renderer. Returns null when the native layer is unavailable.
++function probeDockInput(deps = {}) {
++  const a = deps.api || loadApi();
++  if (!a) return null;
++  const hwnds = dockHwnds(a);
++  const codes = hwnds.map((hwnd) => {
++    try {
++      return Number(a.sendMessage(hwnd, WM_MOUSEACTIVATE, hwnd, MA_PROBE_LPARAM));
++    } catch (_) {
++      return null;
++    }
++  });
++  return { hwnds, codes, broken: codes.some((code) => code === MA_NOACTIVATEANDEAT) };
++}
++
++// Per-window variant kept for callers that already hold a live window object;
++// the by-title sweep above is the primary path because JS-held handles go
++// stale across upstream's native shell rebuilds.
++function forceTopmost(win, deps = {}) {
++  if (!win || win.isDestroyed?.()) return false;
++  const a = deps.api || loadApi();
++  if (!a) return false;
++  const buffer = win.getNativeWindowHandle();
++  const handle = buffer.length >= 8 ? Number(buffer.readBigUInt64LE()) : buffer.readUInt32LE();
++  try {
++    return Boolean(a.setWindowPos(handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE));
++  } catch (_) {
++    return false;
++  }
++}
++
++// Clears WS_EX_TRANSPARENT from a dock window's real top-level handle.
++// Electron's setIgnoreMouseEvents(false) stopped landing on these windows the
++// same way setAlwaysOnTop did, and a surface shown while flagged click-through
++// stays input-dead - this is the native half of that restore.
++function clearMouseTransparent(win, deps = {}) {
++  if (!win || win.isDestroyed?.()) return false;
++  const a = deps.api || loadApi();
++  if (!a) return false;
++  const buffer = win.getNativeWindowHandle();
++  const handle = buffer.length >= 8 ? Number(buffer.readBigUInt64LE()) : buffer.readUInt32LE();
++  try {
++    const style = a.getWindowLongPtrW(handle, GWL_EXSTYLE);
++    if (!(style & WS_EX_TRANSPARENT)) return true;
++    return Boolean(a.setWindowLongPtrW(handle, GWL_EXSTYLE, style & ~WS_EX_TRANSPARENT));
++  } catch (_) {
++    return false;
++  }
++}
++
++module.exports = {
++  clearMouseTransparent,
++  createApi,
++  dockHwnds,
++  forceTopmost,
++  forceTopmostDockWindows,
++  probeDockInput
++};
 diff --git a/src/electron/edgePopupGuard.js b/src/electron/edgePopupGuard.js
 new file mode 100644
 index 0000000..37b17eb
@@ -365,7 +827,7 @@ index 8c0c48b..13af9c2 100644
  
  function floatingBubbleNativeGlassEnabled(settings = {}) {
 diff --git a/src/electron/main.js b/src/electron/main.js
-index 1e10386..b8a4b58 100644
+index 1e10386..91a7cd5 100644
 --- a/src/electron/main.js
 +++ b/src/electron/main.js
 @@ -24,6 +24,8 @@ const { createDefaultTrayLayout, normalizeTrayLayout } = require('../shared/tray
@@ -377,7 +839,15 @@ index 1e10386..b8a4b58 100644
  const { createClientSourceIpcHandlers } = require('./clientSourceIpc');
  const { createClaudeWebFetch } = require('./providers/claude/webFetch');
  const { runAntigravityOAuthLogin } = require('./providers/antigravity/oauthLogin');
-@@ -548,6 +550,7 @@ function defaultSettings() {
+@@ -377,6 +379,7 @@ const {
+ } = require('./floatingBubble');
+ const { applyWindowsChrome } = require('./windowsChrome');
+ const { canUseEdgeDock, createEdgeDockController, edgeDockSupported } = require('./edgeDock/controller');
++const edgeDockTopmost = require('./edgeDock/topmost');
+ const {
+   normalizeEdgeDockDisplayId,
+   normalizeEdgeDockOffset,
+@@ -548,6 +551,7 @@ function defaultSettings() {
      liveTokenRateScope: 'all',
      compactTokenUnits: 'western',
      tokenRateMode: 'speed',
@@ -385,7 +855,7 @@ index 1e10386..b8a4b58 100644
      heatmapMetric: 'cost',
      modelRankingMetric: 'tokens',
      homeActiveDaysWindow: 'all',
-@@ -680,6 +683,10 @@ function normalizeTokenRateMode(value) {
+@@ -680,6 +684,10 @@ function normalizeTokenRateMode(value) {
    return value === 'burn' ? 'burn' : 'speed';
  }
  
@@ -396,7 +866,7 @@ index 1e10386..b8a4b58 100644
  function normalizeLiveTokenRateScope(value) {
    return value === 'device' ? 'device' : 'all';
  }
-@@ -1972,6 +1979,7 @@ function restoredBounds() {
+@@ -1972,6 +1980,7 @@ function restoredBounds() {
  let persistBoundsTimer = null;
  let floatingBubbleAutoCollapseTimer = null;
  const floatingBubbleState = { collapsed: false, side: null, collapsedBounds: null, expandedBounds: null, suppressNextCollapse: false, contentSize: null };
@@ -404,7 +874,7 @@ index 1e10386..b8a4b58 100644
  let mainWindowChrome = { collapsedFloatingBubble: false };
  
  function stopPersistBoundsTimer() {
-@@ -2222,6 +2230,451 @@ function syncFloatingBubbleAvailability() {
+@@ -2222,6 +2231,451 @@ function syncFloatingBubbleAvailability() {
    sendFloatingBubbleState();
  }
  
@@ -856,7 +1326,7 @@ index 1e10386..b8a4b58 100644
  function persistBoundsSoon() {
    if (!mainWindow || mainWindow.isDestroyed()) return;
    if (!shouldPersistWindowBounds(mainWindow)) {
-@@ -2239,6 +2692,10 @@ function persistBoundsSoon() {
+@@ -2239,6 +2693,10 @@ function persistBoundsSoon() {
        // Popover x/y is anchored to the tray icon each open; only the size carries over.
        if (prev.width === next.width && prev.height === next.height) return;
        settings.windowBounds = { ...prev, width: next.width, height: next.height };
@@ -867,7 +1337,7 @@ index 1e10386..b8a4b58 100644
      } else if (floatingBubbleState.collapsed && floatingBubbleState.expandedBounds) {
        floatingBubbleState.collapsedBounds = next;
        const display = displayForBounds(next);
-@@ -2489,6 +2946,7 @@ function readSettings() {
+@@ -2489,6 +2947,7 @@ function readSettings() {
      merged.interfaceFontFamily = fontSettingsApi.normalizeFontFamily(merged.interfaceFontFamily);
      merged.displayFontFamily = fontSettingsApi.normalizeFontFamily(merged.displayFontFamily);
      merged.tokenRateMode = normalizeTokenRateMode(merged.tokenRateMode);
@@ -875,7 +1345,7 @@ index 1e10386..b8a4b58 100644
      if (saved.serviceProviderDisplayOrder !== undefined) {
        merged.serviceProviderDisplayOrder = String(saved.serviceProviderDisplayOrder || '');
      }
-@@ -2817,6 +3275,77 @@ function applyWindowSettings() {
+@@ -2817,6 +3276,77 @@ function applyWindowSettings() {
      applyCollapsedFloatingBubbleLimits(mainWindow.getBounds());
      return;
    }
@@ -953,7 +1423,7 @@ index 1e10386..b8a4b58 100644
    const behavior = describeWindowBehavior(settings);
    mainWindow.setAlwaysOnTop(behavior.alwaysOnTop, floatingAlwaysOnTopLevel());
    if (typeof mainWindow.setMovable === 'function') mainWindow.setMovable(behavior.draggable);
-@@ -2828,6 +3357,17 @@ function applyWindowSettings() {
+@@ -2828,6 +3358,17 @@ function applyWindowSettings() {
    if (typeof mainWindow.setSkipTaskbar === 'function') mainWindow.setSkipTaskbar(skipTaskbarForSettings(settings));
    if (!behavior.focusable && typeof mainWindow.blur === 'function') mainWindow.blur();
    syncTaskbarZOrder();
@@ -971,7 +1441,23 @@ index 1e10386..b8a4b58 100644
  }
  
  function nativeBlurEnabled(source = settings) {
-@@ -5291,6 +5831,8 @@ function setWindowPresentationFromMenu(value) {
+@@ -5089,6 +5630,15 @@ function ensureEdgeDockController() {
+     rendererDir: path.join(__dirname, 'renderer'),
+     preloadPath: path.join(__dirname, 'edgeDock', 'preload.js'),
+     getSettings: () => settings,
++    forceTopmost: edgeDockTopmost.forceTopmost,
++    clearMouseTransparent: edgeDockTopmost.clearMouseTransparent,
++    forceTopmostDockWindows: () => edgeDockTopmost.forceTopmostDockWindows({
++      onHwndSetChange: (info) => edgeLog('edge-dock', `dock hwnd set changed: ${info.hwnds.join(',')} (was ${info.previous})`)
++    }),
++    // Asks the dock windows how they treat a real click; the controller uses
++    // it to detect and self-heal the MA_NOACTIVATEANDEAT state that eats every
++    // hardware click after a native shell rebuild.
++    probeDockInput: () => edgeDockTopmost.probeDockInput(),
+     nativeGlass: () => nativeBlurEnabled(),
+     // The dock follows the widget's glass style unless it has its own, on the
+     // same terms as the main window: Reduce Transparency hands the surface back
+@@ -5291,6 +5841,8 @@ function setWindowPresentationFromMenu(value) {
    saveSettings();
    if (previousTrayMode) exitTrayMode();
    else {
@@ -980,7 +1466,7 @@ index 1e10386..b8a4b58 100644
      applyWindowSettings();
      focusExistingWindow();
    }
-@@ -6393,6 +6935,7 @@ function createWindow(boundsOverride, options = {}) {
+@@ -6393,6 +6945,7 @@ function createWindow(boundsOverride, options = {}) {
      }
    });
    mainWindow = win;
@@ -988,7 +1474,7 @@ index 1e10386..b8a4b58 100644
    mainWindowChrome = { collapsedFloatingBubble };
    applyMacSpaceBehavior();
    applyWindowsChrome(win, { round: true });
-@@ -6434,17 +6977,83 @@ function createWindow(boundsOverride, options = {}) {
+@@ -6434,17 +6987,83 @@ function createWindow(boundsOverride, options = {}) {
    applyNativeMaterial();
    win.on('focus', () => {
      stopFloatingBubbleAutoCollapseTimer();
@@ -1077,7 +1563,7 @@ index 1e10386..b8a4b58 100644
    win.on('minimize', stopTaskbarZOrderKeeper);
    win.on('close', (event) => {
      if (quitRequested) return;
-@@ -6675,6 +7284,28 @@ function rebuildWindow() {
+@@ -6675,6 +7294,28 @@ function rebuildWindow() {
    });
  }
  
@@ -1106,7 +1592,7 @@ index 1e10386..b8a4b58 100644
  app.whenReady().then(() => {
    if (process.platform === 'darwin' && app.dock) app.dock.setIcon(APP_ICON_PATH);
    ensureSettingsLoaded();
-@@ -6909,6 +7540,7 @@ app.whenReady().then(() => {
+@@ -6909,6 +7550,7 @@ app.whenReady().then(() => {
          patch.displayFontFamily ?? settings.displayFontFamily
        ),
        tokenRateMode: normalizeTokenRateMode(patch.tokenRateMode ?? settings.tokenRateMode),
@@ -1114,7 +1600,7 @@ index 1e10386..b8a4b58 100644
        floatingBubbleEnabled: parseBoolean(patch.floatingBubbleEnabled ?? settings.floatingBubbleEnabled, false),
        edgeDockEnabled: parseBoolean(patch.edgeDockEnabled ?? settings.edgeDockEnabled, false),
        edgeDockSide: normalizeEdgeDockSide(patch.edgeDockSide ?? settings.edgeDockSide),
-@@ -7037,6 +7669,7 @@ app.whenReady().then(() => {
+@@ -7037,6 +7679,7 @@ app.whenReady().then(() => {
      applyWindowSettings();
      syncFloatingBubbleAvailability();
      syncEdgeDock();
@@ -1122,7 +1608,7 @@ index 1e10386..b8a4b58 100644
      const nextNativeMaterial = nativeBlurEnabled();
      const nextWindowsBackdrop = normalizeWindowsBackdropMode(settings?.windowsBackdrop);
      const windowsBackdropChanged = previousWindowsBackdrop !== nextWindowsBackdrop
-@@ -7137,6 +7770,27 @@ app.whenReady().then(() => {
+@@ -7137,6 +7780,27 @@ app.whenReady().then(() => {
    });
    ipcMain.handle('floatingBubble:expand', () => expandFloatingBubble());
    ipcMain.handle('floatingBubble:peek', () => expandFloatingBubble({ focus: false }));
@@ -1150,7 +1636,7 @@ index 1e10386..b8a4b58 100644
    ipcMain.handle('floatingBubble:collapseIfIdle', () => {
      if (!mainWindow || mainWindow.isDestroyed()) return false;
      if (floatingBubbleState.collapsed || !canUseFloatingBubble(settings)) return false;
-@@ -8331,6 +8985,20 @@ app.whenReady().then(() => {
+@@ -8331,6 +8995,20 @@ app.whenReady().then(() => {
    });
    ipcMain.handle('dashboard:open', () => { createDashboardWindow(); return true; });
    ipcMain.handle('dashboard:getHistory', (_event, options) => getDashboardHistory(options));
@@ -1395,10 +1881,24 @@ index 714f442..614a046 100644
  els.closeBtn.addEventListener('click', () => window.tokenMonitor.dashboard.close());
  
 diff --git a/src/electron/renderer/edgeDock/dock.js b/src/electron/renderer/edgeDock/dock.js
-index 734bbc0..2ce953a 100644
+index 734bbc0..4b7b15f 100644
 --- a/src/electron/renderer/edgeDock/dock.js
 +++ b/src/electron/renderer/edgeDock/dock.js
-@@ -529,11 +529,12 @@ function providerCellNode(cell) {
+@@ -5,6 +5,13 @@
+ // pushed and reports clicks, drags and its own content height.
+ 
+ const bridge = window.tokenMonitorEdgeDock;
++// Liveness ack: the main process compares this timestamp against the OS button
++// state to tell a healthy input path from the eat-clicks state (Electron
++// answers WM_MOUSEACTIVATE with MA_NOACTIVATEANDEAT after a native shell
++// rebuild) and only replays presses over the debugger while this is missing.
++document.addEventListener('pointerdown', () => {
++  try { bridge.inputAck(); } catch (_) {}
++}, true);
+ const presentation = window.TokenMonitorEdgeDockPresentation;
+ // The running reading is derived from the projected rows at paint time rather than
+ // frozen into the cell, so the rail and the card answer at the same clock (see
+@@ -529,11 +536,12 @@ function providerCellNode(cell) {
    } else {
      value.textContent = percentText(cell.remainingPercent);
    }
@@ -2807,6 +3307,205 @@ index 0000000..47458a4
 +  assert.match(mainSource, /'token-monitor-edge-debug\.log'/, 'debug output goes to its own file');
 +});
 +
+diff --git a/tests/electron/edgeDockController.test.js b/tests/electron/edgeDockController.test.js
+index b3252e9..784de3e 100644
+--- a/tests/electron/edgeDockController.test.js
++++ b/tests/electron/edgeDockController.test.js
+@@ -327,6 +327,28 @@ test('dragging onto another display moves the dock there and persists its id', a
+   assert.equal(fixture.placements.at(-1).side, 'right');
+ });
+ 
++test('the poll re-asserts topmost when Windows strips the flag', async (t) => {
++  // Windows removes WS_EX_TOPMOST from the dock surfaces over a session
++  // (shell z-order banding when other apps activate); a dock that lost
++  // topmost still paints but is input-dead under whatever covers the edge.
++  const fixture = createFixture();
++  t.after(() => fixture.controller.stop());
++  for (const win of FakeBrowserWindow.instances) {
++    win.isAlwaysOnTop = () => win.topmostRestored === true;
++    const original = win.setAlwaysOnTop.bind(win);
++    win.setAlwaysOnTop = (...args) => {
++      win.topmostRestored = args[0] === true;
++      return original(...args);
++    };
++  }
++  // One idle poll tick (90ms) is enough to run the guard on every surface.
++  await new Promise((resolve) => setTimeout(resolve, 150));
++  assert.ok(
++    FakeBrowserWindow.instances.every((win) => win.topmostRestored === true),
++    'the poll restores topmost on every dock surface'
++  );
++});
++
+ test('Windows Edge Dock keeps every glass setting on the shaped renderer surface', (t) => {
+   const fixture = createFixture({ nativeGlass: true });
+   t.after(() => fixture.controller.stop());
+diff --git a/tests/electron/edgeDockTopmost.test.js b/tests/electron/edgeDockTopmost.test.js
+new file mode 100644
+index 0000000..be978fc
+--- /dev/null
++++ b/tests/electron/edgeDockTopmost.test.js
+@@ -0,0 +1,160 @@
++'use strict';
++
++const assert = require('node:assert/strict');
++const test = require('node:test');
++
++const { createApi, dockHwnds, forceTopmost, forceTopmostDockWindows, probeDockInput } = require('../../src/electron/edgeDock/topmost');
++
++function fakeWindow(handleValue) {
++  const buffer = Buffer.alloc(8);
++  buffer.writeBigUInt64LE(BigInt(handleValue));
++  return {
++    getNativeWindowHandle: () => buffer,
++    isDestroyed: () => false
++  };
++}
++
++// Fake koffi library: records binding signatures and emulates a small desktop
++// with dock windows (ours, by title) plus a decoy from another process.
++function fakeKoffi(state) {
++  state.calls = state.calls || [];
++  state.signatures = state.signatures || [];
++  return {
++    struct: () => ({}),
++    load: () => ({
++      func: (signature) => {
++        state.signatures.push(signature);
++        if (signature.startsWith('uintptr_t FindWindowExW')) {
++          return (parent, after, cls, title) => {
++            state.calls.push(['find', Number(after), cls, title]);
++            const pool = state.windows.filter((w) => !after || Number(w.hwnd) > Number(after));
++            return pool.length ? pool[0].hwnd : 0;
++          };
++        }
++        if (signature.startsWith('uint GetWindowThreadProcessId')) {
++          return (hwnd, out) => {
++            const w = state.windows.find((x) => Number(x.hwnd) === Number(hwnd));
++            out.value = w ? w.pid : 0;
++            return 4711;
++          };
++        }
++        if (signature.startsWith('uint GetCurrentProcessId')) {
++          return () => state.pid;
++        }
++        if (signature.startsWith('bool IsWindowVisible')) {
++          return (hwnd) => {
++            const w = state.windows.find((x) => Number(x.hwnd) === Number(hwnd));
++            return w ? w.visible : false;
++          };
++        }
++        if (signature.startsWith('bool SetWindowPos') || signature.startsWith('int SetWindowPos')) {
++          return (hwnd, after) => {
++            state.calls.push(['setpos', Number(hwnd), Number(after)]);
++            return 1;
++          };
++        }
++        if (signature.startsWith('intptr_t SendMessageW')) {
++          return (hwnd, msg, wp, lp) => {
++            state.calls.push(['sendmsg', Number(hwnd), Number(msg), Number(lp)]);
++            const w = state.windows.find((x) => Number(x.hwnd) === Number(hwnd));
++            return w ? w.mouseActivate : 3;
++          };
++        }
++        return () => 0;
++      }
++    })
++  };
++}
++
++test('dockHwnds walks same-titled top-level windows of our process only', () => {
++  const state = {
++    pid: 4242,
++    windows: [
++      { hwnd: 100, pid: 4242, visible: true },   // dock 1
++      { hwnd: 101, pid: 4242, visible: true },   // dock 2
++      { hwnd: 102, pid: 999, visible: true },    // same title, other process
++      { hwnd: 103, pid: 4242, visible: false }   // hidden dock surface
++    ]
++  };
++  const api = createApi(fakeKoffi(state));
++  const hwnds = dockHwnds(api, 4242);
++  assert.deepEqual(hwnds, [100, 101, 102]);
++  assert.ok(state.calls.some((c) => c[0] === 'find' && c[2] === 'Chrome_WidgetWin_1' && c[3] === 'Token Monitor Dock'));
++});
++
++test('forceTopmostDockWindows raises every live dock window', () => {
++  const state = {
++    pid: 4242,
++    windows: [
++      { hwnd: 100, pid: 4242, visible: true },
++      { hwnd: 101, pid: 4242, visible: true },
++      { hwnd: 500, pid: 777, visible: true }
++    ]
++  };
++  const api = createApi(fakeKoffi(state));
++  assert.equal(forceTopmostDockWindows({ pid: 4242, api }), 3);
++  const raised = state.calls.filter((c) => c[0] === 'setpos').map((c) => c[1]);
++  assert.deepEqual(raised.sort((a, b) => a - b), [100, 101, 500]);
++});
++
++test('forceTopmost drives SetWindowPos with HWND_TOPMOST on the given handle', () => {
++  const state = { pid: 4242, windows: [{ hwnd: 100, pid: 4242, visible: true }] };
++  const api = createApi(fakeKoffi(state));
++  assert.equal(forceTopmost(fakeWindow(133636), { api }), true);
++  const raised = state.calls.filter((c) => c[0] === 'setpos').map((c) => c[1]);
++  assert.deepEqual(raised, [133636]);
++  // The "after" parameter must be intptr_t: uintptr_t zero-extends a JS
++  // 0xFFFFFFFF into an invalid 64-bit handle and SetWindowPos never lands.
++  assert.ok(state.signatures.some((s) => s.includes('SetWindowPos(uintptr_t hwnd, intptr_t after')));
++  assert.ok(state.calls.some((c) => c[0] === 'setpos' && c[2] === -1));
++});
++
++test('probeDockInput reports the eat-clicks state from WM_MOUSEACTIVATE answers', () => {
++  const state = {
++    pid: 4242,
++    windows: [
++      { hwnd: 100, pid: 4242, visible: true, mouseActivate: 4 },
++      { hwnd: 101, pid: 4242, visible: true, mouseActivate: 3 },
++      { hwnd: 102, pid: 4242, visible: false, mouseActivate: 4 } // hidden: not probed
++    ]
++  };
++  const api = createApi(fakeKoffi(state));
++  const probe = probeDockInput({ api });
++  assert.equal(probe.broken, true);
++  assert.deepEqual(probe.hwnds, [100, 101]);
++  assert.deepEqual(probe.codes, [4, 3]);
++  assert.ok(state.calls.some((c) => c[0] === 'sendmsg' && c[1] === 100 && c[2] === 0x0021));
++});
++
++test('probeDockInput reports healthy when every visible window answers MA_NOACTIVATE', () => {
++  const state = {
++    pid: 4242,
++    windows: [
++      { hwnd: 100, pid: 4242, visible: true, mouseActivate: 3 },
++      { hwnd: 101, pid: 4242, visible: true, mouseActivate: 3 }
++    ]
++  };
++  const api = createApi(fakeKoffi(state));
++  const probe = probeDockInput({ api });
++  assert.equal(probe.broken, false);
++});
++
++test('forceTopmostDockWindows reports hwnd set changes for rebuild tracking', () => {
++  const state = {
++    pid: 4242,
++    windows: [
++      { hwnd: 100, pid: 4242, visible: true },
++      { hwnd: 101, pid: 4242, visible: true }
++    ]
++  };
++  const changes = [];
++  const api = createApi(fakeKoffi(state));
++  forceTopmostDockWindows({ api, onHwndSetChange: (info) => changes.push(info) });
++  assert.deepEqual(changes, []); // first observation records silently
++  state.windows[0].visible = false; // hidden surfaces stay in the tracked set: a rebuild swaps every hwnd
++  state.windows.push({ hwnd: 500, pid: 4242, visible: true });
++  forceTopmostDockWindows({ api, onHwndSetChange: (info) => changes.push(info) });
++  assert.equal(changes.length, 1);
++  assert.deepEqual(changes[0].hwnds, [100, 101, 500]);
++  assert.equal(changes[0].previous, '100,101');
++});
 diff --git a/tests/electron/edgePopupGuard.test.js b/tests/electron/edgePopupGuard.test.js
 new file mode 100644
 index 0000000..6a27447

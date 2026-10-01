@@ -21,3 +21,10 @@ a455f47 feat(dashboard): refresh button forces a fresh collection with busy feed
 5a41617 fix(trends): set tick label positions via CSSOM - CSP drops inline styles
 39850cc fix(limits): dedupe zai windows merged from the console-key and ZCode mirror lanes
 1e1e23a fix(edge-dock): colour the rail figure by its own window, not the tightest pool
+4c63282 fix(edge-dock): re-assert topmost in the poll when Windows strips the flag
+447cbf3 fix(edge-dock): enforce the topmost band natively - Electron 43 stops landing it
+7bfb1d6 fix(edge-dock): enforce TOPMOST via FindWindowExW on the live native windows
+fbe13d3 fix(edge-dock): drop the pid filter - the koffi _Out_ fill silently filtered every match
+0662337 fix(edge-dock): restore input on shown surfaces - WS_EX_TRANSPARENT was stuck
+126e66e Fix dock input death: probe WM_MOUSEACTIVATE, self-heal, replay fallback
+a186843 Arm ack-gated press replay unconditionally; MA probe is logging only

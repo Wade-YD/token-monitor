@@ -378,3 +378,37 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
   因为 renderer/app.js 两版差 506 行、renderer/index.html 差 789 行。
   另：静态推理在本功能上连续误判 3 次，「看起来对但行为不对」时直接加探针
   （现在开 edgeAutoHideDebug 即可），让程序自己说。
+
+【交付记录（2026-10-01，dock 拖动失效顽疾 + 输入回放兜底，提交 126e66e/a186843）】
+  1) 背景：dock「看得见、悬停有反应、按下去没反应」第三次复发。本轮把现场取证
+     做穿底：OS 层（样式/hit-test/GUI 线程/WM_NULL）全健康、页面监听器全健康、
+     CDP 注入全达 —— 死区锁定在「OS 输入路由 → 页面」一跳。
+  2) 大弯路（必读）：WM_MOUSEACTIVATE 返回 MA_NOACTIVATEANDEAT(4) 曾被当作根因，
+     花了数小时。后用 scratch 实验证伪：focusable:false 窗口在 MA=4 下照样收到
+     SendInput 真实点击（真实输入走指针路径，不查 MA）。MA=4 是 Electron 43 的
+     常量假象，不是开关。教训：**探针测的是"窗口怎么答"，不等于"真实输入走哪条
+     路"；两者矛盾时信后者**。sweep、setIgnoreMouseEvents 切换、透明、焦点同理
+     全部单变量排除——单窗口 scratch 复现不了，问题在 dock 应用级状态。
+  3) 顺手修掉一个从生效日起就坏的真 bug：koffi SetWindowPos 的 after 参数声明为
+     uintptr_t，HWND_TOPMOST=0xFFFFFFFF 被**零扩展**成 64 位非法句柄 → sweep
+     从未真正抬过窗口（日志 raised=0 恒成立）。改 intptr_t 传 -1。
+  4) 兜底机制（治本层）：**ack 门控的按压回放**。页面 pointerdown 即时 ack IPC；
+     poll（40-90ms）对比 OS 按键态与 ack——健康时 ack 秒到，回放永不触发（零
+     开销）；页面失联超过 120ms 即经 webContents.debugger
+     Input.dispatchMouseEvent 注入 mousePressed/moved/released，页面手势语义
+     （阈值/单击-vs-拖动/捕获）原样复用。CDP 注入在死亡态实测可达（PostMessage
+     同样可达），这是全链路唯一在所有状态下都通的输入通道。
+  5) 端到端验收：真实 SendInput 拖拽 moved=True（rail y=113→468 跟手）、恢复
+     拖拽正常、页面 mdown/pdown 计数增长；无调试端口正常重启交付。
+  6) ⚠️ 第二次 overlay 清单事故（与 dashboard.html 事故同型）：deliver_finalize.py
+     的 FILES 表漂移——edgeDock/controller.js、edgeDock/preload.js、edgeDock/
+     topmost.js 三个文件缺失，上一轮打包的 asar 里 dock 主进程代码是旧的！
+     已修：FILES 按 `git diff --name-only v0.63.0..HEAD -- src` 重生成（25 文件），
+     清单头写明重生成命令。**规则升级：overlay 清单永远从 git diff 派生，禁止手写**。
+  7) 附带：deliver_finalize.py 的 --pack-only 分支补上（上次会话只定义未接线）；
+     hwnd 集变更日志（顺序不敏感对比——sweep 每 tick 轮转 z 序，顺序对比会刷屏
+     5000+ 行，已修）成为下次"native shell 重建"事件的时间线证据。
+  8) 未解之谜（留观）：单窗口 scratch 无法复现 dock 的点击死亡，真实触发器仍是
+     应用级状态（嫌疑：锁屏/显示器事件引发的 shell 重建）。已布好的探针网：
+     hwnd 集变更日志 + MA 状态变化日志 + 页面 ack 时间戳，下次复发直接读
+     %TEMP%\token-monitor-edge-error.log 时间线。
