@@ -8601,11 +8601,8 @@ html.native-liquid-glass .view-switcher-menu-item { border-radius: 9px; }
 .detail-session-id-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: text; }
 .detail-session-id-copy { flex-shrink: 0; padding: 0 2px; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; opacity: 0.72; }
 .detail-session-id-copy:hover, .detail-session-id-copy:focus-visible { color: var(--text); opacity: 1; }
-.row.session-row[data-client] .row-metrics::after { content: '›'; color: var(--muted); font-size: 14px; line-height: 1; }
 .row.summary-row[data-review-group="true"] { cursor: pointer; }
-.row.summary-row[data-review-group="true"] .row-metrics::after { content: '›'; color: var(--muted); font-size: 14px; line-height: 1; }
 .row.session-row[data-client="reasonix"][data-detail-unavailable="true"] { cursor: default; }
-.row.session-row[data-client="reasonix"][data-detail-unavailable="true"] .row-metrics::after { content: none; }
 .view-preference-row.has-subgroup {
   grid-template-columns: minmax(0, 1fr) repeat(3, 22px);
 }

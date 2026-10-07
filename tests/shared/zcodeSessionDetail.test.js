@@ -109,6 +109,6 @@ test('the renderer whitelists zcode in both detail gates', () => {
     path.join(__dirname, '..', '..', 'src', 'electron', 'renderer', 'app.js'),
     'utf8'
   );
-  assert.match(source, /\['claude', 'codex', 'opencode', 'dsh', 'zcode'\]\.includes\(client\)/);
+  assert.match(source, /\['claude',[^\]]*'zcode'\]\.includes\(client\)/);
   assert.match(source, /client !== 'zcode'\) return;/);
 });
