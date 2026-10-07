@@ -440,3 +440,43 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
   6) 待办：22 断言全量回归留机器空闲时跑；上游新功能「侧边栏全屏自动隐藏」
      （edgeDockMode: 'alwaysExceptFullScreen'）留用户手测——它复用同一 poll，
      自动获得我们的输入回放与 topmost 保护。
+
+【升级记录（2026-10-08，v0.64.0 → v0.67.0）】
+  1) 三版本跨度：45 提交、316 文件（+32746/−7200）。MiMo Desktop/Console、
+     CodeBuddy/WorkBuddy 会话、iCloud→Hub/Cloudflare 额外同步、葡语、图表颜色
+     与文字大小设置等。Electron 依赖不变（43.4.0）。
+  2) 网络：git fetch 两次被 reset（curl 56），CDN 下载正常——用户开 VPN 后
+     fetch 成功（未启用 codeload 合成基准）。安装包 API digest sha256
+     7ce8511a… 实测 MATCH（119,731,000 B，一次断流 curl -C - 续传）。
+  3) 安装：v0640 锚点移存 opencode\v0640-anchors\ → /S 静默安装 → 重建
+     app.asar.v0670-official.bak + .unpacked（17,605,198 B，官方包反而变小）。
+  4) rebase 31→32 提交（31 补丁 + 1 fallout 修复），7 处冲突全语义合并：
+     - sessionMetadata：workbuddy+zcode 共存（三度同型冲突，老规矩）
+     - app.js detail 白名单 ×2：claude/codebuddy/codex/opencode/dsh/workbuddy/zcode
+     - styles.css 指针光标：上游已泛化 .row[role=button]，弃我方 per-client 规则
+     - styles.css trends：上游 rem 字号 + 我方 position:relative（y 轴标签锚点）
+     - sessionRows.test.js：上游 cache 测试与我方 sort-mode 测试共存
+     - dock.js 严重度口径：**取上游**——上游已把"颜色/数字分离"反转为有意设计
+       （颜色=最紧池告警、数字=主窗口）并新增环补间动画数据键，我方 v0.63 的
+       同源修复与之方向相反且上游版本带配套基础设施
+  5) fallout 三连修（提交 73410518 + locale 计数）：pt-BR 缺我方 5 键（session
+     sort ×3 + edge 窗口行为 ×2）→ 补葡语翻译；我方 zcode 白名单测试写死数组
+     → 放宽为成员断言；sort-mode 键语言计数 5→6。**上游 v0.67 移除了
+     .row-metrics::after chevron 图案并有测试断言其不存在——我方 v0.63 的
+     chevron 功能正式放弃，跟随上游**。
+  6) 测试：6126 用例 6111 过；3 红为 symlink EPERM 环境限制，另 2 个（真实进程
+     HTTP / vendor manifest）隔离重跑必过、属全量并发下的时序抖动。
+  7) 交付：全新解包 asar-extracted-v067 → overlay 25 文件 → 双向内容断言
+     15/15（我方输入回放/ack/sort-mode/pt-BR/manualRefresh/趋势刻度 + 上游
+     fullScreenProbe/pop-up-menu reassert/grok+workbuddy/严重度分离）→ pack
+     45,572,394 B → 换装，启动零对话框。
+  8) ⚠️ 验收教训（假阴性）：真拖拽测试连报 moved=False，深挖两层虚惊——
+     ① 页面手势/主进程链路全好（dragStart IPC→handleDragStart→20 次
+     followDrag 跟随→buttonUp 收尾，主进程临时文件日志全程记录）；
+     ② 真因：rail 已停在行程底部（y=538+366=904≈贴底），而测试脚本只会
+     往下拖 → 视觉零位移。向上拖立即 moved=True（y=538→121）。
+     **规则：拖拽验收脚本必须按当前行程方向选择拖动方向，或先读
+     placement.offset 决定往哪拖**。另：contextBridge 暴露的 bridge 不可
+     monkey-patch，hook bridge.dragStart 计数恒为 0 是假象，验 IPC 要在
+     主进程侧落文件日志。
+  9) 拖拽诊断代码已全部剥离（controller.js 恢复干净，未提交过）。
