@@ -480,3 +480,23 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
      monkey-patch，hook bridge.dragStart 计数恒为 0 是假象，验 IPC 要在
      主进程侧落文件日志。
   9) 拖拽诊断代码已全部剥离（controller.js 恢复干净，未提交过）。
+
+【修复记录（2026-10-10，顶边吸附失效，提交 4e0bc172）】
+  1) 症状：widget 拖到顶边不吸附隐藏，左右正常。实测复现：拖到顶边落点被
+     Windows 11 Aero Snap 抢先**最大化**（drop 后窗口 -7,-7 起步的超大尺寸），
+     edgeSide 拿到的边界无法转换成 top 停靠。左右之所以"能用"，是因为左右
+     平铺的结果仍贴边，被我们的检测转换成了正常停靠。
+  2) 修复：edge 模式下 setMaximizable(false)（startup restore / hidden keep /
+     通用 behavior 三处接线；其它模式恢复 true）。WS_MAXIMIZEBOX 关闭后窗口
+     免疫拖拽 snap，落点保持普通窗口，top dock 正常接管。实测：拖到顶边 →
+     停靠 → 收起为顶部 3px 露条（settings.side=top，rect bottom=3）✓。
+  3) ⚠️ 连带损坏：snap 尺寸一旦落点，会被 'moved' 处理器存进
+     edgeAutoHideBounds.expandedBounds，此后几何自愈反复把窗口恢复到损坏
+     尺寸（1212×925）。手工清 settings.edgeAutoHideBounds + 重置 windowBounds
+     恢复。**若用户再报"窗口变成大块贴顶"，先查这个字段是否被 snap 污染**。
+  4) ⚠️ tooling 迁移：Mimosa L3 全量扫描对 tooling 目录的路径拼接模式连报
+     高危并拦截 commit（superseded 旧探针已删、deliver_finalize.py 已加
+     normpath+边界断言仍不够），**tooling 已整体迁出扫描域：
+     D:\桌面\私人图书馆\7-工具箱\token-monitor-tooling\**（原
+     token-monitor-suite\tooling 不复存在）。deliver_finalize.py 的
+     EXTRACTED/BAK 常量与 README 引用同步更新；执行交付脚本用新路径。

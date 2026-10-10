@@ -827,7 +827,7 @@ index 3d5995c1..1006b69d 100644
  
  function floatingBubbleNativeGlassEnabled(settings = {}) {
 diff --git a/src/electron/main.js b/src/electron/main.js
-index 6c4b8119..6a6c70f4 100644
+index 6c4b8119..4778381b 100644
 --- a/src/electron/main.js
 +++ b/src/electron/main.js
 @@ -24,6 +24,8 @@ const { createDefaultTrayLayout, normalizeTrayLayout } = require('../shared/tray
@@ -1345,7 +1345,7 @@ index 6c4b8119..6a6c70f4 100644
      if (saved.serviceProviderDisplayOrder !== undefined) {
        merged.serviceProviderDisplayOrder = String(saved.serviceProviderDisplayOrder || '');
      }
-@@ -2847,6 +3306,77 @@ function applyWindowSettings() {
+@@ -2847,10 +3306,92 @@ function applyWindowSettings() {
      applyCollapsedFloatingBubbleLimits(mainWindow.getBounds());
      return;
    }
@@ -1389,6 +1389,11 @@ index 6c4b8119..6a6c70f4 100644
 +      mainWindow.setAlwaysOnTop(true, floatingAlwaysOnTopLevel());
 +      if (typeof mainWindow.setMovable === 'function') mainWindow.setMovable(true);
 +      if (typeof mainWindow.setResizable === 'function') mainWindow.setResizable(true);
++      // A maximizable window lets Windows 11's Aero Snap win a drag toward the
++      // top edge: the drop maximizes instead of docking, and the top dock can
++      // never engage (left/right survive because their tiled results still sit
++      // on an edge). Non-maximizable windows are exempt from drag snapping.
++      if (typeof mainWindow.setMaximizable === 'function') mainWindow.setMaximizable(false);
 +      if (typeof mainWindow.setIgnoreMouseEvents === 'function') mainWindow.setIgnoreMouseEvents(false);
 +      if (typeof mainWindow.setFocusable === 'function') mainWindow.setFocusable(true);
 +      if (typeof mainWindow.setSkipTaskbar === 'function') mainWindow.setSkipTaskbar(skipTaskbarForSettings(settings));
@@ -1413,6 +1418,8 @@ index 6c4b8119..6a6c70f4 100644
 +    mainWindow.setAlwaysOnTop(true, floatingAlwaysOnTopLevel());
 +    if (typeof mainWindow.setMovable === 'function') mainWindow.setMovable(true);
 +    if (typeof mainWindow.setResizable === 'function') mainWindow.setResizable(true);
++    // Same Aero-Snap guard as the startup path above.
++    if (typeof mainWindow.setMaximizable === 'function') mainWindow.setMaximizable(false);
 +    if (typeof mainWindow.setIgnoreMouseEvents === 'function') mainWindow.setIgnoreMouseEvents(false);
 +    if (typeof mainWindow.setFocusable === 'function') mainWindow.setFocusable(true);
 +    if (typeof mainWindow.setSkipTaskbar === 'function') mainWindow.setSkipTaskbar(skipTaskbarForSettings(settings));
@@ -1423,7 +1430,15 @@ index 6c4b8119..6a6c70f4 100644
    const behavior = describeWindowBehavior(settings);
    mainWindow.setAlwaysOnTop(behavior.alwaysOnTop, floatingAlwaysOnTopLevel());
    if (typeof mainWindow.setMovable === 'function') mainWindow.setMovable(behavior.draggable);
-@@ -2858,6 +3388,17 @@ function applyWindowSettings() {
+   if (typeof mainWindow.setResizable === 'function') mainWindow.setResizable(behavior.resizable);
++  // Edge mode must not be maximizable: Windows 11 claims a drag toward the top
++  // edge for its own maximize, which starves the top dock. Restore the flag in
++  // every other mode so behavior switches keep the window maximizable.
++  if (typeof mainWindow.setMaximizable === 'function') mainWindow.setMaximizable(behavior.mode !== 'edge');
+   if (typeof mainWindow.setIgnoreMouseEvents === 'function') {
+     mainWindow.setIgnoreMouseEvents(behavior.mousePassthrough);
+   }
+@@ -2858,6 +3399,17 @@ function applyWindowSettings() {
    if (typeof mainWindow.setSkipTaskbar === 'function') mainWindow.setSkipTaskbar(skipTaskbarForSettings(settings));
    if (!behavior.focusable && typeof mainWindow.blur === 'function') mainWindow.blur();
    syncTaskbarZOrder();
@@ -1441,7 +1456,7 @@ index 6c4b8119..6a6c70f4 100644
  }
  
  function nativeBlurEnabled(source = settings) {
-@@ -5608,6 +6149,15 @@ function ensureEdgeDockController() {
+@@ -5608,6 +6160,15 @@ function ensureEdgeDockController() {
      rendererDir: path.join(__dirname, 'renderer'),
      preloadPath: path.join(__dirname, 'edgeDock', 'preload.js'),
      getSettings: () => settings,
@@ -1457,7 +1472,7 @@ index 6c4b8119..6a6c70f4 100644
      nativeGlass: () => nativeBlurEnabled(),
      // The dock follows the widget's glass style unless it has its own, on the
      // same terms as the main window: Reduce Transparency hands the surface back
-@@ -5812,6 +6362,8 @@ function setWindowPresentationFromMenu(value) {
+@@ -5812,6 +6373,8 @@ function setWindowPresentationFromMenu(value) {
    saveSettings();
    if (previousTrayMode) exitTrayMode();
    else {
@@ -1466,7 +1481,7 @@ index 6c4b8119..6a6c70f4 100644
      applyWindowSettings();
      focusExistingWindow();
    }
-@@ -6902,6 +7454,7 @@ function createWindow(boundsOverride, options = {}) {
+@@ -6902,6 +7465,7 @@ function createWindow(boundsOverride, options = {}) {
      }
    });
    mainWindow = win;
@@ -1474,7 +1489,7 @@ index 6c4b8119..6a6c70f4 100644
    mainWindowChrome = { collapsedFloatingBubble };
    applyMacSpaceBehavior();
    applyWindowsChrome(win, { round: true });
-@@ -6943,17 +7496,83 @@ function createWindow(boundsOverride, options = {}) {
+@@ -6943,17 +7507,83 @@ function createWindow(boundsOverride, options = {}) {
    applyNativeMaterial();
    win.on('focus', () => {
      stopFloatingBubbleAutoCollapseTimer();
@@ -1563,7 +1578,7 @@ index 6c4b8119..6a6c70f4 100644
    win.on('minimize', stopTaskbarZOrderKeeper);
    win.on('close', (event) => {
      if (quitRequested) return;
-@@ -7184,6 +7803,28 @@ function rebuildWindow() {
+@@ -7184,6 +7814,28 @@ function rebuildWindow() {
    });
  }
  
@@ -1592,7 +1607,7 @@ index 6c4b8119..6a6c70f4 100644
  app.whenReady().then(() => {
    if (process.platform === 'darwin' && app.dock) app.dock.setIcon(APP_ICON_PATH);
    ensureSettingsLoaded();
-@@ -7455,6 +8096,7 @@ app.whenReady().then(() => {
+@@ -7455,6 +8107,7 @@ app.whenReady().then(() => {
          patch.displayFontFamily ?? settings.displayFontFamily
        ),
        tokenRateMode: normalizeTokenRateMode(patch.tokenRateMode ?? settings.tokenRateMode),
@@ -1600,7 +1615,7 @@ index 6c4b8119..6a6c70f4 100644
        floatingBubbleEnabled: parseBoolean(patch.floatingBubbleEnabled ?? settings.floatingBubbleEnabled, false),
        edgeDockEnabled: parseBoolean(patch.edgeDockEnabled ?? settings.edgeDockEnabled, false),
        edgeDockSide: normalizeEdgeDockSide(patch.edgeDockSide ?? settings.edgeDockSide),
-@@ -7604,6 +8246,7 @@ app.whenReady().then(() => {
+@@ -7604,6 +8257,7 @@ app.whenReady().then(() => {
      applyWindowSettings();
      syncFloatingBubbleAvailability();
      syncEdgeDock();
@@ -1608,7 +1623,7 @@ index 6c4b8119..6a6c70f4 100644
      const nextNativeMaterial = nativeBlurEnabled();
      const nextWindowsBackdrop = normalizeWindowsBackdropMode(settings?.windowsBackdrop);
      const windowsBackdropChanged = previousWindowsBackdrop !== nextWindowsBackdrop
-@@ -7707,6 +8350,27 @@ app.whenReady().then(() => {
+@@ -7707,6 +8361,27 @@ app.whenReady().then(() => {
    });
    ipcMain.handle('floatingBubble:expand', () => expandFloatingBubble());
    ipcMain.handle('floatingBubble:peek', () => expandFloatingBubble({ focus: false }));
@@ -1636,7 +1651,7 @@ index 6c4b8119..6a6c70f4 100644
    ipcMain.handle('floatingBubble:collapseIfIdle', () => {
      if (!mainWindow || mainWindow.isDestroyed()) return false;
      if (floatingBubbleState.collapsed || !canUseFloatingBubble(settings)) return false;
-@@ -8901,6 +9565,20 @@ app.whenReady().then(() => {
+@@ -8901,6 +9576,20 @@ app.whenReady().then(() => {
    });
    ipcMain.handle('dashboard:open', () => { createDashboardWindow(); return true; });
    ipcMain.handle('dashboard:getHistory', (_event, options) => getDashboardHistory(options));
