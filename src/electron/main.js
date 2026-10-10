@@ -2868,6 +2868,11 @@ function applyWindowSettings() {
       mainWindow.setAlwaysOnTop(true, floatingAlwaysOnTopLevel());
       if (typeof mainWindow.setMovable === 'function') mainWindow.setMovable(true);
       if (typeof mainWindow.setResizable === 'function') mainWindow.setResizable(true);
+      // A maximizable window lets Windows 11's Aero Snap win a drag toward the
+      // top edge: the drop maximizes instead of docking, and the top dock can
+      // never engage (left/right survive because their tiled results still sit
+      // on an edge). Non-maximizable windows are exempt from drag snapping.
+      if (typeof mainWindow.setMaximizable === 'function') mainWindow.setMaximizable(false);
       if (typeof mainWindow.setIgnoreMouseEvents === 'function') mainWindow.setIgnoreMouseEvents(false);
       if (typeof mainWindow.setFocusable === 'function') mainWindow.setFocusable(true);
       if (typeof mainWindow.setSkipTaskbar === 'function') mainWindow.setSkipTaskbar(skipTaskbarForSettings(settings));
@@ -2892,6 +2897,8 @@ function applyWindowSettings() {
     mainWindow.setAlwaysOnTop(true, floatingAlwaysOnTopLevel());
     if (typeof mainWindow.setMovable === 'function') mainWindow.setMovable(true);
     if (typeof mainWindow.setResizable === 'function') mainWindow.setResizable(true);
+    // Same Aero-Snap guard as the startup path above.
+    if (typeof mainWindow.setMaximizable === 'function') mainWindow.setMaximizable(false);
     if (typeof mainWindow.setIgnoreMouseEvents === 'function') mainWindow.setIgnoreMouseEvents(false);
     if (typeof mainWindow.setFocusable === 'function') mainWindow.setFocusable(true);
     if (typeof mainWindow.setSkipTaskbar === 'function') mainWindow.setSkipTaskbar(skipTaskbarForSettings(settings));
@@ -2903,6 +2910,10 @@ function applyWindowSettings() {
   mainWindow.setAlwaysOnTop(behavior.alwaysOnTop, floatingAlwaysOnTopLevel());
   if (typeof mainWindow.setMovable === 'function') mainWindow.setMovable(behavior.draggable);
   if (typeof mainWindow.setResizable === 'function') mainWindow.setResizable(behavior.resizable);
+  // Edge mode must not be maximizable: Windows 11 claims a drag toward the top
+  // edge for its own maximize, which starves the top dock. Restore the flag in
+  // every other mode so behavior switches keep the window maximizable.
+  if (typeof mainWindow.setMaximizable === 'function') mainWindow.setMaximizable(behavior.mode !== 'edge');
   if (typeof mainWindow.setIgnoreMouseEvents === 'function') {
     mainWindow.setIgnoreMouseEvents(behavior.mousePassthrough);
   }
