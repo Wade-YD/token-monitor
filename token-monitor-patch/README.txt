@@ -500,3 +500,38 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
      D:\桌面\私人图书馆\7-工具箱\token-monitor-tooling\**（原
      token-monitor-suite\tooling 不复存在）。deliver_finalize.py 的
      EXTRACTED/BAK 常量与 README 引用同步更新；执行交付脚本用新路径。
+
+【升级记录（2026-10-12，v0.67.0 → v0.69.0）】
+  1) 双版本跨度：27 提交、198 文件（+20747/−1165）。Claude/Codex 等待状态、
+     Codex 子代理分组、T3 Code 会话归主、Cursor Grok Bot、Antigravity 会话标题/
+     生成速度、edge-dock 运行指示器/尺寸设置/等待状态等。**Electron 43.4.0→43.7.9**
+     （原生层修复需复验：15/15 断言全过，koffi/输入回放/探针均在位）。
+  2) 安装包 API digest sha256 cd3f4e3b… 实测 MATCH（124,988,520 B，一次断流
+     curl -C - 续传）。v0670 锚点移存 opencode\v0670-anchors\ → /S 静默安装 →
+     重建 app.asar.v0690-official.bak + .unpacked（17,914,345 B）。
+  3) rebase 33 提交，7 处冲突全语义合并：
+     - sessionMetadata：上游 T3（readT3SessionRelationResult/t3SessionIdentity）
+       与 zcode 共存（三度同型，老规矩）
+     - app.js/sessionRows.js detail gate：**上游 v0.69 重构出
+       sessionRowDetailAvailable(row) 统一入口**——取上游架构，zcode 加进其
+       共享白名单（sessionRows.js:324）
+     - sessionRows.test.js：上游 Grok Bot 测试与我方 sort-mode 测试共存
+       （尾部共享闭合，逐块补 `});`）
+     - edgeDockController.test.js：上游 dock-size 测试与我方 topmost 测试共存
+     - preload.js：上游 pointer() 与我方 inputAck() 共存
+     - controller.js schedulePoll：上游 peekNear 快轮询 + 我方 replay 快轮询合并
+     - app.js sort-mode：上游 sessionPresentationOptions 重构 → sortMode 作为
+       其选项字段注入；**sort 读取内联**（源码切片测试在隔离作用域求值该函数）
+  4) 测试修复（提交 e4b987f2）：fixture 默认提供 forceTopmostDockWindows→1
+     （poll 跳过 Electron fallback，zOrder 计数只记控制器自身路径；测 fallback
+     的测试显式传 0）；zcode 白名单测试改断 sessionRows.js 新位置。
+     全量 6669 用例 6650 过；3 环境红（symlink EPERM）+ 2 负载抖动（隔离必过）。
+  5) 交付：全新解包 asar-extracted-v069 → overlay 25 文件 → 双向断言 15/15
+     （我方输入回放/ack/zcode gate/sort-mode/Aero-Snap guard + 上游 resume
+     topmost/T3/sessionPresentationOptions）→ pack 46,043,032 B → 换装，启动零对话框。
+  6) ⚠️ 拖拽验收方法论更新（本轮虚惊）：**用户环境是双屏 + 125% DPI**。
+     自动化拖拽脚本在跨屏场景坐标不可靠（GetWindowRect 物理坐标 vs
+     SetCursorPos 逻辑坐标混用；rail 被拖到副屏后 WindowFromPoint 命中的
+     是覆盖的终端窗口）。**双屏环境下的拖拽验收以用户手测为准**，脚本仅做
+     单屏场景；若必须脚本化，先 SetProcessDPIAware + 用 Electron 页面内
+     screenX/screenY（CSS 坐标）换算。
