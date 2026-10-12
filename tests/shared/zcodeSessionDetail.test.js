@@ -105,10 +105,17 @@ test('readSessionDetail(zcode) degrades when the database is missing or corrupt'
 });
 
 test('the renderer whitelists zcode in both detail gates', () => {
-  const source = fs.readFileSync(
+  // v0.69 moved the client whitelist behind sessionRows.sessionRowDetailAvailable;
+  // app.js gates on that helper and the keydown handler still names zcode directly.
+  const app = fs.readFileSync(
     path.join(__dirname, '..', '..', 'src', 'electron', 'renderer', 'app.js'),
     'utf8'
   );
-  assert.match(source, /\['claude',[^\]]*'zcode'\]\.includes\(client\)/);
-  assert.match(source, /client !== 'zcode'\) return;/);
+  assert.match(app, /sessionRowsApi\.sessionRowDetailAvailable\(\{ client, sessionDetailAvailable \}\)/);
+  assert.match(app, /client !== 'zcode'\) return;/);
+  const sessionRows = fs.readFileSync(
+    path.join(__dirname, '..', '..', 'src', 'electron', 'renderer', 'sessionRows.js'),
+    'utf8'
+  );
+  assert.match(sessionRows, /\['claude',[^\]]*'zcode'\]\.includes\(row\?\.client\)/);
 });

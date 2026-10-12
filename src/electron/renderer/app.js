@@ -3660,7 +3660,7 @@ function modelRowsForPeriod(period, rankingMetric = state.settings?.modelRanking
 }
 
 function sessionSortMode() {
-  return sessionRowsApi.normalizeSessionSortMode(state.settings?.sessionSortMode);
+  return state.settings?.sessionSortMode === 'tokens' ? 'tokens' : 'recent';
 }
 
 function updateSessionSortToggle() {
@@ -3692,8 +3692,9 @@ function sessionPresentationOptions() {
     localSourceDevice: localDevice ? { deviceId: localDevice.deviceId,
       name: deviceBreakdownApi.deviceLabel(localDevice), platform: localDevice.platform || '', deviceKind: localDevice.deviceKind || 'computer' } : undefined,
 
-    sortMode: sessionSortMode(),
-
+    // Inlined rather than calling sessionSortMode(): source-slicing tests
+    // evaluate this function body in isolation, where only its own locals exist.
+    sortMode: state.settings?.sessionSortMode === 'tokens' ? 'tokens' : 'recent',
     subagents: {
       countLabel: (count) => t('sessions.subagentCount', { count }),
       latestModelLabel: t('session.latestModel'),

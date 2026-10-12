@@ -196,6 +196,12 @@ function createFixture(options = {}) {
     isFullScreen: options.isFullScreen,
     primaryButtonDown: options.primaryButtonDown,
     installNonActivatingInput: options.installNonActivatingInput,
+    // The poll's native topmost sweep is a no-op here (no koffi in tests) but
+    // reports success, so the poll skips its Electron fallback and the
+    // zOrder assertions below only count the controller's own raise paths.
+    // Tests that exercise that fallback pass forceTopmostDockWindows: () => 0.
+    forceTopmostDockWindows: options.forceTopmostDockWindows || (() => 1),
+    probeDockInput: options.probeDockInput,
     applyShapeMask: (win) => {
       maskWindows.push(win);
       return options.maskAvailable !== false;
@@ -892,7 +898,7 @@ test('the poll re-asserts topmost when Windows strips the flag', async (t) => {
   // Windows removes WS_EX_TOPMOST from the dock surfaces over a session
   // (shell z-order banding when other apps activate); a dock that lost
   // topmost still paints but is input-dead under whatever covers the edge.
-  const fixture = createFixture();
+  const fixture = createFixture({ forceTopmostDockWindows: () => 0 });
   t.after(() => fixture.controller.stop());
   for (const win of FakeBrowserWindow.instances) {
     win.isAlwaysOnTop = () => win.topmostRestored === true;
