@@ -61,6 +61,7 @@ function fixture({ visible = true, focused = visible, platform = 'darwin', histo
     popoverBounds: () => ({}), setTimeout: (fn) => timers.push(fn),
     applyMacActivationPolicy() {}, applyMacSpaceBehavior() {}, applyWindowSettings() {},
     nudgeTaskbarZOrder() {}, scheduleFloatingBubbleAutoCollapse() {}, expandFloatingBubble() {},
+    scheduleEdgeAutoHide() {},
     focusExistingWindow: () => win.show()
   });
   vm.runInContext([
