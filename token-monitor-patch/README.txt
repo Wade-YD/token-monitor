@@ -535,3 +535,30 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
      是覆盖的终端窗口）。**双屏环境下的拖拽验收以用户手测为准**，脚本仅做
      单屏场景；若必须脚本化，先 SetProcessDPIAware + 用 Electron 页面内
      screenX/screenY（CSS 坐标）换算。
+
+【升级记录（2026-10-24，v0.69.0 → v0.78.0）】
+  1) 九版本跨度：100 提交、448 文件（+41053/−3124）。Windows 侧边栏"系统"玻璃、
+     macOS 刘海面板玻璃、ZCode 会话标题+子代理归父、悬停提示移除（title→
+     aria-label）、侧边栏展开卡片防遮挡、Notch 面板重构等。Electron 不变
+     （43.7.9）。**逐个 tag fetch（9 个）——整批 fetch 必断流**。
+  2) 安装包 API digest sha256 4971c322… 实测 MATCH（125,787,712 B，一次续传）。
+     v0690 锚点移存 opencode\v0690-anchors\ → /S 静默安装 → 重建
+     app.asar.v0780-official.bak + .unpacked（18,609,952 B）。
+  3) rebase 35 提交，9 处冲突。**本轮最大事件：上游原生采纳 ZCode 会话标题**
+     （providers/zcode/sessionMetadata.js，含 parent_id 子代理折叠——注释与我方
+     一致，属"上游吸收我方方案"）。处置：provider/test 一律取上游；我方保留的
+     是上游没有的部分——sessionRowDetailAvailable 白名单加 zcode（上游数组新增
+     pi/omp 后变 9 客户端）+ readSessionEvents 事件读取器（详情下钻用，上游无
+     此功能）与上游 resolver 并存同一模块（readSessionEvents 的 dbPath 改走上游
+     zcodeDatabasePath）。schedulePoll delay 上游抽成 edgeDockPollDelay() 函数
+     （geometry.js），我方 replay 条件作为新参数注入。
+  4) 其他冲突模式：dashboard.html 按钮上游 aria-label 化（取上游）；trends
+     y-ticks 的 inline style → CSSOM（CSP 特性）；glass 测试上游改名 "falls back
+     to the shaped renderer"（我方 topmost 测试保留插前）；trayPopoverToggle
+     vm 切片需补 scheduleEdgeAutoHide stub；sessionMetadata require 自动合并
+     重复（删一份）。
+  5) 测试：7782 用例 7735 过；4 红为 symlink EPERM 环境限制（上游新增 compressed
+     Codex symlink 测试加入此列）+ 2 负载抖动（隔离必过）。
+  6) 交付：全新解包 asar-extracted-v078 → overlay 25 文件 → 双向断言 15/15 →
+     pack 49,402,919 B → 换装，启动零对话框。**拖拽验收以用户手测为准（双屏
+     环境自动化脚本坐标不可靠，见 v0.69 轮记录）**。

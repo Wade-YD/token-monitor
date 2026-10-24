@@ -233,18 +233,18 @@ index 00000000..20381e1f
 +  edgeTriggerHitTest
 +};
 diff --git a/src/electron/edgeDock/controller.js b/src/electron/edgeDock/controller.js
-index df9e5982..3b079b31 100644
+index ed7aa1b1..117a4fa9 100644
 --- a/src/electron/edgeDock/controller.js
 +++ b/src/electron/edgeDock/controller.js
-@@ -81,6 +81,7 @@ function createEdgeDockController(deps) {
-     onPlacementChange,
+@@ -83,6 +83,7 @@ function createEdgeDockController(deps) {
      applyShapeMask,
+     installNonActivatingInput = () => {},
      primaryButtonDown = () => null,
 +    probeDockInput = null,
      onToggleRateMode,
      onSwitchCodexAccount,
      canRefreshLimits = () => false,
-@@ -145,6 +146,19 @@ function createEdgeDockController(deps) {
+@@ -150,6 +151,19 @@ function createEdgeDockController(deps) {
    let placementOverride = null;
    let fullScreen = false;
    let fullScreenCheckedAt = -Infinity;
@@ -264,20 +264,16 @@ index df9e5982..3b079b31 100644
    let ipcRegistered = false;
    let displayListenersAttached = false;
    const shapes = { peek: null, rail: null, bubble: null };
-@@ -938,7 +952,11 @@ function createEdgeDockController(deps) {
+@@ -992,7 +1006,7 @@ function createEdgeDockController(deps) {
      const snapshot = intent.snapshot();
      // The approach zone is on the way to the handle, and only the poll lets the
      // handle take the pointer, so it runs at the active rate from there on.
--    const delay = drag ? POLL_DRAG_MS : (snapshot.revealed || peekNear ? POLL_ACTIVE_MS : POLL_IDLE_MS);
-+    // The input replay fallback also needs the drag cadence while a press is
-+    // held, or the injected drag would stutter.
-+    const delay = (drag || inputHeal.replay)
-+      ? POLL_DRAG_MS
-+      : (snapshot.revealed || peekNear ? POLL_ACTIVE_MS : POLL_IDLE_MS);
+-    const delay = edgeDockPollDelay({ drag, revealed: snapshot.revealed, near: peekNear });
++    const delay = edgeDockPollDelay({ drag, replay: Boolean(inputHeal.replay), revealed: snapshot.revealed, near: peekNear });
      pollTimer = setTimeout(poll, delay);
    }
  
-@@ -948,6 +966,8 @@ function createEdgeDockController(deps) {
+@@ -1002,6 +1016,8 @@ function createEdgeDockController(deps) {
      try {
        const point = screen.getCursorScreenPoint();
        const current = layout();
@@ -286,7 +282,7 @@ index df9e5982..3b079b31 100644
        // The renderer can miss the pointerup of a drag, because the window it is
        // dragging moves out from under the captured pointer; the OS button
        // state is the authoritative end of the gesture.
-@@ -1004,6 +1024,194 @@ function createEdgeDockController(deps) {
+@@ -1063,6 +1079,194 @@ function createEdgeDockController(deps) {
      schedulePoll();
    }
  
@@ -481,7 +477,7 @@ index df9e5982..3b079b31 100644
    function followDrag(point, current) {
      let targetDisplay;
      try { targetDisplay = screen.getDisplayNearestPoint?.(point) || display(); } catch (_) { targetDisplay = display(); }
-@@ -1131,6 +1339,15 @@ function createEdgeDockController(deps) {
+@@ -1190,6 +1394,15 @@ function createEdgeDockController(deps) {
        if (surfaceFor(event.sender) !== 'rail') return;
        handleDragStart(payload?.grabOffsetY);
      });
@@ -497,6 +493,23 @@ index df9e5982..3b079b31 100644
      ipcMain.on('edgeDock:dragEnd', (event) => {
        if (surfaceFor(event.sender) !== 'rail') return;
        handleDragEnd();
+diff --git a/src/electron/edgeDock/geometry.js b/src/electron/edgeDock/geometry.js
+index 354c4f17..e79222c9 100644
+--- a/src/electron/edgeDock/geometry.js
++++ b/src/electron/edgeDock/geometry.js
+@@ -72,8 +72,10 @@ const EDGE_DOCK_TIMING = Object.freeze({
+   bubbleDelayMs: 70
+ });
+ 
+-function edgeDockPollDelay({ drag, revealed, near }) {
+-  return drag ? 16 : (revealed || near ? 40 : 90);
++function edgeDockPollDelay({ drag, replay, revealed, near }) {
++  // The input replay fallback needs the drag cadence while a press is held,
++  // or the injected drag would stutter.
++  return (drag || replay) ? 16 : (revealed || near ? 40 : 90);
+ }
+ 
+ // `alwaysExceptFullScreen` behaves as `always` on the desktop and as
 diff --git a/src/electron/edgeDock/preload.js b/src/electron/edgeDock/preload.js
 index e051b1df..138b393e 100644
 --- a/src/electron/edgeDock/preload.js
@@ -829,27 +842,27 @@ index 3d5995c1..1006b69d 100644
  
  function floatingBubbleNativeGlassEnabled(settings = {}) {
 diff --git a/src/electron/main.js b/src/electron/main.js
-index bb570b91..d6e462a5 100644
+index 18499e55..0d930abb 100644
 --- a/src/electron/main.js
 +++ b/src/electron/main.js
-@@ -24,6 +24,8 @@ const { createDefaultTrayLayout, normalizeTrayLayout } = require('../shared/tray
- const fontSettingsApi = require('../shared/fontSettings');
+@@ -25,6 +25,8 @@ const fontSettingsApi = require('../shared/fontSettings');
  const motionPreferenceApi = require('./motionPreference');
+ const tokenNumberAnimationApi = require('./tokenNumberAnimation');
  const { clearBackgroundImage, getBackgroundImage, importBackgroundImage } = require('./backgroundImage');
 +const edgeAutoHideApi = require('./edgeAutoHide');
 +const edgePopupGuardApi = require('./edgePopupGuard');
  const { createClientSourceIpcHandlers } = require('./clientSourceIpc');
  const { createClaudeWebFetch } = require('./providers/claude/webFetch');
  const { createMimoExchangeFetch } = require('./providers/mimo/exchangeFetch');
-@@ -410,6 +412,7 @@ const {
- const { applyWindowsChrome } = require('./windowsChrome');
- const { canUseEdgeDock, createEdgeDockController, edgeDockSupported } = require('./edgeDock/controller');
+@@ -427,6 +429,7 @@ const { NOTCH_PANEL_STAT_ITEMS, notchLimitItems, notchPanelItems, notchWeek } =
+ const { createNotchHistory } = require('./notch/history');
+ const trayLayoutApi = require('../shared/trayLayout');
  const { createFullScreenProbe } = require('./edgeDock/fullScreenProbe');
 +const edgeDockTopmost = require('./edgeDock/topmost');
  const {
    normalizeEdgeDockCustomScale,
    normalizeEdgeDockDisplayId,
-@@ -580,6 +583,7 @@ function defaultSettings() {
+@@ -610,6 +613,7 @@ function defaultSettings() {
      liveTokenRateScope: 'all',
      compactTokenUnits: 'western',
      tokenRateMode: 'speed',
@@ -857,7 +870,7 @@ index bb570b91..d6e462a5 100644
      heatmapMetric: 'cost',
      modelRankingMetric: 'tokens',
      homeActiveDaysWindow: 'all',
-@@ -725,6 +729,10 @@ function normalizeTokenRateMode(value) {
+@@ -778,6 +782,10 @@ function normalizeTokenRateMode(value) {
    return value === 'burn' ? 'burn' : 'speed';
  }
  
@@ -868,7 +881,7 @@ index bb570b91..d6e462a5 100644
  function normalizeLiveTokenRateScope(value) {
    return value === 'device' ? 'device' : 'all';
  }
-@@ -2050,6 +2058,7 @@ function restoredBounds() {
+@@ -2174,6 +2182,7 @@ function restoredBounds() {
  let persistBoundsTimer = null;
  let floatingBubbleAutoCollapseTimer = null;
  const floatingBubbleState = { collapsed: false, side: null, collapsedBounds: null, expandedBounds: null, suppressNextCollapse: false, contentSize: null };
@@ -876,7 +889,7 @@ index bb570b91..d6e462a5 100644
  let mainWindowChrome = { collapsedFloatingBubble: false };
  
  function stopPersistBoundsTimer() {
-@@ -2300,6 +2309,451 @@ function syncFloatingBubbleAvailability() {
+@@ -2424,6 +2433,451 @@ function syncFloatingBubbleAvailability() {
    sendFloatingBubbleState();
  }
  
@@ -1328,7 +1341,7 @@ index bb570b91..d6e462a5 100644
  function persistBoundsSoon() {
    if (!mainWindow || mainWindow.isDestroyed()) return;
    if (!shouldPersistWindowBounds(mainWindow)) {
-@@ -2317,6 +2771,10 @@ function persistBoundsSoon() {
+@@ -2441,6 +2895,10 @@ function persistBoundsSoon() {
        // Popover x/y is anchored to the tray icon each open; only the size carries over.
        if (prev.width === next.width && prev.height === next.height) return;
        settings.windowBounds = { ...prev, width: next.width, height: next.height };
@@ -1339,7 +1352,7 @@ index bb570b91..d6e462a5 100644
      } else if (floatingBubbleState.collapsed && floatingBubbleState.expandedBounds) {
        floatingBubbleState.collapsedBounds = next;
        const display = displayForBounds(next);
-@@ -2575,6 +3033,7 @@ function readSettings() {
+@@ -2706,6 +3164,7 @@ function readSettings() {
      merged.interfaceFontFamily = fontSettingsApi.normalizeFontFamily(merged.interfaceFontFamily);
      merged.displayFontFamily = fontSettingsApi.normalizeFontFamily(merged.displayFontFamily);
      merged.tokenRateMode = normalizeTokenRateMode(merged.tokenRateMode);
@@ -1347,7 +1360,7 @@ index bb570b91..d6e462a5 100644
      if (saved.serviceProviderDisplayOrder !== undefined) {
        merged.serviceProviderDisplayOrder = String(saved.serviceProviderDisplayOrder || '');
      }
-@@ -2865,10 +3324,92 @@ function applyWindowSettings() {
+@@ -3032,10 +3491,92 @@ function applyWindowSettings() {
      applyCollapsedFloatingBubbleLimits(mainWindow.getBounds());
      return;
    }
@@ -1440,7 +1453,7 @@ index bb570b91..d6e462a5 100644
    if (typeof mainWindow.setIgnoreMouseEvents === 'function') {
      mainWindow.setIgnoreMouseEvents(behavior.mousePassthrough);
    }
-@@ -2876,6 +3417,17 @@ function applyWindowSettings() {
+@@ -3043,6 +3584,17 @@ function applyWindowSettings() {
    if (typeof mainWindow.setSkipTaskbar === 'function') mainWindow.setSkipTaskbar(skipTaskbarForSettings(settings));
    if (!behavior.focusable && typeof mainWindow.blur === 'function') mainWindow.blur();
    syncTaskbarZOrder();
@@ -1458,7 +1471,7 @@ index bb570b91..d6e462a5 100644
  }
  
  function nativeBlurEnabled(source = settings) {
-@@ -5694,6 +6246,15 @@ function ensureEdgeDockController() {
+@@ -6054,6 +6606,15 @@ function ensureEdgeDockController() {
      rendererDir: path.join(__dirname, 'renderer'),
      preloadPath: path.join(__dirname, 'edgeDock', 'preload.js'),
      getSettings: () => settings,
@@ -1472,9 +1485,9 @@ index bb570b91..d6e462a5 100644
 +    // hardware click after a native shell rebuild.
 +    probeDockInput: () => edgeDockTopmost.probeDockInput(),
      nativeGlass: () => nativeBlurEnabled(),
-     // The dock follows the widget's glass style unless it has its own, on the
-     // same terms as the main window: Reduce Transparency hands the surface back
-@@ -5901,6 +6462,8 @@ function setWindowPresentationFromMenu(value) {
+     // The dock follows the widget's glass style unless it has its own; the
+     // controller decides whether there is material at all. Reduce Transparency
+@@ -6266,6 +6827,8 @@ function setWindowPresentationFromMenu(value) {
    saveSettings();
    if (previousTrayMode) exitTrayMode();
    else {
@@ -1483,7 +1496,7 @@ index bb570b91..d6e462a5 100644
      applyWindowSettings();
      focusExistingWindow();
    }
-@@ -7017,6 +7580,7 @@ function createWindow(boundsOverride, options = {}) {
+@@ -7410,6 +7973,7 @@ function createWindow(boundsOverride, options = {}) {
      }
    });
    mainWindow = win;
@@ -1491,7 +1504,7 @@ index bb570b91..d6e462a5 100644
    mainWindowChrome = { collapsedFloatingBubble };
    applyMacSpaceBehavior();
    applyWindowsChrome(win, { round: true });
-@@ -7058,17 +7622,83 @@ function createWindow(boundsOverride, options = {}) {
+@@ -7451,6 +8015,14 @@ function createWindow(boundsOverride, options = {}) {
    applyNativeMaterial();
    win.on('focus', () => {
      stopFloatingBubbleAutoCollapseTimer();
@@ -1506,7 +1519,10 @@ index bb570b91..d6e462a5 100644
    });
    win.on('blur', () => {
      nudgeTaskbarZOrder();
-     if (settings?.trayMode && !suppressNextBlurHide && !quitRequested) hidePopover();
+@@ -7465,13 +8037,71 @@ function createWindow(boundsOverride, options = {}) {
+         if (point && tray?.isPointerOverIcon?.(point)) recentPopoverBlur = { at: performance.now(), point };
+       }
+     }
 -    else if (!quitRequested) scheduleFloatingBubbleAutoCollapse();
 +    else if (!quitRequested) {
 +      scheduleFloatingBubbleAutoCollapse();
@@ -1580,7 +1596,7 @@ index bb570b91..d6e462a5 100644
    win.on('minimize', stopTaskbarZOrderKeeper);
    win.on('close', (event) => {
      if (quitRequested) return;
-@@ -7299,6 +7929,28 @@ function rebuildWindow() {
+@@ -7702,6 +8332,28 @@ function rebuildWindow() {
    });
  }
  
@@ -1609,23 +1625,24 @@ index bb570b91..d6e462a5 100644
  app.whenReady().then(() => {
    if (process.platform === 'darwin' && app.dock) app.dock.setIcon(APP_ICON_PATH);
    ensureSettingsLoaded();
-@@ -7576,6 +8228,7 @@ app.whenReady().then(() => {
+@@ -7985,6 +8637,7 @@ app.whenReady().then(() => {
          patch.displayFontFamily ?? settings.displayFontFamily
        ),
        tokenRateMode: normalizeTokenRateMode(patch.tokenRateMode ?? settings.tokenRateMode),
 +      sessionSortMode: normalizeSessionSortMode(patch.sessionSortMode ?? settings.sessionSortMode),
        floatingBubbleEnabled: parseBoolean(patch.floatingBubbleEnabled ?? settings.floatingBubbleEnabled, false),
-       edgeDockEnabled: parseBoolean(patch.edgeDockEnabled ?? settings.edgeDockEnabled, false),
-       edgeDockRefreshEnabled: parseBoolean(patch.edgeDockRefreshEnabled ?? settings.edgeDockRefreshEnabled, false),
-@@ -7729,6 +8382,7 @@ app.whenReady().then(() => {
+       notchEnabled: parseBoolean(patch.notchEnabled ?? settings.notchEnabled, false),
+       notchStyle: normalizeNotchStyle(patch.notchStyle ?? settings.notchStyle),
+@@ -8161,6 +8814,8 @@ app.whenReady().then(() => {
      applyWindowSettings();
      syncFloatingBubbleAvailability();
-     syncEdgeDock();
+     syncDockSurfaces();
++    syncEdgeDock();
 +    syncEdgeAutoHideAvailability();
      const nextNativeMaterial = nativeBlurEnabled();
      const nextWindowsBackdrop = normalizeWindowsBackdropMode(settings?.windowsBackdrop);
      const windowsBackdropChanged = previousWindowsBackdrop !== nextWindowsBackdrop
-@@ -7843,6 +8497,27 @@ app.whenReady().then(() => {
+@@ -8279,6 +8934,27 @@ app.whenReady().then(() => {
    });
    ipcMain.handle('floatingBubble:expand', () => expandFloatingBubble());
    ipcMain.handle('floatingBubble:peek', () => expandFloatingBubble({ focus: false }));
@@ -1653,7 +1670,7 @@ index bb570b91..d6e462a5 100644
    ipcMain.handle('floatingBubble:collapseIfIdle', () => {
      if (!mainWindow || mainWindow.isDestroyed()) return false;
      if (floatingBubbleState.collapsed || !canUseFloatingBubble(settings)) return false;
-@@ -9049,6 +9724,20 @@ app.whenReady().then(() => {
+@@ -9491,6 +10167,20 @@ app.whenReady().then(() => {
    });
    ipcMain.handle('dashboard:open', () => { createDashboardWindow(); return true; });
    ipcMain.handle('dashboard:getHistory', (_event, options) => getDashboardHistory(options));
@@ -1675,10 +1692,10 @@ index bb570b91..d6e462a5 100644
      const win = BrowserWindow.fromWebContents(event.sender);
      if (!win || win !== dashboardWindow || win.isDestroyed()) return;
 diff --git a/src/electron/preload.js b/src/electron/preload.js
-index 7c079f71..cda4178a 100644
+index e48ef6ed..24d0754a 100644
 --- a/src/electron/preload.js
 +++ b/src/electron/preload.js
-@@ -33,6 +33,7 @@ contextBridge.exposeInMainWorld('tokenMonitor', {
+@@ -37,6 +37,7 @@ contextBridge.exposeInMainWorld('tokenMonitor', {
    getCodexResetForecast: (options) => ipcRenderer.invoke('codexResetForecast:get', options),
    openDashboard: () => ipcRenderer.invoke('dashboard:open'),
    getDashboardHistory: (options) => ipcRenderer.invoke('dashboard:getHistory', options),
@@ -1687,10 +1704,10 @@ index 7c079f71..cda4178a 100644
      const listener = () => { try { callback(); } catch (_) {} };
      ipcRenderer.on('dashboard:historyChanged', listener);
 diff --git a/src/electron/renderer/app.js b/src/electron/renderer/app.js
-index 65bb3678..7d52947f 100644
+index d4aedd54..4f9b481f 100644
 --- a/src/electron/renderer/app.js
 +++ b/src/electron/renderer/app.js
-@@ -197,8 +197,8 @@ const projectRowsApi = window.TokenMonitorProjectRows;
+@@ -201,8 +201,8 @@ const projectRowsApi = window.TokenMonitorProjectRows;
  const sessionDetailApi = window.TokenMonitorSessionDetail;
  const windowShortcutApi = window.TokenMonitorWindowShortcut;
  const LIMIT_REFRESH_OPTIONS = [60000, 120000, 300000, 900000, 1800000];
@@ -1701,18 +1718,18 @@ index 65bb3678..7d52947f 100644
  const LIMIT_CAPABILITY_TAG_KEYS = {
    Auto: 'settings.limits.capability.auto',
    'OAuth/CLI': 'settings.limits.capability.oauthCli',
-@@ -382,6 +382,8 @@ Object.assign(els, {
-   toolDetailFooter: document.getElementById('toolDetailFooter'),
-   toolDetailFooterTokens: document.getElementById('toolDetailFooterTokens'),
-   toolDetailFooterModels: document.getElementById('toolDetailFooterModels'),
+@@ -390,6 +390,8 @@ Object.assign(els, {
+   projectBreakdownFooter: document.getElementById('projectBreakdownFooter'),
+   projectBreakdownFooterTools: document.getElementById('projectBreakdownFooterTools'),
+   projectBreakdownFooterModels: document.getElementById('projectBreakdownFooterModels'),
 +  sessionSortToggle: document.getElementById('sessionSortToggle'),
 +  sessionSortToggleLabel: document.getElementById('sessionSortToggleLabel'),
    monthPeriodMenu: document.getElementById('monthPeriodMenu'),
    monthPeriodTab: document.getElementById('monthPeriodTab'),
    periodMonthModeInput: document.getElementById('periodMonthModeInput'),
-@@ -615,6 +617,14 @@ document.addEventListener('keydown', (event) => {
- els.toolDetailFooterTokens.addEventListener('click', () => setActiveToolDetailMode('tokens'));
- els.toolDetailFooterModels.addEventListener('click', () => setActiveToolDetailMode('models'));
+@@ -661,6 +663,14 @@ els.toolDetailFooterModels.addEventListener('click', () => setActiveToolDetailMo
+ els.projectBreakdownFooterTools.addEventListener('click', () => { void saveSettings({ projectBreakdownMode: 'tool' }).catch(() => {}); });
+ els.projectBreakdownFooterModels.addEventListener('click', () => { void saveSettings({ projectBreakdownMode: 'model' }).catch(() => {}); });
  
 +els.sessionSortToggle?.addEventListener('click', () => {
 +  const next = sessionSortMode() === 'tokens' ? 'recent' : 'tokens';
@@ -1725,7 +1742,7 @@ index 65bb3678..7d52947f 100644
  document.addEventListener('pointerdown', (event) => {
    if (state.viewSwitcherOpen && !event.target.closest('#viewSwitcher')) {
      setViewSwitcherOpen(false);
-@@ -1025,6 +1035,7 @@ function scheduleDisplayLiveTokenRateExpiry() {
+@@ -1076,6 +1086,7 @@ function scheduleDisplayLiveTokenRateExpiry() {
      void maybeUpdateBarsIcon({ refreshComposers: false });
      renderFloatingBubbleContent();
      if (isSettingsSurfaceVisible()) refreshTrayComposers();
@@ -1733,7 +1750,7 @@ index 65bb3678..7d52947f 100644
      scheduleDisplayLiveTokenRateExpiry();
    }, Math.max(0, Math.min(...expiries) - Date.now()) + 10);
  }
-@@ -2877,6 +2888,21 @@ function modelRowsForPeriod(period, rankingMetric = state.settings?.modelRanking
+@@ -3178,6 +3189,21 @@ function modelRowsForPeriod(period, rankingMetric = state.settings?.modelRanking
    return toolRowsForPeriod(period);
  }
  
@@ -1755,7 +1772,7 @@ index 65bb3678..7d52947f 100644
  function sessionPresentationOptions() {
    return {
      clientLabels,
-@@ -2890,6 +2916,9 @@ function sessionPresentationOptions() {
+@@ -3191,6 +3217,9 @@ function sessionPresentationOptions() {
      sourcePeriods: state.stats?.periods,
      grokBotSessionIds: state.stats?.grokBotSessionIds,
      nativeSessions: state.stats?.nativeSessions?.[state.period] || {},
@@ -1765,7 +1782,7 @@ index 65bb3678..7d52947f 100644
      subagents: {
        countLabel: (count) => t('sessions.subagentCount', { count }),
        unattributedLabel: t('dashboard.tooltip.unclassified')
-@@ -2918,7 +2947,8 @@ function rawSessionRowsForPeriod(period) {
+@@ -3219,7 +3248,8 @@ function rawSessionRowsForPeriod(period) {
  function sessionRowsForPeriod(period) {
    const rows = rawSessionRowsForPeriod(period);
    if (rows.length > 0) {
@@ -1775,7 +1792,7 @@ index 65bb3678..7d52947f 100644
      return sessionRowsApi.groupSessionRows(rows, sessionPresentationOptions());
    }
    if (Number(period?.totalTokens || 0) === 0) return [];
-@@ -5071,9 +5101,16 @@ function renderTrends() {
+@@ -5666,9 +5696,16 @@ function renderTrends() {
      return;
    }
  
@@ -1794,13 +1811,12 @@ index 65bb3678..7d52947f 100644
  
    const summary = homeOverviewApi.activityStatsForPeriod({
      period: state.period,
-@@ -5099,9 +5136,19 @@ function renderTrends() {
+@@ -5694,9 +5731,18 @@ function renderTrends() {
  
    els.trendsPanel.innerHTML =
-     `<div class="trends-cap"><span>${rangeLabel}</span><span class="trends-open-hint" title="${t('trends.open')}">↗</span></div>`
--    + `<div class="trends-spark" role="button" tabindex="0" title="${t('trends.open')}">${svg}</div>`
-+    + `<div class="trends-spark" role="button" tabindex="0" title="${t('trends.open')}">${svg}`
-+    + `<div class="spark-y-labels">${yTickLabels}</div></div>`
+     `<div class="trends-cap"><span>${rangeLabel}</span><span class="trends-open-hint" aria-label="${t('trends.open')}">↗</span></div>`
+-    + `<div class="trends-spark" role="button" tabindex="0" aria-label="${t('trends.open')}">${svg}</div>`
++    + `<div class="trends-spark" role="button" tabindex="0" aria-label="${t('trends.open')}">${svg}<div class="spark-y-labels">${yTickLabels}</div></div>`
      + `<div class="trends-axis"><span>${first}</span><span>${last}</span></div>`
      + `<div class="trends-stats">${statsHtml}</div>`;
 +  // CSP forbids inline style attributes, so label positions go through CSSOM:
@@ -1812,15 +1828,15 @@ index 65bb3678..7d52947f 100644
 +      span.style.setProperty('top', (100 - 100 * i / yTicks).toFixed(3) + '%');
 +    });
 +  }
+   bindTrendTooltip(els.trendsPanel.querySelector('.trends-spark'), model, finalPoints, labelKey, metric);
    const bars = Array.from(els.trendsPanel.querySelectorAll('.spark-bar'));
    bars.forEach((bar, index) => {
-     bar.dataset.motionKey = String(finalPoints[index]?.[labelKey] || index);
-@@ -12253,7 +12300,7 @@ els.breakdown.addEventListener('click', (event) => {
+@@ -12888,7 +12934,7 @@ els.breakdown.addEventListener('click', (event) => {
    }
    const key = rowEl.dataset.key || '';            // "session:<client>:<sessionId>"
    const client = rowEl.dataset.client || '';
--  if (client !== 'claude' && client !== 'codex' && client !== 'opencode' && client !== 'reasonix' && client !== 'dsh' && client !== 'codebuddy' && client !== 'workbuddy') return;
-+  if (client !== 'claude' && client !== 'codex' && client !== 'opencode' && client !== 'reasonix' && client !== 'dsh' && client !== 'codebuddy' && client !== 'workbuddy' && client !== 'zcode') return;
+-  if (client !== 'claude' && client !== 'codex' && client !== 'opencode' && client !== 'reasonix' && client !== 'dsh' && client !== 'codebuddy' && client !== 'workbuddy' && client !== 'pi' && client !== 'omp') return;
++  if (client !== 'claude' && client !== 'codex' && client !== 'opencode' && client !== 'reasonix' && client !== 'dsh' && client !== 'codebuddy' && client !== 'workbuddy' && client !== 'pi' && client !== 'omp' && client !== 'zcode') return;
    if (client === 'reasonix' && rowEl.dataset.detailUnavailable === 'true') return;
    const match = key.match(/^session:([^:]+):(.+)$/);
    if (!match) return;
@@ -1842,18 +1858,9 @@ index 804f1be5..3c760c0d 100644
  .dash-tabs { display: flex; gap: 4px; padding: 10px 14px 0; }
  .dash-tab {
 diff --git a/src/electron/renderer/dashboard.html b/src/electron/renderer/dashboard.html
-index ea4a0764..76143298 100644
+index 63c1fe3b..dd532f9d 100644
 --- a/src/electron/renderer/dashboard.html
 +++ b/src/electron/renderer/dashboard.html
-@@ -12,7 +12,7 @@
-       <div class="dash-title" data-i18n="dashboard.title">Usage Dashboard</div>
-       <div class="dash-header-actions">
-         <button id="themeToggle" class="icon-button" title="Theme">◐</button>
--        <button id="refreshBtn" class="icon-button" title="Refresh">↻</button>
-+        <button id="refreshBtn" class="icon-button" title="Refresh"><span aria-hidden="true">↻</span></button>
-         <button id="minBtn" class="icon-button" title="Minimize">−</button>
-         <button id="closeBtn" class="icon-button" title="Close">×</button>
-       </div>
 @@ -71,6 +71,7 @@
      <script src="../motionPreference.js"></script>
      <script src="statsRenderScheduler.js"></script>
@@ -1863,7 +1870,7 @@ index ea4a0764..76143298 100644
    </body>
  </html>
 diff --git a/src/electron/renderer/dashboard.js b/src/electron/renderer/dashboard.js
-index c77189b3..1072e63f 100644
+index f929bcb7..1a016361 100644
 --- a/src/electron/renderer/dashboard.js
 +++ b/src/electron/renderer/dashboard.js
 @@ -432,7 +432,7 @@ function renderBreakdown() {
@@ -1875,7 +1882,7 @@ index c77189b3..1072e63f 100644
    applySwatchColors(elsBreakdown);
    if (state.motion !== 'none' && !prefersReducedMotion()) {
      for (const fill of elsBreakdown.querySelectorAll('.dash-bd-bar-fill[data-motion-key]')) {
-@@ -790,7 +790,12 @@ els.heatmapMetricBtns.forEach((b) => b.addEventListener('click', () => {
+@@ -789,7 +789,12 @@ els.heatmapMetricBtns.forEach((b) => b.addEventListener('click', () => {
    window.tokenMonitor.updateSettings({ heatmapMetric: state.heatmapMetric });
  }));
  els.themeToggle.addEventListener('click', () => { state.flat = !state.flat; els.body.classList.toggle('flat', state.flat); window.tokenMonitor.updateSettings({ dashboardFlat: state.flat }); });
@@ -1890,11 +1897,11 @@ index c77189b3..1072e63f 100644
  els.closeBtn.addEventListener('click', () => window.tokenMonitor.dashboard.close());
  
 diff --git a/src/electron/renderer/edgeDock/dock.js b/src/electron/renderer/edgeDock/dock.js
-index f2991cb6..a76b474d 100644
+index 14174f55..7b3e487d 100644
 --- a/src/electron/renderer/edgeDock/dock.js
 +++ b/src/electron/renderer/edgeDock/dock.js
 @@ -5,6 +5,13 @@
- // pushed and reports clicks, drags and its own content height.
+ // projected data and reports input and measured content size.
  
  const bridge = window.tokenMonitorEdgeDock;
 +// Liveness ack: the main process compares this timestamp against the OS button
@@ -1908,10 +1915,10 @@ index f2991cb6..a76b474d 100644
  // The running reading is derived from the projected rows at paint time rather than
  // frozen into the cell, so the rail and the card answer at the same clock (see
 diff --git a/src/electron/renderer/i18n.js b/src/electron/renderer/i18n.js
-index 356df063..cf68624f 100644
+index 2be0e5be..73e7a28c 100644
 --- a/src/electron/renderer/i18n.js
 +++ b/src/electron/renderer/i18n.js
-@@ -557,6 +557,9 @@
+@@ -590,6 +590,9 @@
        'home.liveTokenRate.burnTitle': 'Live token burn ({scope}): {value}. Click to show live tok/s.',
        'home.liveTokenRate.speedIdleTitle': 'Last observed generation speed ({scope}): {value}. Click to show TPM.',
        'home.liveTokenRate.burnIdleTitle': 'Last observed token burn ({scope}): {value}. Click to show tok/s.',
@@ -1921,7 +1928,7 @@ index 356df063..cf68624f 100644
        'home.less': 'Less',
        'home.more': 'More',
        'home.used': 'used',
-@@ -1384,6 +1387,7 @@
+@@ -1447,6 +1450,7 @@
        'settings.windowBehavior.floating': 'Floating above apps',
        'settings.windowBehavior.normal': 'Normal window',
        'settings.windowBehavior.desktop': 'Desktop pinned',
@@ -1929,7 +1936,7 @@ index 356df063..cf68624f 100644
        'settings.windowBehavior.buttonTitle': '{current}; click for {next}',
        'settings.display.floatingBubble': 'Floating Bubble',
        'settings.display.floatingBubbleNote': 'Collapse the widget into a slim draggable mini-window; click it to reopen.',
-@@ -1654,6 +1658,7 @@
+@@ -1790,6 +1794,7 @@
        'trayMenu.presentation.floating': 'Floating Above Apps',
        'trayMenu.presentation.normal': 'Normal Window',
        'trayMenu.presentation.desktop': 'Desktop Pinned',
@@ -1937,7 +1944,7 @@ index 356df063..cf68624f 100644
        'settings.startup.title': 'Startup',
        'settings.startup.startAtLogin': 'Start at login',
        'settings.startup.available': 'Available in packaged builds. On Linux, run the AppImage build to enable.',
-@@ -2408,6 +2413,9 @@
+@@ -2589,6 +2594,9 @@
        'home.liveTokenRate.burnTitle': '即時 Token 消耗（{scope}）：{value}。點擊切換至即時 tok/s。',
        'home.liveTokenRate.speedIdleTitle': '最近一次生成速度（{scope}）：{value}。點擊切換至 TPM。',
        'home.liveTokenRate.burnIdleTitle': '最近一次 Token 消耗（{scope}）：{value}。點擊切換至 tok/s。',
@@ -1947,7 +1954,7 @@ index 356df063..cf68624f 100644
        'home.less': '較少',
        'home.more': '較多',
        'home.used': '已用',
-@@ -3235,6 +3243,7 @@
+@@ -3446,6 +3454,7 @@
        'settings.windowBehavior.floating': '浮在其他 app 上方',
        'settings.windowBehavior.normal': '一般視窗',
        'settings.windowBehavior.desktop': '固定在桌面',
@@ -1955,7 +1962,7 @@ index 356df063..cf68624f 100644
        'settings.windowBehavior.buttonTitle': '目前：{current}；點擊切換為 {next}',
        'settings.display.floatingBubble': '懸浮小窗',
        'settings.display.floatingBubbleNote': '將 widget 收成可拖曳的窄長小窗，點擊即可重新展開。',
-@@ -3505,6 +3514,7 @@
+@@ -3789,6 +3798,7 @@
        'trayMenu.presentation.floating': '浮動於其他 App 上方',
        'trayMenu.presentation.normal': '一般視窗',
        'trayMenu.presentation.desktop': '固定於桌面',
@@ -1963,7 +1970,7 @@ index 356df063..cf68624f 100644
        'settings.startup.title': '啟動',
        'settings.startup.startAtLogin': '登入時啟動',
        'settings.startup.available': '僅在打包後的版本可用；Linux 需以 AppImage 執行。',
-@@ -4259,6 +4269,9 @@
+@@ -4588,6 +4598,9 @@
        'home.liveTokenRate.burnTitle': '实时 Token 消耗（{scope}）：{value}。点击切换至实时 tok/s。',
        'home.liveTokenRate.speedIdleTitle': '最近一次生成速度（{scope}）：{value}。点击切换至 TPM。',
        'home.liveTokenRate.burnIdleTitle': '最近一次 Token 消耗（{scope}）：{value}。点击切换至 tok/s。',
@@ -1973,7 +1980,7 @@ index 356df063..cf68624f 100644
        'home.less': '较少',
        'home.more': '较多',
        'home.used': '已用',
-@@ -5086,6 +5099,7 @@
+@@ -5445,6 +5458,7 @@
        'settings.windowBehavior.floating': '浮在其他 app 上方',
        'settings.windowBehavior.normal': '普通窗口',
        'settings.windowBehavior.desktop': '固定在桌面',
@@ -1981,7 +1988,7 @@ index 356df063..cf68624f 100644
        'settings.windowBehavior.buttonTitle': '当前：{current}；点击切换为 {next}',
        'settings.display.floatingBubble': '悬浮小窗',
        'settings.display.floatingBubbleNote': '将组件收成可拖动的窄长小窗，点击即可重新展开。',
-@@ -5356,6 +5370,7 @@
+@@ -5788,6 +5802,7 @@
        'trayMenu.presentation.floating': '浮动于其他 App 上方',
        'trayMenu.presentation.normal': '普通窗口',
        'trayMenu.presentation.desktop': '固定到桌面',
@@ -1989,7 +1996,7 @@ index 356df063..cf68624f 100644
        'settings.startup.title': '启动',
        'settings.startup.startAtLogin': '登录时启动',
        'settings.startup.available': '仅在打包后的版本可用；Linux 需以 AppImage 运行。',
-@@ -5679,6 +5694,9 @@
+@@ -6155,6 +6170,9 @@
        'home.liveTokenRate.burnTitle': '실시간 토큰 소모량({scope}): {value}. 클릭하여 실시간 tok/s로 전환합니다.',
        'home.liveTokenRate.speedIdleTitle': '마지막으로 관찰된 생성 속도({scope}): {value}. 클릭하여 TPM으로 전환합니다.',
        'home.liveTokenRate.burnIdleTitle': '마지막으로 관찰된 토큰 소모량({scope}): {value}. 클릭하여 tok/s로 전환합니다.',
@@ -1999,7 +2006,7 @@ index 356df063..cf68624f 100644
        'home.reset': '{value} 초기화',
        'home.staleDevice': '오프라인',
        'home.tools': '도구',
-@@ -7359,6 +7377,7 @@
+@@ -7950,6 +7968,7 @@
        'trayMenu.presentation.floating': '다른 앱 위에 띄우기',
        'trayMenu.presentation.normal': '일반 창',
        'trayMenu.presentation.desktop': '데스크톱에 고정',
@@ -2007,7 +2014,7 @@ index 356df063..cf68624f 100644
        'settings.views.configureHome': '{name} 설정',
        'settings.views.configureTrend': '{name} 설정',
        'settings.views.enableTrend': '추이 활성화',
-@@ -7382,6 +7401,7 @@
+@@ -7973,6 +7992,7 @@
        'settings.views.trendIntervalMinutes': '{n}분',
        'settings.windowBehavior.buttonTitle': '{current}; {next}로 전환하려면 클릭',
        'settings.windowBehavior.desktop': '데스크톱 고정',
@@ -2015,7 +2022,7 @@ index 356df063..cf68624f 100644
        'settings.windowBehavior.floating': '앱 위에 플로팅',
        'settings.windowBehavior.normal': '일반 창',
        'sortMostTokens': '↕ 토큰 많은 순',
-@@ -7530,6 +7550,9 @@
+@@ -8154,6 +8174,9 @@
        'home.liveTokenRate.burnTitle': 'ライブ Token 消費（{scope}）：{value}。クリックするとライブ tok/s に切り替わります。',
        'home.liveTokenRate.speedIdleTitle': '直近の生成速度（{scope}）：{value}。クリックすると TPM に切り替わります。',
        'home.liveTokenRate.burnIdleTitle': '直近の Token 消費（{scope}）：{value}。クリックすると tok/s に切り替わります。',
@@ -2025,7 +2032,7 @@ index 356df063..cf68624f 100644
        'home.reset': '{value}をリセット',
        'home.staleDevice': 'オフライン',
        'home.tools': 'ツール',
-@@ -9210,6 +9233,7 @@
+@@ -9949,6 +9972,7 @@
        'trayMenu.presentation.floating': '他のアプリの前面に表示',
        'trayMenu.presentation.normal': '通常ウィンドウ',
        'trayMenu.presentation.desktop': 'デスクトップに固定',
@@ -2033,7 +2040,7 @@ index 356df063..cf68624f 100644
        'settings.views.configureHome': '{name}を設定',
        'settings.views.configureTrend': '{name}を設定',
        'settings.views.enableTrend': 'トレンドを有効化',
-@@ -9233,6 +9257,7 @@
+@@ -9972,6 +9996,7 @@
        'settings.views.trendIntervalMinutes': '{n}分',
        'settings.windowBehavior.buttonTitle': '{current}; {next}に切り替えるにはクリック',
        'settings.windowBehavior.desktop': 'デスクトップに固定',
@@ -2041,7 +2048,7 @@ index 356df063..cf68624f 100644
        'settings.windowBehavior.floating': 'アプリの上にフローティング',
        'settings.windowBehavior.normal': '通常ウィンドウ',
        'sortMostTokens': '↕ トークン数順',
-@@ -9783,6 +9808,9 @@
+@@ -10556,6 +10581,9 @@
        'home.limit.session': 'Sessão',
        'home.limit.daily': 'Diária',
        'home.limit.weekly': 'Semanal',
@@ -2051,7 +2058,7 @@ index 356df063..cf68624f 100644
        'home.limit.billing': 'Cobrança',
        'home.limit.monthly': 'Mensal',
        'home.reset': 'Redefinir {value}',
-@@ -10640,6 +10668,7 @@
+@@ -11443,6 +11471,7 @@
        'settings.windowBehavior.normal': 'Janela normal',
        'settings.windowBehavior.desktop': 'Fixado na área de trabalho',
        'settings.windowBehavior.buttonTitle': '{current}; clique para {next}',
@@ -2059,7 +2066,7 @@ index 356df063..cf68624f 100644
        'settings.display.floatingBubble': 'Bolha flutuante',
        'settings.display.floatingBubbleNote': 'Reduz o widget a uma mini-janela slim e arrastável; clique nela para reabrir.',
        'edgeDock.period.today': 'Hoje',
-@@ -10909,6 +10938,7 @@
+@@ -11785,6 +11814,7 @@
        'trayMenu.presentation.floating': 'Flutuante sobre os aplicativos',
        'trayMenu.presentation.normal': 'Janela normal',
        'trayMenu.presentation.desktop': 'Fixado na área de trabalho',
@@ -2068,10 +2075,10 @@ index 356df063..cf68624f 100644
        'settings.startup.startAtLogin': 'Iniciar ao entrar no sistema',
        'settings.startup.available': 'Disponível nas versões empacotadas. No Linux, execute a versão AppImage para ativar.',
 diff --git a/src/electron/renderer/index.html b/src/electron/renderer/index.html
-index 8ce86520..f4db1fef 100644
+index 4b39c672..d09abed8 100644
 --- a/src/electron/renderer/index.html
 +++ b/src/electron/renderer/index.html
-@@ -243,6 +243,7 @@
+@@ -302,6 +302,7 @@
                    <option value="floating" data-i18n="settings.windowBehavior.floating">Floating above apps</option>
                    <option value="normal" data-i18n="settings.windowBehavior.normal">Normal window</option>
                    <option value="desktop" data-i18n="settings.windowBehavior.desktop">Desktop pinned</option>
@@ -2079,7 +2086,7 @@ index 8ce86520..f4db1fef 100644
                  </select>
                  <span class="settings-note settings-item-desc" data-i18n="settings.display.windowBehaviorNote">Desktop pinned keeps the widget below other apps and locks drag/resize while staying clickable.</span>
                </label>
-@@ -1577,6 +1578,10 @@
+@@ -1662,6 +1663,10 @@
        <div id="sessionPagerHost" class="session-pager-host hidden"></div>
        <footer class="footer">
          <div id="viewSwitcher" class="view-switcher"></div>
@@ -2139,19 +2146,19 @@ index 00000000..63fc4423
 +  return { createManualRefreshController, delay };
 +});
 diff --git a/src/electron/renderer/sessionRows.js b/src/electron/renderer/sessionRows.js
-index 939c418a..44700101 100644
+index e6ff761d..b39343af 100644
 --- a/src/electron/renderer/sessionRows.js
 +++ b/src/electron/renderer/sessionRows.js
-@@ -321,7 +321,7 @@
+@@ -380,7 +380,7 @@
    }
  
    function sessionRowDetailAvailable(row) {
--    return ['claude', 'codebuddy', 'codex', 'opencode', 'dsh', 'workbuddy'].includes(row?.client)
-+    return ['claude', 'codebuddy', 'codex', 'opencode', 'dsh', 'workbuddy', 'zcode'].includes(row?.client)
+-    return ['claude', 'codebuddy', 'codex', 'opencode', 'dsh', 'workbuddy', 'pi', 'omp'].includes(row?.client)
++    return ['claude', 'codebuddy', 'codex', 'opencode', 'dsh', 'workbuddy', 'pi', 'omp', 'zcode'].includes(row?.client)
        || (row?.client === 'reasonix' && row?.sessionDetailAvailable === true);
    }
  
-@@ -412,6 +412,20 @@
+@@ -483,6 +483,20 @@
      };
    }
  
@@ -2172,7 +2179,7 @@ index 939c418a..44700101 100644
    function sessionRowsForPeriod(period, options = {}) {
      const labels = options.clientLabels || {};
      const colors = options.clientColors || {};
-@@ -511,7 +525,7 @@
+@@ -589,7 +603,7 @@
        const row = nativeSessionRow(session, key, options, now);
        if (row) rows.push(row);
      }
@@ -2181,7 +2188,7 @@ index 939c418a..44700101 100644
    }
  
    function groupBackgroundReviewRows(rows, options = {}) {
-@@ -735,6 +749,7 @@
+@@ -856,6 +870,7 @@
      applyBreakdownRowSemantics,
      archivedSessionCount,
      compactSessionTime,
@@ -2189,7 +2196,7 @@ index 939c418a..44700101 100644
      groupBackgroundReviewRows,
      groupSessionRows,
      groupSubagentRows,
-@@ -742,6 +757,7 @@
+@@ -863,6 +878,7 @@
      isGrokBotSession,
      sessionRowDetailAvailable,
      handleBreakdownRowKeydown,
@@ -2198,10 +2205,10 @@ index 939c418a..44700101 100644
      sessionCacheHitPercent,
      sessionIdLabel,
 diff --git a/src/electron/renderer/styles.css b/src/electron/renderer/styles.css
-index 524f2428..5873480b 100644
+index 9aa35f43..ba22b76b 100644
 --- a/src/electron/renderer/styles.css
 +++ b/src/electron/renderer/styles.css
-@@ -6391,6 +6391,8 @@ html.native-liquid-glass .view-switcher-menu-item { border-radius: 9px; }
+@@ -6624,6 +6624,8 @@ html.native-liquid-glass .view-switcher-menu-item { border-radius: 9px; }
  .detail-session-id-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: text; }
  .detail-session-id-copy { flex-shrink: 0; padding: 0 2px; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; opacity: 0.72; }
  .detail-session-id-copy:hover, .detail-session-id-copy:focus-visible { color: var(--text); opacity: 1; }
@@ -2210,7 +2217,7 @@ index 524f2428..5873480b 100644
  .view-preference-row.has-subgroup {
    grid-template-columns: minmax(0, 1fr) repeat(3, 22px);
  }
-@@ -6584,9 +6586,20 @@ html.native-liquid-glass .view-switcher-menu-item { border-radius: 9px; }
+@@ -6818,9 +6820,20 @@ html.native-liquid-glass .view-switcher-menu-item { border-radius: 9px; }
  .trends-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; padding-right: 2px; overflow: hidden; }
  .trends-cap { flex: none; display: flex; align-items: center; justify-content: space-between; font-size: 0.6875rem; letter-spacing: 0.04em; text-transform: uppercase; opacity: 0.6; }
  .trends-open-hint { opacity: 0.75; cursor: pointer; font-size: 0.8125rem; }
@@ -2233,7 +2240,7 @@ index 524f2428..5873480b 100644
    fill: var(--chart-bar);
    opacity: 0.5;
 diff --git a/src/electron/renderer/usageCharts.js b/src/electron/renderer/usageCharts.js
-index f8112a24..c8223646 100644
+index 4d0e5ca6..06a29580 100644
 --- a/src/electron/renderer/usageCharts.js
 +++ b/src/electron/renderer/usageCharts.js
 @@ -309,18 +309,20 @@
@@ -2269,7 +2276,7 @@ index f8112a24..c8223646 100644
 +    const o = Object.assign({ radius: 1, titles: null, showZeroMarkers: false, yTicks: 0 }, options || {});
      const titles = Array.isArray(o.titles) ? o.titles : null;
      const bars = Array.isArray(model?.bars) ? model.bars : [];
-     const titleOf = (index) => titles && titles[index] ? `<title>${escapeXml(titles[index])}</title>` : '';
+     const titleOf = (index) => titles && titles[index] ? `<desc>${escapeXml(titles[index])}</desc>` : '';
 +    // The sparkline SVG stretches non-uniformly (preserveAspectRatio="none"), so
 +    // tick labels must NOT be SVG text here — the caller overlays HTML labels.
 +    // Horizontal grid lines survive the stretch; non-scaling-stroke keeps them 1px.
@@ -2294,7 +2301,7 @@ index f8112a24..c8223646 100644
  
    function areaLineSvg(model) {
 diff --git a/src/electron/tray.js b/src/electron/tray.js
-index a14e8381..156d586f 100644
+index a15920ed..b17ea05d 100644
 --- a/src/electron/tray.js
 +++ b/src/electron/tray.js
 @@ -274,7 +274,8 @@ const WINDOW_PRESENTATION_MENU_ITEMS = [
@@ -2422,158 +2429,18 @@ index 767443fd..b043cc48 100644
    // Shared with the team provider: the same BigModel gateways answer with the
    // same HTTP 200 body envelopes, so the classification lives in one place.
 diff --git a/src/shared/providers/zcode/sessionMetadata.js b/src/shared/providers/zcode/sessionMetadata.js
-new file mode 100644
-index 00000000..178782cc
---- /dev/null
+index 8c766961..2f8579b6 100644
+--- a/src/shared/providers/zcode/sessionMetadata.js
 +++ b/src/shared/providers/zcode/sessionMetadata.js
-@@ -0,0 +1,245 @@
-+'use strict';
-+
-+// Reads ZCode session titles from the ZCode CLI SQLite store
-+// (~/.zcode/cli/db/db.sqlite, `session` table). Mirrors the opencode
-+// resolver's established pattern: node:sqlite, read-only handle,
-+// busy_timeout, deps-injected sqlite/path seams for pure-Node tests.
-+//
-+// Two ZCode specifics:
-+//   * `time_created` / `time_updated` are epoch milliseconds (integers).
-+//   * Subagent sessions (id `sess_subagent_agent_*`) store their task prompt
-+//     as `title` and link their parent through `parent_id` — the prompt is
-+//     noise for a human scanning the list, so a resolvable parent renders as
-+//     "↳ <parent title>" instead.
-+
-+const path = require('node:path');
-+
-+let sqlite = null;
-+try { sqlite = require('node:sqlite'); } catch (_) { sqlite = null; }
-+
-+const SUBAGENT_TITLE_PREFIX = '\u21b3 '; // ↳
-+
-+// Display labels for child-session kinds (session.task_type). Unmapped kinds
-+// fall through to their raw value; the label is only shown on the
-+// "↳ <label> · <parent title>" form, never on fallback titles.
-+const CHILD_TYPE_LABELS = new Map([
-+  ['subagent_child', '子代理'],
-+  ['selection_side_chat', '侧聊']
-+]);
-+
-+function childTypeLabel(taskType) {
-+  const key = String(taskType || '').trim();
-+  if (!key) return '';
-+  return CHILD_TYPE_LABELS.get(key) || key;
-+}
-+
-+function defaultDbPath(home) {
-+  const base = String(home || process.env.USERPROFILE || process.env.HOME || '').trim();
-+  return base ? path.join(base, '.zcode', 'cli', 'db', 'db.sqlite') : '';
-+}
-+
-+function resolveSqlite(zcodeDeps) {
-+  if (zcodeDeps && zcodeDeps.sqlite !== undefined) return zcodeDeps.sqlite;
-+  return sqlite;
-+}
-+
-+function isoFromMs(ms) {
-+  const n = Number(ms);
-+  return Number.isFinite(n) && n > 0 ? new Date(n).toISOString() : '';
-+}
-+
-+function cleanTitle(text) {
-+  return String(text || '').replace(/\s+/g, ' ').trim();
-+}
-+
-+function resolveSessionMetadata(sessionIds, context = {}) {
-+  const result = new Map();
-+  const deps = context.deps || {};
-+  const zcodeDeps = deps.zcodeDeps || {};
-+  const sqliteMod = resolveSqlite(zcodeDeps);
-+  if (!sqliteMod) return result;
-+
-+  const dbPath = zcodeDeps.dbPath || defaultDbPath(context.home);
-+  if (!dbPath) return result;
-+
-+  const wanted = [...(sessionIds || [])].map((id) => String(id || '').trim()).filter(Boolean);
-+  if (wanted.length === 0) return result;
-+
-+  let db;
-+  try {
-+    db = openDb(dbPath, sqliteMod);
-+    const rows = fetchRows(db, wanted);
-+    if (rows.size === 0) return result;
-+
-+    // Parent titles for subagent rows: resolved in a second bounded query so a
-+    // parent outside the requested set still answers. A parent inside the set
-+    // is answered from the already-fetched rows.
-+    const parentIds = new Set();
-+    for (const row of rows.values()) {
-+      if (row.parentId && !rows.has(row.parentId)) parentIds.add(row.parentId);
-+    }
-+    const parentTitles = parentIds.size > 0 ? fetchParentTitles(db, parentIds) : new Map();
-+
-+    for (const [id, row] of rows) {
-+      const startedAt = isoFromMs(row.timeCreated);
-+      const lastUsedAt = isoFromMs(row.timeUpdated);
-+      const ownTitle = cleanTitle(row.title);
-+      let title = ownTitle;
-+      if (row.parentId) {
-+        const parentTitle = cleanTitle(rows.get(row.parentId)?.title) || parentTitles.get(row.parentId);
-+        if (parentTitle) {
-+          const label = childTypeLabel(row.taskType);
-+          title = SUBAGENT_TITLE_PREFIX + (label ? label + ' · ' : '') + parentTitle;
-+        }
-+      }
-+      if (!startedAt && !lastUsedAt && !title) continue;
-+      result.set(id, { startedAt, lastUsedAt, title });
-+    }
-+  } catch (_) {
-+    // A missing, locked-out, or corrupted store must never break the session
-+    // list: return whatever was gathered (possibly nothing) and let the row
-+    // fall back to the bare id.
-+  } finally {
-+    if (db) {
-+      try { db.close(); } catch (_) {}
-+    }
-+  }
-+  return result;
-+}
-+
-+function openDb(dbPath, sqliteMod) {
-+  // Accept either the node:sqlite module object or the DatabaseSync class
-+  // itself — test seams pass whichever is at hand.
-+  const Sync = sqliteMod.DatabaseSync || sqliteMod;
-+  const db = new Sync(dbPath, { readOnly: true });
-+  db.exec('PRAGMA busy_timeout = 250');
-+  return db;
-+}
-+
-+function fetchRows(db, ids) {
-+  const rows = new Map();
-+  const placeholders = ids.map(() => '?').join(',');
-+  const stmt = db.prepare(
-+    `SELECT id, title, parent_id AS parentId, task_type AS taskType,
-+            time_created AS timeCreated, time_updated AS timeUpdated
-+       FROM session WHERE id IN (${placeholders})`
-+  );
-+  for (const row of stmt.all(...ids)) {
-+    if (!row || !row.id) continue;
-+    rows.set(String(row.id), row);
-+  }
-+  return rows;
-+}
-+
-+function fetchParentTitles(db, parentIds) {
-+  const titles = new Map();
-+  const ids = [...parentIds];
-+  const placeholders = ids.map(() => '?').join(',');
-+  const stmt = db.prepare(`SELECT id, title FROM session WHERE id IN (${placeholders})`);
-+  for (const row of stmt.all(...ids)) {
-+    const title = cleanTitle(row?.title);
-+    if (row?.id && title) titles.set(String(row.id), title);
-+  }
-+  return titles;
-+}
-+
+@@ -151,4 +151,110 @@ function resolveSessionMetadata(sessionIds, context = {}) {
+   return result;
+ }
+ 
+-module.exports = { cleanTitle, readSessionRows, resolveSessionMetadata, zcodeDatabasePath };
 +// ---------------------------------------------------------------------------
-+// Session detail events (neutral shape consumed by sessionDetail.js)
++// Session detail events (neutral shape consumed by sessionDetail.js). This is
++// our pre-v0.78 read path, kept alongside upstream's title/parentage resolver
++// — the two read the same database for different questions.
 +// ---------------------------------------------------------------------------
 +const MESSAGES_SQL =
 +  `SELECT id,
@@ -2597,6 +2464,11 @@ index 00000000..178782cc
 +   FROM part
 +   WHERE session_id = ? AND json_valid(data)
 +   ORDER BY time_created ASC, id ASC`;
++
++function isoFromMs(ms) {
++  const n = Number(ms);
++  return Number.isFinite(n) && n > 0 ? new Date(n).toISOString() : '';
++}
 +
 +function num(value) {
 +  const n = Number(value);
@@ -2651,7 +2523,7 @@ index 00000000..178782cc
 +  if (!id) return empty;
 +  const sqliteMod = resolveSqlite(deps);
 +  if (!sqliteMod) return empty;
-+  const dbPath = deps.dbPath || defaultDbPath(deps.home);
++  const dbPath = deps.dbPath || zcodeDatabasePath({ home: deps.home });
 +  if (!dbPath) return empty;
 +
 +  let db;
@@ -2671,20 +2543,20 @@ index 00000000..178782cc
 +  }
 +}
 +
-+module.exports = { resolveSessionMetadata, readSessionEvents, defaultDbPath, SUBAGENT_TITLE_PREFIX };
++module.exports = { cleanTitle, readSessionRows, resolveSessionMetadata, zcodeDatabasePath, readSessionEvents };
 diff --git a/src/shared/sessionDetail.js b/src/shared/sessionDetail.js
-index 55db30af..d7a26068 100644
+index 88219839..a473d178 100644
 --- a/src/shared/sessionDetail.js
 +++ b/src/shared/sessionDetail.js
-@@ -11,6 +11,7 @@ const {
+@@ -12,6 +12,7 @@ const {
  } = require('./providers/codebuddy/transcript');
  const codebuddyExtension = require('./providers/codebuddy/extension');
  const opencodeSession = require('./providers/opencode/session');
 +const zcodeSession = require('./providers/zcode/sessionMetadata');
  const { readReasonixSessionEvents } = require('./providers/reasonix/sessionDetail');
  const { createLocalUsageStore } = require('./providers/codex/localUsageStore');
- 
-@@ -515,6 +516,22 @@ function readOpenCodeSessionDetail({ sessionId, period = 'total', deps = {} }) {
+ const PI_FORMAT_CLIENTS = new Set(['pi', 'omp']);
+@@ -598,6 +599,22 @@ function readOpenCodeSessionDetail({ sessionId, period = 'total', deps = {} }) {
    return { found: true, client: 'opencode', sessionId, period, exchanges: grouped, totals: totalsOf(grouped, filteredCost) };
  }
  
@@ -2707,36 +2579,14 @@ index 55db30af..d7a26068 100644
  function readReasonixSessionDetail({ sessionId, period = 'total', home, deps = {} }) {
    const result = readReasonixSessionEvents({
      sessionId,
-@@ -592,6 +609,7 @@ function readCodebuddyExtensionSessionDetail({ sessionId, period, sessionCost, h
+@@ -675,6 +692,7 @@ function readCodebuddyExtensionSessionDetail({ sessionId, period, sessionCost, h
  
  function readSessionDetail({ client, sessionId, period = 'total', sessionCost = 0, home, env, useEnvRoots, deps = {} }) {
    if (client === 'opencode') return readOpenCodeSessionDetail({ sessionId, period, deps });
 +  if (client === 'zcode') return readZcodeSessionDetail({ sessionId, period, sessionCost, home, deps });
    if (client === 'reasonix') return readReasonixSessionDetail({ sessionId, period, home, deps });
-   const filePath = resolveSessionFile(client, sessionId, home, { env, useEnvRoots });
+   const filePath = resolveSessionFile(client, sessionId, home, { env, useEnvRoots, fs: deps.fs });
    if (!filePath && client === 'codebuddy') {
-diff --git a/src/shared/sessionMetadata.js b/src/shared/sessionMetadata.js
-index b191c6be..eac8427a 100644
---- a/src/shared/sessionMetadata.js
-+++ b/src/shared/sessionMetadata.js
-@@ -18,6 +18,7 @@ const devinSessionMetadata = require('./providers/devin/sessionMetadata');
- const grokSessionMetadata = require('./providers/grok/sessionMetadata');
- const { readT3SessionRelationResult } = require('./t3SessionMetadata');
- const { supportsT3SessionClient, nativeAccountingId } = require('./t3SessionIdentity');
-+const zcodeSessionMetadata = require('./providers/zcode/sessionMetadata');
- 
- function isoFromDate(value) {
-   const date = value instanceof Date ? value : new Date(value || '');
-@@ -248,7 +249,8 @@ const SESSION_METADATA_RESOLVERS = new Map([
-   // within the tick. grok writes `summary.json` after tokscale first exposes
-   // the id, so it needs the retry.
-   ['grok', { resolve: grokSessionMetadata.resolveSessionMetadata, retryAfterTimestampFallback: true }],
--  ['workbuddy', { resolve: workbuddySession.resolveSessionMetadata, retryAfterTimestampFallback: true }]
-+  ['workbuddy', { resolve: workbuddySession.resolveSessionMetadata, retryAfterTimestampFallback: true }],
-+  ['zcode', { resolve: zcodeSessionMetadata.resolveSessionMetadata, retryAfterTimestampFallback: true }]
- ]);
- 
- function resolverDefinition(entry) {
 diff --git a/tests/electron/edgeAutoHide.test.js b/tests/electron/edgeAutoHide.test.js
 new file mode 100644
 index 00000000..47458a4a
@@ -3337,13 +3187,13 @@ index 00000000..47458a4a
 +});
 +
 diff --git a/tests/electron/edgeDockController.test.js b/tests/electron/edgeDockController.test.js
-index fa9a8610..5d2282d8 100644
+index d03b7d07..d452e55e 100644
 --- a/tests/electron/edgeDockController.test.js
 +++ b/tests/electron/edgeDockController.test.js
-@@ -172,6 +172,12 @@ function createFixture(options = {}) {
-     prefersReducedMotion: options.prefersReducedMotion || (() => true),
+@@ -183,6 +183,12 @@ function createFixture(options = {}) {
      isFullScreen: options.isFullScreen,
      primaryButtonDown: options.primaryButtonDown,
+     installNonActivatingInput: options.installNonActivatingInput,
 +    // The poll's native topmost sweep is a no-op here (no koffi in tests) but
 +    // reports success, so the poll skips its Electron fallback and the
 +    // zOrder assertions below only count the controller's own raise paths.
@@ -3353,7 +3203,7 @@ index fa9a8610..5d2282d8 100644
      applyShapeMask: (win) => {
        maskWindows.push(win);
        return options.maskAvailable !== false;
-@@ -630,6 +636,28 @@ test('a drag on a larger dock keeps the grab point under the pointer', async (t)
+@@ -798,6 +804,28 @@ test('a drag on a larger dock keeps the grab point under the pointer', async (t)
    assert.equal(fixture.placements.at(-1).offset, expected.offset);
  });
  
@@ -3379,7 +3229,7 @@ index fa9a8610..5d2282d8 100644
 +  );
 +});
 +
- test('Windows Edge Dock keeps every glass setting on the shaped renderer surface', (t) => {
+ test('Windows Edge Dock falls back to the shaped renderer when native hosting is unavailable', (t) => {
    const fixture = createFixture({ nativeGlass: true });
    t.after(() => fixture.controller.stop());
 diff --git a/tests/electron/edgeDockTopmost.test.js b/tests/electron/edgeDockTopmost.test.js
@@ -3778,7 +3628,7 @@ index 00000000..1dfb36f3
 +  assert.deepEqual(events, ['on', 'pull', 'off']);
 +});
 diff --git a/tests/electron/sessionRows.test.js b/tests/electron/sessionRows.test.js
-index 5c65d33c..b29edcb9 100644
+index 590d560f..cff89aa9 100644
 --- a/tests/electron/sessionRows.test.js
 +++ b/tests/electron/sessionRows.test.js
 @@ -8,9 +8,11 @@ const test = require('node:test');
@@ -3793,7 +3643,7 @@ index 5c65d33c..b29edcb9 100644
    sessionBreakdownIncomplete,
    sessionIdLabel,
    sessionDetailIdLabel,
-@@ -1104,7 +1106,6 @@ test('the shared metrics slot restores its meter and tone after cache or empty s
+@@ -1265,7 +1267,6 @@ test('the shared metrics slot restores its meter and tone after cache or empty s
    assert.deepEqual(gauge.entries, []);
  });
  
@@ -3801,7 +3651,7 @@ index 5c65d33c..b29edcb9 100644
  test('Grok Bot groups all bot conversations by latest activity and conserves totals', () => {
    const now = new Date(2026, 4, 30, 12, 30);
    const at = localIso(2026, 5, 30, 12, 20);
-@@ -1226,3 +1227,83 @@ test('group sections keep main continuations above children without changing usa
+@@ -1387,3 +1388,83 @@ test('group sections keep main continuations above children without changing usa
    assert.deepEqual(content.filter(item => item.row).map(item => item.row), rows, 'review/bot groups keep their order');
    assert.equal(content.filter(item => item.className === 'session-group-section-heading').length, 0);
  });
@@ -3886,10 +3736,10 @@ index 5c65d33c..b29edcb9 100644
 +
 +});
 diff --git a/tests/electron/tray.test.js b/tests/electron/tray.test.js
-index 7dea0354..56971fde 100644
+index fc56f6f2..1eaac9e8 100644
 --- a/tests/electron/tray.test.js
 +++ b/tests/electron/tray.test.js
-@@ -387,14 +387,14 @@ test('Linux tray re-exports the checked window presentation after a menu action'
+@@ -468,14 +468,14 @@ test('Linux tray re-exports the checked window presentation after a menu action'
  
    const presentationItems = calls.contextMenus[0].template
      .find((item) => item.label === 'Window Presentation').submenu;
@@ -3906,7 +3756,7 @@ index 7dea0354..56971fde 100644
  });
  
  test('tray menu actions publish both in-flight transitions', async () => {
-@@ -523,7 +523,8 @@ test('tray context menu uses the selected locale for every visible level', () =>
+@@ -604,7 +604,8 @@ test('tray context menu uses the selected locale for every visible level', () =>
      '自訂'
    ]);
    assert.equal(template[4].submenu[0].label, '托盤彈出視窗');
@@ -3916,8 +3766,20 @@ index 7dea0354..56971fde 100644
  });
  
  test('tray context menu shows the macOS Quit shortcut on macOS only', () => {
+diff --git a/tests/electron/trayPopoverToggle.test.js b/tests/electron/trayPopoverToggle.test.js
+index 505c54cb..037e03cb 100644
+--- a/tests/electron/trayPopoverToggle.test.js
++++ b/tests/electron/trayPopoverToggle.test.js
+@@ -56,6 +56,7 @@ function fixture({ visible = true, focused = visible, platform = 'darwin' } = {}
+     popoverBounds: () => ({}), setTimeout: (fn) => timers.push(fn),
+     applyMacActivationPolicy() {}, applyMacSpaceBehavior() {}, applyWindowSettings() {},
+     nudgeTaskbarZOrder() {}, scheduleFloatingBubbleAutoCollapse() {}, expandFloatingBubble() {},
++    scheduleEdgeAutoHide() {},
+     focusExistingWindow: () => win.show()
+   });
+   vm.runInContext([
 diff --git a/tests/electron/usageCharts.test.js b/tests/electron/usageCharts.test.js
-index 6355958c..04a6b1ef 100644
+index b38c64c2..154d4998 100644
 --- a/tests/electron/usageCharts.test.js
 +++ b/tests/electron/usageCharts.test.js
 @@ -313,6 +313,30 @@ test('sparklinePreview keeps zero values at true zero height', () => {
@@ -4308,155 +4170,4 @@ index 00000000..8d57df1c
 +    'utf8'
 +  );
 +  assert.match(sessionRows, /\['claude',[^\]]*'zcode'\]\.includes\(row\?\.client\)/);
-+});
-diff --git a/tests/shared/zcodeSessionMetadata.test.js b/tests/shared/zcodeSessionMetadata.test.js
-new file mode 100644
-index 00000000..9d340a55
---- /dev/null
-+++ b/tests/shared/zcodeSessionMetadata.test.js
-@@ -0,0 +1,145 @@
-+'use strict';
-+
-+const assert = require('node:assert/strict');
-+const fs = require('node:fs');
-+const os = require('node:os');
-+const path = require('node:path');
-+const test = require('node:test');
-+const { DatabaseSync } = require('node:sqlite');
-+
-+const zcodeSessionMetadata = require('../../src/shared/providers/zcode/sessionMetadata');
-+
-+const SCHEMA = `
-+CREATE TABLE session (
-+  id TEXT PRIMARY KEY,
-+  title TEXT,
-+  parent_id TEXT,
-+  task_type TEXT,
-+  time_created INTEGER,
-+  time_updated INTEGER
-+);
-+`;
-+
-+function fixtureDb(t, rows) {
-+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'token-monitor-zcode-titles-'));
-+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-+  const file = path.join(dir, 'db.sqlite');
-+  const db = new DatabaseSync(file);
-+  db.exec(SCHEMA);
-+  const insert = db.prepare(
-+    'INSERT INTO session (id, title, parent_id, task_type, time_created, time_updated) VALUES (?, ?, ?, ?, ?, ?)'
-+  );
-+  for (const row of rows) insert.run(...row);
-+  db.close();
-+  return file;
-+}
-+
-+function resolve(file, ids, extraDeps = {}) {
-+  return zcodeSessionMetadata.resolveSessionMetadata(new Set(ids), {
-+    home: os.tmpdir(),
-+    deps: { zcodeDeps: { dbPath: file, ...extraDeps } }
-+  });
-+}
-+
-+test('a titled session resolves its title and epoch-ms timestamps', (t) => {
-+  const file = fixtureDb(t, [
-+    ['sess_abc', '工作台网站交接文档优化分析', null, 'interactive', 1789479536728, 1789577827928]
-+  ]);
-+  const meta = resolve(file, ['sess_abc']);
-+  assert.equal(meta.size, 1);
-+  const row = meta.get('sess_abc');
-+  assert.equal(row.title, '工作台网站交接文档优化分析');
-+  assert.equal(row.startedAt, new Date(1789479536728).toISOString());
-+  assert.equal(row.lastUsedAt, new Date(1789577827928).toISOString());
-+});
-+
-+test('an unknown session id and an empty title both stay out of the title column', (t) => {
-+  const file = fixtureDb(t, [
-+    ['sess_known', '', null, 'interactive', 111, 222],
-+    ['sess_other', '', null, 'interactive', null, null]
-+  ]);
-+  const meta = resolve(file, ['sess_missing', 'sess_known', 'sess_other']);
-+  assert.equal(meta.has('sess_missing'), false, 'id not in the store must not appear');
-+  assert.equal(meta.get('sess_known').title, '');
-+  assert.equal(meta.get('sess_known').startedAt, new Date(111).toISOString());
-+  assert.equal(meta.has('sess_other'), false, 'no title and no times -> nothing to contribute');
-+});
-+
-+test('a subagent session renders as arrow + kind label + parent title', (t) => {
-+  const file = fixtureDb(t, [
-+    ['sess_parent', 'Token-monitor 改进', null, 'interactive', 1, 2],
-+    ['sess_subagent_agent_x', '你是代码审查员。审查一个 PWA……', 'sess_parent', 'subagent_child', 3, 4]
-+  ]);
-+  const meta = resolve(file, ['sess_subagent_agent_x']);
-+  assert.equal(meta.get('sess_subagent_agent_x').title, '\u21b3 子代理 · Token-monitor 改进');
-+});
-+
-+test('a selection side chat renders with the side-chat label', (t) => {
-+  const file = fixtureDb(t, [
-+    ['sess_parent', '工作台网站交接文档优化分析', null, 'interactive', 1, 2],
-+    ['sess_side', '选中内容的问题', 'sess_parent', 'selection_side_chat', 3, 4]
-+  ]);
-+  const meta = resolve(file, ['sess_side']);
-+  assert.equal(meta.get('sess_side').title, '\u21b3 侧聊 · 工作台网站交接文档优化分析');
-+});
-+
-+test('an unmapped child task type falls through to its raw value', (t) => {
-+  const file = fixtureDb(t, [
-+    ['sess_parent', '父标题', null, 'interactive', 1, 2],
-+    ['sess_child', '提示词', 'sess_parent', 'review_panel', 3, 4]
-+  ]);
-+  const meta = resolve(file, ['sess_child']);
-+  assert.equal(meta.get('sess_child').title, '\u21b3 review_panel · 父标题');
-+});
-+
-+test('a subagent resolves the parent title even when the parent is in the same batch', (t) => {
-+  const file = fixtureDb(t, [
-+    ['sess_parent', '工作台网站交接文档优化分析', null, 'interactive', 1, 2],
-+    ['sess_subagent_agent_y', '你是代码审查员。……', 'sess_parent', 'subagent_child', 3, 4]
-+  ]);
-+  const meta = resolve(file, ['sess_parent', 'sess_subagent_agent_y']);
-+  assert.equal(meta.get('sess_subagent_agent_y').title, '\u21b3 子代理 · 工作台网站交接文档优化分析');
-+});
-+
-+test('a child falls back to its own title when the parent has none or is missing', (t) => {
-+  const file = fixtureDb(t, [
-+    ['sess_parent_mute', '', null, 'interactive', 1, 2],
-+    ['sess_sub_a', '审查任务提示词', 'sess_parent_mute', 'subagent_child', 3, 4],
-+    ['sess_sub_b', '另一个子代理提示词', 'sess_parent_gone', 'subagent_child', 5, 6]
-+  ]);
-+  const meta = resolve(file, ['sess_sub_a', 'sess_sub_b']);
-+  assert.equal(meta.get('sess_sub_a').title, '审查任务提示词', 'parent without a title -> own title, no label');
-+  assert.equal(meta.get('sess_sub_b').title, '另一个子代理提示词', 'parent row missing -> own title, no label');
-+});
-+
-+test('a missing database file degrades to an empty map', () => {
-+  const meta = resolve(path.join(os.tmpdir(), 'token-monitor-zcode-nope', 'db.sqlite'), ['sess_abc']);
-+  assert.equal(meta.size, 0);
-+});
-+
-+test('a corrupted database file degrades to an empty map', (t) => {
-+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'token-monitor-zcode-bad-'));
-+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-+  const file = path.join(dir, 'db.sqlite');
-+  fs.writeFileSync(file, 'this is not a sqlite database, just bytes');
-+  const meta = resolve(file, ['sess_abc']);
-+  assert.equal(meta.size, 0);
-+});
-+
-+test('a missing sqlite driver degrades to an empty map', (t) => {
-+  const file = fixtureDb(t, [['sess_abc', 'T', null, 'interactive', 1, 2]]);
-+  const meta = zcodeSessionMetadata.resolveSessionMetadata(new Set(['sess_abc']), {
-+    home: os.tmpdir(),
-+    deps: { zcodeDeps: { dbPath: file, sqlite: null } }
-+  });
-+  assert.equal(meta.size, 0);
-+});
-+
-+test('sessionMetadata registers the zcode resolver with the retry policy', () => {
-+  const source = fs.readFileSync(
-+    path.join(__dirname, '..', '..', 'src', 'shared', 'sessionMetadata.js'),
-+    'utf8'
-+  );
-+  assert.match(source, /require\('\.\/providers\/zcode\/sessionMetadata'\)/);
-+  assert.match(source, /\['zcode', \{ resolve: zcodeSessionMetadata\.resolveSessionMetadata, retryAfterTimestampFallback: true \}\]/);
 +});
