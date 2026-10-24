@@ -63,6 +63,7 @@ function fixture({ visible = true, focused = visible, platform = 'darwin', histo
     nudgeTaskbarZOrder() {}, scheduleFloatingBubbleAutoCollapse() {}, expandFloatingBubble() {},
     cancelMainWindowHibernate() {}, scheduleMainWindowHibernate() {},
     scheduleMainWindowShowSync() {},
+    scheduleEdgeAutoHide() {},
     focusExistingWindow: () => win.show()
   });
   vm.runInContext([
