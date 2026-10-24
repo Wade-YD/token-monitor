@@ -151,4 +151,110 @@ function resolveSessionMetadata(sessionIds, context = {}) {
   return result;
 }
 
-module.exports = { cleanTitle, readSessionRows, resolveSessionMetadata, zcodeDatabasePath };
+// ---------------------------------------------------------------------------
+// Session detail events (neutral shape consumed by sessionDetail.js). This is
+// our pre-v0.78 read path, kept alongside upstream's title/parentage resolver
+// — the two read the same database for different questions.
+// ---------------------------------------------------------------------------
+const MESSAGES_SQL =
+  `SELECT id,
+          CAST(COALESCE(json_extract(data,'$.time.created'), time_created) AS INTEGER) AS createdMs,
+          json_extract(data,'$.role')             AS role,
+          json_extract(data,'$.cost')             AS cost,
+          json_extract(data,'$.tokens.input')           AS tInput,
+          json_extract(data,'$.tokens.output')          AS tOutput,
+          json_extract(data,'$.tokens.reasoning')       AS tReasoning,
+          json_extract(data,'$.tokens.cache.read')      AS tCacheRead,
+          json_extract(data,'$.tokens.cache.write')     AS tCacheWrite
+   FROM message
+   WHERE session_id = ? AND json_valid(data)
+   ORDER BY sequence ASC, id ASC`;
+
+const PARTS_SQL =
+  `SELECT message_id AS messageId,
+          json_extract(data,'$.type') AS type,
+          json_extract(data,'$.text') AS text,
+          json_extract(data,'$.tool') AS tool
+   FROM part
+   WHERE session_id = ? AND json_valid(data)
+   ORDER BY time_created ASC, id ASC`;
+
+function isoFromMs(ms) {
+  const n = Number(ms);
+  return Number.isFinite(n) && n > 0 ? new Date(n).toISOString() : '';
+}
+
+function num(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function mapTokens(r) {
+  const input = num(r.tInput);
+  const output = num(r.tOutput);
+  const reasoning = num(r.tReasoning);
+  const cacheRead = num(r.tCacheRead);
+  const cacheWrite = num(r.tCacheWrite);
+  // Same convention as the other clients: reasoning is a subset of output and
+  // stays informational; the session total is in + out + cacheRead + cacheWrite.
+  const total = input + output + cacheRead + cacheWrite;
+  return { input, output, cacheRead, cacheWrite, reasoning, total };
+}
+
+function buildEvents(messages, parts) {
+  const textByMessage = new Map();
+  const toolsByMessage = new Map();
+  for (const p of parts) {
+    if (p.type === 'text' && p.text) {
+      if (!textByMessage.has(p.messageId)) textByMessage.set(p.messageId, []);
+      textByMessage.get(p.messageId).push(String(p.text));
+    } else if (p.type === 'tool' && p.tool) {
+      if (!toolsByMessage.has(p.messageId)) toolsByMessage.set(p.messageId, []);
+      toolsByMessage.get(p.messageId).push(String(p.tool));
+    }
+  }
+
+  const events = [];
+  let sessionCost = 0;
+  for (const m of messages) {
+    const timestamp = isoFromMs(m.createdMs);
+    if (m.role === 'user') {
+      const text = cleanTitle((textByMessage.get(m.id) || []).join(' '));
+      events.push({ kind: 'prompt', timestamp, text });
+    } else if (m.role === 'assistant') {
+      const cost = num(m.cost);
+      sessionCost += cost;
+      const tools = Array.from(new Set(toolsByMessage.get(m.id) || []));
+      events.push({ kind: 'turn', timestamp, tokens: mapTokens(m), tools, cost });
+    }
+  }
+  return { events, sessionCost };
+}
+
+function readSessionEvents(sessionId, deps = {}) {
+  const empty = { found: false, events: [], sessionCost: 0 };
+  const id = String(sessionId || '').trim();
+  if (!id) return empty;
+  const sqliteMod = resolveSqlite(deps);
+  if (!sqliteMod) return empty;
+  const dbPath = deps.dbPath || zcodeDatabasePath({ home: deps.home });
+  if (!dbPath) return empty;
+
+  let db;
+  try {
+    db = openDb(dbPath, sqliteMod);
+    const messages = db.prepare(MESSAGES_SQL).all(id);
+    if (messages.length === 0) return empty;
+    const parts = db.prepare(PARTS_SQL).all(id);
+    const built = buildEvents(messages, parts);
+    return { found: true, ...built };
+  } catch (_) {
+    return empty;
+  } finally {
+    if (db) {
+      try { db.close(); } catch (_) {}
+    }
+  }
+}
+
+module.exports = { cleanTitle, readSessionRows, resolveSessionMetadata, zcodeDatabasePath, readSessionEvents };
