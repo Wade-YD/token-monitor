@@ -562,3 +562,25 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
   6) 交付：全新解包 asar-extracted-v078 → overlay 25 文件 → 双向断言 15/15 →
      pack 49,402,919 B → 换装，启动零对话框。**拖拽验收以用户手测为准（双屏
      环境自动化脚本坐标不可靠，见 v0.69 轮记录）**。
+
+【升级记录（2026-10-27，v0.78.0 → v0.80.0）】
+  1) 双版本跨度：18 提交、146 文件（+9362/−1054）。Claude Web 多账号、Muse Code
+     额度、Ollama API 密钥/点数、刘海面板摘要与间距、设置页显示模式实时预览
+     （1f6bc7b3，main.js +149 行主战场）。Electron 不变（43.7.9）。
+  2) 安装包 API digest sha256 9b08bb7d… 实测 MATCH（125,821,808 B）。
+     ⚠️ 本轮下载三次断流且续传产出半截文件（114MB ≠ 125.8MB）→ **改为先删后下
+     + 按 Content-Length 精确比对文件大小的循环**（第 2 次成功）。
+     v0780 锚点移存 opencode\v0780-anchors\ → /S 静默安装 → 重建
+     app.asar.v0800-official.bak + .unpacked（18,791,856 B）。
+  3) rebase 34 提交，**仅 2 处冲突**（历轮最少）：上游 sessionRowDetailAvailable
+     白名单新增 senpi（数组 9→10），我方继续追加 zcode（sessionRows.js +
+     app.js keydown gate 各一处）。上游本轮改动集中在 main.js/设置页，未撞我方
+     edgeAutoHide/edgeDock 主战场。
+  4) 测试：8017 用例 7969 过。7 红全部环境因素，**非回归**：
+     - 4 × symlink EPERM（Windows 无符号链接权限，历轮同款）
+     - 3 × clientDataDirPresence/extension-overlap：测试用 os.homedir 桩隔离，
+       但 tokscaleConfigDir 走 %APPDATA%（不受桩影响），而本机
+       C:\Users\29871\AppData\Roaming\tokscale\antigravity-cache 真实存在
+       → 断言 false 必失败。**属上游测试环境隔离缺陷**（换干净机器会绿）。
+  5) 交付：全新解包 asar-extracted-v080 → overlay 25 文件 → 双向断言 14/14 →
+     pack 49,584,819 B → 换装，启动零对话框。
