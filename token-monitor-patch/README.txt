@@ -584,3 +584,46 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
        → 断言 false 必失败。**属上游测试环境隔离缺陷**（换干净机器会绿）。
   5) 交付：全新解包 asar-extracted-v080 → overlay 25 文件 → 双向断言 14/14 →
      pack 49,584,819 B → 换装，启动零对话框。
+
+【升级记录（2026-11-02，v0.80.0 → v0.84.1）】
+  1) 五版本跨度：79 提交、455 文件（+44045/−2783）。Claude Web 多账号、Muse Code
+     额度、Ollama 密钥/点数、插件平台（plugin scheme + descriptor/manifest）、
+     edge-dock 动画与 rail 浮动胶囊（c00aab1a/615232f0/8ab15d2b）、拖拽跟随
+     display frames（176e17fb）。Electron 43.7.9 → 45.1.0（跨两个大版本）。
+  2) 安装包 API digest sha256 5ce81a2c… 实测 MATCH（134,881,688 B，一次成功；
+     按上轮教训先删后下 + Content-Length 精确比对循环）。
+     v0800 锚点移存 opencode\v0800-anchors\ → /S 静默安装 → 重建
+     app.asar.v0841-official.bak + .unpacked（22,409,933 B）。
+  3) rebase 34 提交，5 处冲突：
+     - 主进程 main.js：上游 registerPluginScheme(protocol) 与我方
+       uncaughtException handler 并存（前者在上）
+     - 侧边栏主控 controller.js 的 poll：上游重构出 tickDrag()/
+       syncRailPointer()/syncBubblePointer()，我方 ensureTopmost +
+       tickInputReplay 插在其前，旧的内联拖拽结束逻辑由 tickDrag 取代
+     - 同文件：上游 tickDrag 函数与我方 ensureTopmost 函数撞位，两函数并存
+       （ensureTopmost 注释保留原生 sweep 版说明）
+     - 侧边栏 preload.js：上游 dragStart 签名扩展为 (grabOffsetY,
+       grabOffsetX, gestureId) + 新增 dragFrame(gestureId)，我方 inputAck 并存
+     - 上游 dragStart IPC 已自动转发三参数，无需改
+  4) 新依赖缺失导致 plugin* 12 个测试整文件红：上游 v0.84 新增
+     markdown-it / image-size（插件平台）；worktree 的 node_modules 是 v0.67
+     时代快照。npm install --no-save --no-package-lock image-size markdown-it
+     后全绿（c8 是 devDep 覆盖率工具，不影响测试）。
+     教训：升级后先比对 package.json 与 node_modules，缺依赖会让测试整文件
+     报 Cannot find module，看起来像大规模回归。
+  5) 测试：9271 用例 9219 过。7 红全环境因素：
+     - 3 × symlink EPERM（含上游新增 pluginSettingsStore symlink 测试）
+     - 3 × clientDataDirPresence/extension 缓存泄漏（v0.80 轮同款，%APPDATA%
+       真实缓存不受 os.homedir 桩影响）
+     - 1 × agent/titleSync 真实子进程：Node 24.19 libuv 断言
+       "Assertion failed: !(handle->flags & UV_HANDLE_CLOSING), src/win/async.c:94"
+       —— 上游测试在 fetch 响应后立即 process.exit(0) 与 undici 关闭竞态；
+       该测试只碰 src/agent + src/hub（我方零改动），属 Node 版本问题。
+  6) Electron 45 原生层复验（重要）：koffi 加载 OK；probeDockInput 扫到 3 窗口，
+     MA 返回 3（MA_NOACTIVATE）—— 对比 Electron 43 时代的 4
+     （MA_NOACTIVATEANDEAT），进一步印证"MA=4 是常量假象、真实输入不查 MA"的
+     当年结论（上游 Electron 已修正）；forceTopmostDockWindows raised=3
+     （SetWindowPos 全成功，intptr_t 修复在 Electron 45 下依然有效）。
+  7) 交付：全新解包 asar-extracted-v0841（含新依赖 markdown-it/image-size）
+     → overlay 25 文件（新增 geometry.js：模板参数含 replay）→ 双向断言 17/17
+     → pack 53,882,720 B → 换装，启动零对话框。
