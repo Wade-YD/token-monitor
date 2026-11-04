@@ -627,3 +627,69 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
   7) 交付：全新解包 asar-extracted-v0841（含新依赖 markdown-it/image-size）
      → overlay 25 文件（新增 geometry.js：模板参数含 replay）→ 双向断言 17/17
      → pack 53,882,720 B → 换装，启动零对话框。
+
+【升级记录（2026-11-04，v0.84.1 → v0.85.0）】
+  1) 单版本跨度：9 提交、74 文件（+2607/−233）。会话按工具筛选（app.js +204 主战场）、
+     远程会话设备标识（localSourceDevice）、共享内容模糊、tokscale 4.20→4.21
+     （Senpi 用量纳入项目子任务与记忆对话）。Electron 45.1.0 → 45.2.1。
+  2) 安装包 API digest sha256 ff9380d6… 实测 MATCH（134,921,608 B，一次成功）。
+     ⚠️ /S 静默参数本轮被安装器忽略（出现「Token Monitor 安装」向导窗）——从
+     Git Bash 直传参数形态疑似未被识别，用户手点完成安装。下一轮改用
+     Start-Process -ArgumentList '/S' 或 cmd /c 传参验证。
+     v0841 锚点已先移存 opencode\v0841-anchors\（安装器清 bak 的老坑未踩）。
+  3) rebase 34 提交，1 处冲突：app.js 视图模型对象——上游 localSourceDevice
+     （远程设备）与我方 sortMode 并存，两行都保留。
+  4) ⚠️ 本轮自伤事故（必读）：首冲突合并用 Python 字符串手术，closing 标记行的
+     replace 因 seg 未含尾部换行而未命中——`>>>>>>> ea155357` 被当内容提交进
+     ea155357'，下一个提交 rebase 时暴露为双重嵌套冲突。已在该提交的解决中
+     修复（内联 sortMode 落地，重放版 36558aeb）。教训：**合并后必须 grep 冲突
+     标记计数为 0 才能 continue；字符串手术改用行级重写或 Read+Edit**。
+  5) 测试：tokscale 对齐 4.21.0（npm install --no-save）；9327 用例 9275 过，
+     7 红全环境因素（symlink EPERM ×4、%APPDATA% 缓存泄漏家族 ×2、Node libuv
+     titleSync ×1）——与 v0.84.1 轮 7 红同家族，零回归。
+  6) 交付（新手法）：Mimosa 拦逐文件 cp → 改用 `git archive HEAD src | tar -xf -`
+     整树灌入（未改动文件与上游逐字节同，等效精确 overlay 且命令零文件名）；
+     src 树与 fork 工作树逐字节一致；双向断言 12/12 → pack 54,125,604 B →
+     换装 → 内容复核 6/6（我方 4 + 上游 2 标记共存）。
+  7) 启动验证：9 进程，error log 仅 1 条 [edge-dock] hwnd 初始化时间线
+     （benign，非异常路径）。待用户手测：贴边隐藏/dock/会话工具筛选
+     （双屏拖拽验收以手测为准）。
+
+【升级记录（2026-11-05，v0.85.0 → v0.86.0）】
+  1) 单版本跨度：12 提交、65 文件（+5729/−260）。额度历史预览（新模块族
+     limits/historyStore·historyController·historyDatabase·historyWorker·
+     historyIdentity + preload limitsHistory:* IPC）、Claude CLI 备用查询开关
+     （989b9fdc）、deepseek 官方 feed 服务状态、edge-dock 无额度头条时显示
+     balance（ed307f47，presentation.js balanceOnlyHeadline）、窗口外观切换
+     保留状态（3dee2696，新模块 retainedWindow）、代理 reset 销毁缓存。
+     Electron 45.2.1 不变，**无新 npm 依赖**（package.json 仅版本号）。
+  2) 网络：GitHub CDN 间歇断流（curl 56/35、gh api unexpected EOF 轮番出现）
+     —— 轮询重试第 1 次成功。下载目录 Temp\opencode\downloads 已被 Temp 清理
+     删除，需先重建。安装包 API digest sha256 4f9bb526…2701 实测 MATCH
+     （134,950,576 B）。
+  3) 安装：v0850 锚点移存 opencode\v0850-anchors\ → PowerShell
+     Start-Process -ArgumentList '/S'（上轮教训生效：静默成功、无向导弹窗）
+     → 重建 app.asar.v0860-official.bak + .unpacked（22,591,649 B）。
+  4) rebase 34 提交，仅 1 处冲突（60d6bb2f 主提交的 main.js 设置应用区）：
+     上游 syncWindowsBackdrop 重构拿掉了内联 backdrop 重建块（取上游
+     applyNativeMaterial()），我方 syncEdgeAutoHideAvailability() 保留。
+     **顺手修掉一个历轮遗留死调用：syncEdgeDock() 无定义**（上游早已改名
+     syncDockSurfaces，历轮 rebase 把旧调用带了过来——已装 v0.85.0 实为
+     潜伏 ReferenceError，设置应用路径会静默中断）——本轮删除。其余 33 提交
+     零冲突自动合并（上游本轮未碰 sessionRows 白名单/sortMode/preload
+     edgeDock 区）。
+  5) 测试：9536 用例 9484 过，7 红与 v0.84.1/v0.85.0 两轮同家族同数
+     （Node libuv titleSync ×1、symlink EPERM ×3、%APPDATA% 真实缓存泄漏
+     ×3），零回归。
+  6) 交付：全新解包 asar-extracted-v0860（workspace 根）→ `git archive HEAD
+     src | tar -xf -` 整树灌入（diff -r 与工作树逐字节一致，544 文件）→
+     pack 54,248,257 B → 换装 → 双向断言 22/22（我方 14 项含新增
+     「syncEdgeDock() 死调用已删」断言；上游 8 项含 retainedWindow/
+     historyStore/limitsHistory:open/balanceOnlyHeadline）→ 启动后
+     probeDockInput codes=[3,3,3] broken=false、forceTopmostDockWindows
+     raised=3（Electron 45.2.1 原生层完好）；error log 本轮启动零新增。
+     ⚠️ probe 复验的 koffi 须从解包树解析：createRequire(解包树/package.json)
+     后 require('koffi')——npx 缓存路径下没有 koffi。
+  7) 待手测：额度历史卡（14 天每日用量）、Claude CLI 备用查询开关、dock 无
+     额度头条时的 balance 显示、外观切换保留界面状态；贴边/dock 拖拽照旧
+     （双屏以手测为准）。

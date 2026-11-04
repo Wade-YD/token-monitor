@@ -233,7 +233,7 @@ index 00000000..20381e1f
 +  edgeTriggerHitTest
 +};
 diff --git a/src/electron/edgeDock/controller.js b/src/electron/edgeDock/controller.js
-index ebd8a126..6e1cb0a8 100644
+index 48c45f16..c0950501 100644
 --- a/src/electron/edgeDock/controller.js
 +++ b/src/electron/edgeDock/controller.js
 @@ -90,6 +90,7 @@ function createEdgeDockController(deps) {
@@ -244,7 +244,7 @@ index ebd8a126..6e1cb0a8 100644
      onToggleRateMode,
      onSwitchCodexAccount,
      canRefreshLimits = () => false,
-@@ -174,6 +175,19 @@ function createEdgeDockController(deps) {
+@@ -175,6 +176,19 @@ function createEdgeDockController(deps) {
    let placementOverride = null;
    let fullScreen = false;
    let fullScreenCheckedAt = -Infinity;
@@ -264,7 +264,7 @@ index ebd8a126..6e1cb0a8 100644
    let ipcRegistered = false;
    let displayListenersAttached = false;
    const shapes = { peek: null, rail: null, bubble: null };
-@@ -1252,7 +1266,7 @@ function createEdgeDockController(deps) {
+@@ -1265,7 +1279,7 @@ function createEdgeDockController(deps) {
      const snapshot = intent.snapshot();
      // The approach zone is on the way to the handle, and only the poll lets the
      // handle take the pointer, so it runs at the active rate from there on.
@@ -273,7 +273,7 @@ index ebd8a126..6e1cb0a8 100644
      pollTimer = setTimeout(poll, delay);
    }
  
-@@ -1264,6 +1278,8 @@ function createEdgeDockController(deps) {
+@@ -1277,6 +1291,8 @@ function createEdgeDockController(deps) {
        const current = layout();
        syncRailPointer();
        syncBubblePointer();
@@ -282,7 +282,7 @@ index ebd8a126..6e1cb0a8 100644
        if (drag) {
          tickDrag(point, current);
        } else if (current) {
-@@ -1333,6 +1349,194 @@ function createEdgeDockController(deps) {
+@@ -1346,6 +1362,194 @@ function createEdgeDockController(deps) {
      }
    }
  
@@ -477,7 +477,7 @@ index ebd8a126..6e1cb0a8 100644
    function followDrag(point, current) {
      let targetDisplay;
      try { targetDisplay = screen.getDisplayNearestPoint?.(point) || display(); } catch (_) { targetDisplay = display(); }
-@@ -1483,6 +1687,15 @@ function createEdgeDockController(deps) {
+@@ -1496,6 +1700,15 @@ function createEdgeDockController(deps) {
        lastCardFrameAt = Date.now();
        advanceBubbleMotion(bubbleMotion);
      });
@@ -842,10 +842,10 @@ index 77571fa1..f9315e9e 100644
  
  function floatingBubbleNativeGlassEnabled(settings = {}) {
 diff --git a/src/electron/main.js b/src/electron/main.js
-index 3dafacdc..acbefdad 100644
+index 966c1f4b..1df6ade3 100644
 --- a/src/electron/main.js
 +++ b/src/electron/main.js
-@@ -26,6 +26,8 @@ const fontSettingsApi = require('../shared/fontSettings');
+@@ -27,6 +27,8 @@ const fontSettingsApi = require('../shared/fontSettings');
  const motionPreferenceApi = require('./motionPreference');
  const tokenNumberAnimationApi = require('./tokenNumberAnimation');
  const { clearBackgroundImage, getBackgroundImage, importBackgroundImage } = require('./backgroundImage');
@@ -854,7 +854,7 @@ index 3dafacdc..acbefdad 100644
  const { createClientSourceIpcHandlers } = require('./clientSourceIpc');
  const { createClaudeWebFetch } = require('./providers/claude/webFetch');
  const { createMimoExchangeFetch } = require('./providers/mimo/exchangeFetch');
-@@ -465,6 +467,7 @@ const { NOTCH_PANEL_STAT_ITEMS, notchLimitItems, notchPanelItems, notchWeek } =
+@@ -472,6 +474,7 @@ const { NOTCH_PANEL_STAT_ITEMS, notchLimitItems, notchPanelItems, notchWeek } =
  const { createNotchHistory } = require('./notch/history');
  const trayLayoutApi = require('../shared/trayLayout');
  const { createFullScreenProbe } = require('./edgeDock/fullScreenProbe');
@@ -862,7 +862,7 @@ index 3dafacdc..acbefdad 100644
  const {
    normalizeEdgeDockCustomScale,
    normalizeEdgeDockDisplayId,
-@@ -647,6 +650,7 @@ function defaultSettings() {
+@@ -657,6 +660,7 @@ function defaultSettings() {
      liveTokenRateScope: 'all',
      compactTokenUnits: 'western',
      tokenRateMode: 'speed',
@@ -870,7 +870,7 @@ index 3dafacdc..acbefdad 100644
      heatmapMetric: 'cost',
      modelRankingMetric: 'tokens',
      homeActiveDaysWindow: 'all',
-@@ -828,6 +832,10 @@ function normalizeTokenRateMode(value) {
+@@ -841,6 +845,10 @@ function normalizeTokenRateMode(value) {
    return value === 'burn' ? 'burn' : 'speed';
  }
  
@@ -881,15 +881,15 @@ index 3dafacdc..acbefdad 100644
  function normalizeLiveTokenRateScope(value) {
    return value === 'device' ? 'device' : 'all';
  }
-@@ -2250,6 +2258,7 @@ function restoredBounds() {
+@@ -2263,6 +2271,7 @@ function restoredBounds() {
  let persistBoundsTimer = null;
  let floatingBubbleAutoCollapseTimer = null;
  const floatingBubbleState = { collapsed: false, side: null, collapsedBounds: null, expandedBounds: null, suppressNextCollapse: false, contentSize: null };
 +const edgeAutoHideState = { hidden: false, side: null, expandedBounds: null, hiddenBounds: null, animatingUntil: 0, desired: null, guardTripped: false, geometryReady: false, nativeRejectStreak: 0, lastResizeAt: 0, collapseTimer: null, pollTimer: null };
  let mainWindowChrome = { collapsedFloatingBubble: false };
- 
- function stopPersistBoundsTimer() {
-@@ -2505,6 +2514,451 @@ function syncFloatingBubbleAvailability() {
+ let mainWindowReplacementEpoch = 0;
+ let mainWindowReplacementTask = Promise.resolve();
+@@ -2518,6 +2527,451 @@ function syncFloatingBubbleAvailability() {
    sendFloatingBubbleState();
  }
  
@@ -1341,7 +1341,7 @@ index 3dafacdc..acbefdad 100644
  function persistBoundsSoon() {
    if (!mainWindow || mainWindow.isDestroyed()) return;
    if (!shouldPersistWindowBounds(mainWindow)) {
-@@ -2522,6 +2976,10 @@ function persistBoundsSoon() {
+@@ -2535,6 +2989,10 @@ function persistBoundsSoon() {
        // Popover x/y is anchored to the tray icon each open; only the size carries over.
        if (prev.width === next.width && prev.height === next.height) return;
        settings.windowBounds = { ...prev, width: next.width, height: next.height };
@@ -1352,7 +1352,7 @@ index 3dafacdc..acbefdad 100644
      } else if (floatingBubbleState.collapsed && floatingBubbleState.expandedBounds) {
        floatingBubbleState.collapsedBounds = next;
        const display = displayForBounds(next);
-@@ -2787,6 +3245,7 @@ function readSettings() {
+@@ -2802,6 +3260,7 @@ function readSettings() {
      merged.interfaceFontFamily = fontSettingsApi.normalizeFontFamily(merged.interfaceFontFamily);
      merged.displayFontFamily = fontSettingsApi.normalizeFontFamily(merged.displayFontFamily);
      merged.tokenRateMode = normalizeTokenRateMode(merged.tokenRateMode);
@@ -1360,7 +1360,7 @@ index 3dafacdc..acbefdad 100644
      if (saved.serviceProviderDisplayOrder !== undefined) {
        merged.serviceProviderDisplayOrder = String(saved.serviceProviderDisplayOrder || '');
      }
-@@ -3125,10 +3584,92 @@ function applyWindowSettings() {
+@@ -3141,10 +3600,92 @@ function applyWindowSettings() {
      applyCollapsedFloatingBubbleLimits(mainWindow.getBounds());
      return;
    }
@@ -1453,7 +1453,7 @@ index 3dafacdc..acbefdad 100644
    if (typeof mainWindow.setIgnoreMouseEvents === 'function') {
      mainWindow.setIgnoreMouseEvents(behavior.mousePassthrough);
    }
-@@ -3136,6 +3677,17 @@ function applyWindowSettings() {
+@@ -3152,6 +3693,17 @@ function applyWindowSettings() {
    if (typeof mainWindow.setSkipTaskbar === 'function') mainWindow.setSkipTaskbar(skipTaskbarForSettings(settings));
    if (!behavior.focusable && typeof mainWindow.blur === 'function') mainWindow.blur();
    syncTaskbarZOrder();
@@ -1471,7 +1471,7 @@ index 3dafacdc..acbefdad 100644
  }
  
  function nativeBlurEnabled(source = settings) {
-@@ -6196,6 +6748,15 @@ function ensureEdgeDockController() {
+@@ -6293,6 +6845,15 @@ function ensureEdgeDockController() {
      rendererDir: path.join(__dirname, 'renderer'),
      preloadPath: path.join(__dirname, 'edgeDock', 'preload.js'),
      getSettings: () => settings,
@@ -1487,7 +1487,7 @@ index 3dafacdc..acbefdad 100644
      nativeGlass: () => nativeBlurEnabled(),
      // The dock follows the widget's glass style unless it has its own; the
      // controller decides whether there is material at all. Reduce Transparency
-@@ -6430,6 +6991,8 @@ function setWindowPresentationFromMenu(value) {
+@@ -6527,6 +7088,8 @@ function setWindowPresentationFromMenu(value) {
    saveSettings();
    if (previousTrayMode) exitTrayMode();
    else {
@@ -1496,15 +1496,15 @@ index 3dafacdc..acbefdad 100644
      applyWindowSettings();
      focusExistingWindow();
    }
-@@ -7600,6 +8163,7 @@ function createWindow(boundsOverride, options = {}) {
-     }
-   });
+@@ -7698,6 +8261,7 @@ function createWindow(boundsOverride, options = {}) {
+     ? createRetainedWindow({ BaseWindow, WebContentsView }, windowOptions, options.previousWindow)
+     : new BrowserWindow(windowOptions);
    mainWindow = win;
 +  edgeAutoHideState.geometryReady = false;
    mainWindowChrome = { collapsedFloatingBubble };
    applyMacSpaceBehavior();
    applyWindowsChrome(win, { round: true });
-@@ -7641,6 +8205,14 @@ function createWindow(boundsOverride, options = {}) {
+@@ -7730,6 +8294,14 @@ function createWindow(boundsOverride, options = {}) {
    applyNativeMaterial();
    win.on('focus', () => {
      stopFloatingBubbleAutoCollapseTimer();
@@ -1518,8 +1518,8 @@ index 3dafacdc..acbefdad 100644
 +    scheduleEdgeAutoHide();
    });
    win.on('blur', () => {
-     nudgeTaskbarZOrder();
-@@ -7656,13 +8228,71 @@ function createWindow(boundsOverride, options = {}) {
+     limitsHistoryController?.hide();
+@@ -7745,13 +8317,71 @@ function createWindow(boundsOverride, options = {}) {
          if (point && tray?.isPointerOverIcon?.(point)) recentPopoverBlur = { at: performance.now(), point };
        }
      }
@@ -1596,7 +1596,7 @@ index 3dafacdc..acbefdad 100644
    win.on('minimize', stopTaskbarZOrderKeeper);
    win.on('close', (event) => {
      if (quitRequested) return;
-@@ -7897,6 +8527,28 @@ function rebuildWindow() {
+@@ -8013,6 +8643,28 @@ async function cursorStatusValue({ discover = false } = {}) {
  // accepts before 'ready'.
  registerPluginScheme(protocol);
  
@@ -1625,7 +1625,7 @@ index 3dafacdc..acbefdad 100644
  app.whenReady().then(() => {
    if (process.platform === 'darwin' && app.dock) app.dock.setIcon(APP_ICON_PATH);
    ensureSettingsLoaded();
-@@ -8226,6 +8878,7 @@ app.whenReady().then(() => {
+@@ -8341,6 +8993,7 @@ app.whenReady().then(() => {
          patch.displayFontFamily ?? settings.displayFontFamily
        ),
        tokenRateMode: normalizeTokenRateMode(patch.tokenRateMode ?? settings.tokenRateMode),
@@ -1633,16 +1633,15 @@ index 3dafacdc..acbefdad 100644
        floatingBubbleEnabled: parseBoolean(patch.floatingBubbleEnabled ?? settings.floatingBubbleEnabled, false),
        notchEnabled: parseBoolean(patch.notchEnabled ?? settings.notchEnabled, false),
        notchStyle: normalizeNotchStyle(patch.notchStyle ?? settings.notchStyle),
-@@ -8425,6 +9078,8 @@ app.whenReady().then(() => {
+@@ -8542,6 +9195,7 @@ app.whenReady().then(() => {
      applyWindowSettings();
      syncFloatingBubbleAvailability();
      syncDockSurfaces();
-+    syncEdgeDock();
 +    syncEdgeAutoHideAvailability();
-     const nextNativeMaterial = nativeBlurEnabled();
-     const nextWindowsBackdrop = normalizeWindowsBackdropMode(settings?.windowsBackdrop);
-     const windowsBackdropChanged = previousWindowsBackdrop !== nextWindowsBackdrop
-@@ -8552,6 +9207,27 @@ app.whenReady().then(() => {
+     applyNativeMaterial();
+     const runtimeChange = classifySettingsChange(previousRuntimeSettings, settings);
+     const widgetHistorySourceChanged = previousRuntimeSettings.historyEnabled !== settings.historyEnabled;
+@@ -8661,6 +9315,27 @@ app.whenReady().then(() => {
    });
    ipcMain.handle('floatingBubble:expand', () => expandFloatingBubble());
    ipcMain.handle('floatingBubble:peek', () => expandFloatingBubble({ focus: false }));
@@ -1670,7 +1669,7 @@ index 3dafacdc..acbefdad 100644
    ipcMain.handle('floatingBubble:collapseIfIdle', () => {
      if (!mainWindow || mainWindow.isDestroyed()) return false;
      if (floatingBubbleState.collapsed || !canUseFloatingBubble(settings)) return false;
-@@ -9772,6 +10448,20 @@ app.whenReady().then(() => {
+@@ -9882,6 +10557,20 @@ app.whenReady().then(() => {
    });
    ipcMain.handle('dashboard:open', () => { createDashboardWindow(); return true; });
    ipcMain.handle('dashboard:getHistory', (_event, options) => getDashboardHistory(options));
@@ -1692,7 +1691,7 @@ index 3dafacdc..acbefdad 100644
      const win = BrowserWindow.fromWebContents(event.sender);
      if (!win || win !== dashboardWindow || win.isDestroyed()) return;
 diff --git a/src/electron/preload.js b/src/electron/preload.js
-index 849a292f..220d551c 100644
+index bad067ce..9d81eca9 100644
 --- a/src/electron/preload.js
 +++ b/src/electron/preload.js
 @@ -47,6 +47,7 @@ contextBridge.exposeInMainWorld('tokenMonitor', {
@@ -1704,10 +1703,10 @@ index 849a292f..220d551c 100644
      const listener = () => { try { callback(); } catch (_) {} };
      ipcRenderer.on('dashboard:historyChanged', listener);
 diff --git a/src/electron/renderer/app.js b/src/electron/renderer/app.js
-index dc591a28..096a3d2e 100644
+index f5fe754a..b076bd65 100644
 --- a/src/electron/renderer/app.js
 +++ b/src/electron/renderer/app.js
-@@ -203,8 +203,8 @@ const projectRowsApi = window.TokenMonitorProjectRows;
+@@ -204,8 +204,8 @@ const projectRowsApi = window.TokenMonitorProjectRows;
  const sessionDetailApi = window.TokenMonitorSessionDetail;
  const windowShortcutApi = window.TokenMonitorWindowShortcut;
  const LIMIT_REFRESH_OPTIONS = [60000, 120000, 300000, 900000, 1800000];
@@ -1718,7 +1717,7 @@ index dc591a28..096a3d2e 100644
  const LIMIT_CAPABILITY_TAG_KEYS = {
    Auto: 'settings.limits.capability.auto',
    'OAuth/CLI': 'settings.limits.capability.oauthCli',
-@@ -404,6 +404,8 @@ Object.assign(els, {
+@@ -407,6 +407,8 @@ Object.assign(els, {
    projectBreakdownFooter: document.getElementById('projectBreakdownFooter'),
    projectBreakdownFooterTools: document.getElementById('projectBreakdownFooterTools'),
    projectBreakdownFooterModels: document.getElementById('projectBreakdownFooterModels'),
@@ -1727,7 +1726,7 @@ index dc591a28..096a3d2e 100644
    monthPeriodMenu: document.getElementById('monthPeriodMenu'),
    monthPeriodTab: document.getElementById('monthPeriodTab'),
    periodMonthModeInput: document.getElementById('periodMonthModeInput'),
-@@ -679,6 +681,14 @@ els.toolDetailFooterModels.addEventListener('click', () => setActiveToolDetailMo
+@@ -687,6 +689,14 @@ els.toolDetailFooterModels.addEventListener('click', () => setActiveToolDetailMo
  els.projectBreakdownFooterTools.addEventListener('click', () => { void saveSettings({ projectBreakdownMode: 'tool' }).catch(() => {}); });
  els.projectBreakdownFooterModels.addEventListener('click', () => { void saveSettings({ projectBreakdownMode: 'model' }).catch(() => {}); });
  
@@ -1742,7 +1741,7 @@ index dc591a28..096a3d2e 100644
  document.addEventListener('pointerdown', (event) => {
    if (state.viewSwitcherOpen && !event.target.closest('#viewSwitcher')) {
      setViewSwitcherOpen(false);
-@@ -1103,6 +1113,7 @@ function scheduleDisplayLiveTokenRateExpiry() {
+@@ -1113,6 +1123,7 @@ function scheduleDisplayLiveTokenRateExpiry() {
      void maybeUpdateBarsIcon({ refreshComposers: false });
      renderFloatingBubbleContent();
      if (isSettingsSurfaceVisible()) refreshTrayComposers();
@@ -1750,7 +1749,7 @@ index dc591a28..096a3d2e 100644
      scheduleDisplayLiveTokenRateExpiry();
    }, Math.max(0, Math.min(...expiries) - Date.now()) + 10);
  }
-@@ -3262,6 +3273,21 @@ function modelRowsForPeriod(period, rankingMetric = state.settings?.modelRanking
+@@ -3368,6 +3379,21 @@ function modelRowsForPeriod(period, rankingMetric = state.settings?.modelRanking
    return toolRowsForPeriod(period);
  }
  
@@ -1770,19 +1769,20 @@ index dc591a28..096a3d2e 100644
 +}
 +
  function sessionPresentationOptions() {
+   const localDevice = state.stats?.devices?.find(device => device.deviceId === state.settings?.deviceId);
    return {
-     clientLabels,
-@@ -3275,6 +3301,9 @@ function sessionPresentationOptions() {
-     sourcePeriods: state.stats?.periods,
-     grokBotSessionIds: state.stats?.grokBotSessionIds,
+@@ -3384,6 +3410,10 @@ function sessionPresentationOptions() {
      nativeSessions: state.stats?.nativeSessions?.[state.period] || {},
+     localSourceDevice: localDevice ? { deviceId: localDevice.deviceId,
+       name: deviceBreakdownApi.deviceLabel(localDevice), platform: localDevice.platform || '', deviceKind: localDevice.deviceKind || 'computer' } : undefined,
++
 +    // Inlined rather than calling sessionSortMode(): source-slicing tests
 +    // evaluate this function body in isolation, where only its own locals exist.
 +    sortMode: state.settings?.sessionSortMode === 'tokens' ? 'tokens' : 'recent',
      subagents: {
        countLabel: (count) => t('sessions.subagentCount', { count }),
        unattributedLabel: t('dashboard.tooltip.unclassified')
-@@ -3303,7 +3332,8 @@ function rawSessionRowsForPeriod(period) {
+@@ -3412,7 +3442,8 @@ function rawSessionRowsForPeriod(period) {
  function sessionRowsForPeriod(period) {
    const rows = rawSessionRowsForPeriod(period);
    if (rows.length > 0) {
@@ -1792,7 +1792,7 @@ index dc591a28..096a3d2e 100644
      return sessionRowsApi.groupSessionRows(rows, sessionPresentationOptions());
    }
    if (Number(period?.totalTokens || 0) === 0) return [];
-@@ -5753,9 +5783,16 @@ function renderTrends() {
+@@ -5891,9 +5922,16 @@ function renderTrends() {
      return;
    }
  
@@ -1811,7 +1811,7 @@ index dc591a28..096a3d2e 100644
  
    const summary = homeOverviewApi.activityStatsForPeriod({
      period: state.period,
-@@ -5781,9 +5818,18 @@ function renderTrends() {
+@@ -5919,9 +5957,18 @@ function renderTrends() {
  
    els.trendsPanel.innerHTML =
      `<div class="trends-cap"><span>${rangeLabel}</span><span class="trends-open-hint" aria-label="${t('trends.open')}">↗</span></div>`
@@ -1831,7 +1831,7 @@ index dc591a28..096a3d2e 100644
    bindTrendTooltip(els.trendsPanel.querySelector('.trends-spark'), model, finalPoints, labelKey, metric);
    const bars = Array.from(els.trendsPanel.querySelectorAll('.spark-bar'));
    bars.forEach((bar, index) => {
-@@ -13423,7 +13469,7 @@ els.breakdown.addEventListener('click', (event) => {
+@@ -13688,7 +13735,7 @@ els.breakdown.addEventListener('click', (event) => {
    }
    const key = rowEl.dataset.key || '';            // "session:<client>:<sessionId>"
    const client = rowEl.dataset.client || '';
@@ -1897,7 +1897,7 @@ index f929bcb7..1a016361 100644
  els.closeBtn.addEventListener('click', () => window.tokenMonitor.dashboard.close());
  
 diff --git a/src/electron/renderer/edgeDock/dock.js b/src/electron/renderer/edgeDock/dock.js
-index a73c2a4f..9d1fe17c 100644
+index ed847e3c..1666f699 100644
 --- a/src/electron/renderer/edgeDock/dock.js
 +++ b/src/electron/renderer/edgeDock/dock.js
 @@ -5,6 +5,13 @@
@@ -1915,10 +1915,10 @@ index a73c2a4f..9d1fe17c 100644
  // The running reading is derived from the projected rows at paint time rather than
  // frozen into the cell, so the rail and the card answer at the same clock (see
 diff --git a/src/electron/renderer/i18n.js b/src/electron/renderer/i18n.js
-index 060904a1..83e9480e 100644
+index 43eb309b..7eb67241 100644
 --- a/src/electron/renderer/i18n.js
 +++ b/src/electron/renderer/i18n.js
-@@ -842,6 +842,9 @@
+@@ -880,6 +880,9 @@
        'home.liveTokenRate.burnTitle': 'Live token burn ({scope}): {value}. Click to show live tok/s.',
        'home.liveTokenRate.speedIdleTitle': 'Last observed generation speed ({scope}): {value}. Click to show TPM.',
        'home.liveTokenRate.burnIdleTitle': 'Last observed token burn ({scope}): {value}. Click to show tok/s.',
@@ -1928,7 +1928,7 @@ index 060904a1..83e9480e 100644
        'home.less': 'Less',
        'home.more': 'More',
        'home.used': 'used',
-@@ -1742,6 +1745,7 @@
+@@ -1782,6 +1785,7 @@
        'settings.windowBehavior.floating': 'Floating above apps',
        'settings.windowBehavior.normal': 'Normal window',
        'settings.windowBehavior.desktop': 'Desktop pinned',
@@ -1936,7 +1936,7 @@ index 060904a1..83e9480e 100644
        'settings.windowBehavior.buttonTitle': '{current}; click for {next}',
        'settings.display.floatingBubble': 'Floating Bubble',
        'settings.display.floatingBubbleNote': 'Collapse the widget into a slim draggable mini-window; click it to reopen.',
-@@ -2085,6 +2089,7 @@
+@@ -2125,6 +2129,7 @@
        'trayMenu.presentation.floating': 'Floating Above Apps',
        'trayMenu.presentation.normal': 'Normal Window',
        'trayMenu.presentation.desktop': 'Desktop Pinned',
@@ -1944,7 +1944,7 @@ index 060904a1..83e9480e 100644
        'settings.startup.title': 'Startup',
        'settings.startup.startAtLogin': 'Start at login',
        'settings.startup.available': 'Available in packaged builds. On Linux, run the AppImage build to enable.',
-@@ -3152,6 +3157,9 @@
+@@ -3234,6 +3239,9 @@
        'home.liveTokenRate.burnTitle': '即時 Token 消耗（{scope}）：{value}。點擊切換至即時 tok/s。',
        'home.liveTokenRate.speedIdleTitle': '最近一次生成速度（{scope}）：{value}。點擊切換至 TPM。',
        'home.liveTokenRate.burnIdleTitle': '最近一次 Token 消耗（{scope}）：{value}。點擊切換至 tok/s。',
@@ -1954,7 +1954,7 @@ index 060904a1..83e9480e 100644
        'home.less': '較少',
        'home.more': '較多',
        'home.used': '已用',
-@@ -4052,6 +4060,7 @@
+@@ -4136,6 +4144,7 @@
        'settings.windowBehavior.floating': '浮在其他 app 上方',
        'settings.windowBehavior.normal': '一般視窗',
        'settings.windowBehavior.desktop': '固定在桌面',
@@ -1962,7 +1962,7 @@ index 060904a1..83e9480e 100644
        'settings.windowBehavior.buttonTitle': '目前：{current}；點擊切換為 {next}',
        'settings.display.floatingBubble': '懸浮小窗',
        'settings.display.floatingBubbleNote': '將 widget 收成可拖曳的窄長小窗，點擊即可重新展開。',
-@@ -4395,6 +4404,7 @@
+@@ -4479,6 +4488,7 @@
        'trayMenu.presentation.floating': '浮動於其他 App 上方',
        'trayMenu.presentation.normal': '一般視窗',
        'trayMenu.presentation.desktop': '固定於桌面',
@@ -1970,7 +1970,7 @@ index 060904a1..83e9480e 100644
        'settings.startup.title': '啟動',
        'settings.startup.startAtLogin': '登入時啟動',
        'settings.startup.available': '僅在打包後的版本可用；Linux 需以 AppImage 執行。',
-@@ -5462,6 +5472,9 @@
+@@ -5588,6 +5598,9 @@
        'home.liveTokenRate.burnTitle': '实时 Token 消耗（{scope}）：{value}。点击切换至实时 tok/s。',
        'home.liveTokenRate.speedIdleTitle': '最近一次生成速度（{scope}）：{value}。点击切换至 TPM。',
        'home.liveTokenRate.burnIdleTitle': '最近一次 Token 消耗（{scope}）：{value}。点击切换至 tok/s。',
@@ -1980,7 +1980,7 @@ index 060904a1..83e9480e 100644
        'home.less': '较少',
        'home.more': '较多',
        'home.used': '已用',
-@@ -6362,6 +6375,7 @@
+@@ -6490,6 +6503,7 @@
        'settings.windowBehavior.floating': '浮在其他 app 上方',
        'settings.windowBehavior.normal': '普通窗口',
        'settings.windowBehavior.desktop': '固定在桌面',
@@ -1988,7 +1988,7 @@ index 060904a1..83e9480e 100644
        'settings.windowBehavior.buttonTitle': '当前：{current}；点击切换为 {next}',
        'settings.display.floatingBubble': '悬浮小窗',
        'settings.display.floatingBubbleNote': '将组件收成可拖动的窄长小窗，点击即可重新展开。',
-@@ -6705,6 +6719,7 @@
+@@ -6833,6 +6847,7 @@
        'trayMenu.presentation.floating': '浮动于其他 App 上方',
        'trayMenu.presentation.normal': '普通窗口',
        'trayMenu.presentation.desktop': '固定到桌面',
@@ -1996,7 +1996,7 @@ index 060904a1..83e9480e 100644
        'settings.startup.title': '启动',
        'settings.startup.startAtLogin': '登录时启动',
        'settings.startup.available': '仅在打包后的版本可用；Linux 需以 AppImage 运行。',
-@@ -7340,6 +7355,9 @@
+@@ -7513,6 +7528,9 @@
        'home.liveTokenRate.burnTitle': '실시간 토큰 소모량({scope}): {value}. 클릭하여 실시간 tok/s로 전환합니다.',
        'home.liveTokenRate.speedIdleTitle': '마지막으로 관찰된 생성 속도({scope}): {value}. 클릭하여 TPM으로 전환합니다.',
        'home.liveTokenRate.burnIdleTitle': '마지막으로 관찰된 토큰 소모량({scope}): {value}. 클릭하여 tok/s로 전환합니다.',
@@ -2006,15 +2006,15 @@ index 060904a1..83e9480e 100644
        'home.reset': '{value} 초기화',
        'home.staleDevice': '오프라인',
        'home.tools': '도구',
-@@ -9194,6 +9212,7 @@
+@@ -9369,6 +9387,7 @@
        'trayMenu.presentation.floating': '다른 앱 위에 띄우기',
        'trayMenu.presentation.normal': '일반 창',
        'trayMenu.presentation.desktop': '데스크톱에 고정',
 +      'trayMenu.presentation.edge': '가장자리 자동 숨김',
        'settings.views.configureHome': '{name} 설정',
+       'settings.views.configureLimits': '{name} 설정',
        'settings.views.configureTrend': '{name} 설정',
-       'settings.views.enableTrend': '추이 활성화',
-@@ -9217,6 +9236,7 @@
+@@ -9393,6 +9412,7 @@
        'settings.views.trendIntervalMinutes': '{n}분',
        'settings.windowBehavior.buttonTitle': '{current}; {next}로 전환하려면 클릭',
        'settings.windowBehavior.desktop': '데스크톱 고정',
@@ -2022,7 +2022,7 @@ index 060904a1..83e9480e 100644
        'settings.windowBehavior.floating': '앱 위에 플로팅',
        'settings.windowBehavior.normal': '일반 창',
        'sortMostTokens': '↕ 토큰 많은 순',
-@@ -9650,6 +9670,9 @@
+@@ -9867,6 +9887,9 @@
        'home.liveTokenRate.burnTitle': 'ライブ Token 消費（{scope}）：{value}。クリックするとライブ tok/s に切り替わります。',
        'home.liveTokenRate.speedIdleTitle': '直近の生成速度（{scope}）：{value}。クリックすると TPM に切り替わります。',
        'home.liveTokenRate.burnIdleTitle': '直近の Token 消費（{scope}）：{value}。クリックすると tok/s に切り替わります。',
@@ -2032,15 +2032,15 @@ index 060904a1..83e9480e 100644
        'home.reset': '{value}をリセット',
        'home.staleDevice': 'オフライン',
        'home.tools': 'ツール',
-@@ -11504,6 +11527,7 @@
+@@ -11723,6 +11746,7 @@
        'trayMenu.presentation.floating': '他のアプリの前面に表示',
        'trayMenu.presentation.normal': '通常ウィンドウ',
        'trayMenu.presentation.desktop': 'デスクトップに固定',
 +      'trayMenu.presentation.edge': '端で自動的に隠す',
        'settings.views.configureHome': '{name}を設定',
+       'settings.views.configureLimits': '{name}を設定',
        'settings.views.configureTrend': '{name}を設定',
-       'settings.views.enableTrend': 'トレンドを有効化',
-@@ -11527,6 +11551,7 @@
+@@ -11747,6 +11771,7 @@
        'settings.views.trendIntervalMinutes': '{n}分',
        'settings.windowBehavior.buttonTitle': '{current}; {next}に切り替えるにはクリック',
        'settings.windowBehavior.desktop': 'デスクトップに固定',
@@ -2048,7 +2048,7 @@ index 060904a1..83e9480e 100644
        'settings.windowBehavior.floating': 'アプリの上にフローティング',
        'settings.windowBehavior.normal': '通常ウィンドウ',
        'sortMostTokens': '↕ トークン数順',
-@@ -12363,6 +12388,9 @@
+@@ -12621,6 +12646,9 @@
        'home.limit.session': 'Sessão',
        'home.limit.daily': 'Diária',
        'home.limit.weekly': 'Semanal',
@@ -2058,7 +2058,7 @@ index 060904a1..83e9480e 100644
        'home.limit.billing': 'Cobrança',
        'home.limit.monthly': 'Mensal',
        'home.reset': 'Redefinir {value}',
-@@ -13293,6 +13321,7 @@
+@@ -13553,6 +13581,7 @@
        'settings.windowBehavior.normal': 'Janela normal',
        'settings.windowBehavior.desktop': 'Fixado na área de trabalho',
        'settings.windowBehavior.buttonTitle': '{current}; clique para {next}',
@@ -2066,7 +2066,7 @@ index 060904a1..83e9480e 100644
        'settings.display.floatingBubble': 'Bolha flutuante',
        'settings.display.floatingBubbleNote': 'Reduz o widget a uma mini-janela slim e arrastável; clique nela para reabrir.',
        'edgeDock.period.today': 'Hoje',
-@@ -13635,6 +13664,7 @@
+@@ -13895,6 +13924,7 @@
        'trayMenu.presentation.floating': 'Flutuante sobre os aplicativos',
        'trayMenu.presentation.normal': 'Janela normal',
        'trayMenu.presentation.desktop': 'Fixado na área de trabalho',
@@ -2075,7 +2075,7 @@ index 060904a1..83e9480e 100644
        'settings.startup.startAtLogin': 'Iniciar ao entrar no sistema',
        'settings.startup.available': 'Disponível nas versões empacotadas. No Linux, execute a versão AppImage para ativar.',
 diff --git a/src/electron/renderer/index.html b/src/electron/renderer/index.html
-index 0a2601a0..5bf467e6 100644
+index 1307a4b0..3453df27 100644
 --- a/src/electron/renderer/index.html
 +++ b/src/electron/renderer/index.html
 @@ -251,6 +251,7 @@
@@ -2086,7 +2086,7 @@ index 0a2601a0..5bf467e6 100644
                  </select>
                  <span class="settings-note settings-item-desc" data-i18n="settings.display.windowBehaviorNote">Desktop pinned keeps the widget below other apps and locks drag/resize while staying clickable.</span>
                </label>
-@@ -1681,6 +1682,10 @@
+@@ -1687,6 +1688,10 @@
        <div id="sessionPagerHost" class="session-pager-host hidden"></div>
        <footer class="footer">
          <div id="viewSwitcher" class="view-switcher"></div>
@@ -2146,10 +2146,10 @@ index 00000000..63fc4423
 +  return { createManualRefreshController, delay };
 +});
 diff --git a/src/electron/renderer/sessionRows.js b/src/electron/renderer/sessionRows.js
-index 7720918a..9bf37724 100644
+index 0981a936..ce31e93d 100644
 --- a/src/electron/renderer/sessionRows.js
 +++ b/src/electron/renderer/sessionRows.js
-@@ -416,7 +416,7 @@
+@@ -424,7 +424,7 @@
    }
  
    function sessionRowDetailAvailable(row) {
@@ -2158,7 +2158,7 @@ index 7720918a..9bf37724 100644
        || (row?.client === 'reasonix' && row?.sessionDetailAvailable === true);
    }
  
-@@ -520,6 +520,20 @@
+@@ -529,6 +529,20 @@
      };
    }
  
@@ -2179,7 +2179,7 @@ index 7720918a..9bf37724 100644
    function sessionRowsForPeriod(period, options = {}) {
      const labels = options.clientLabels || {};
      const colors = options.clientColors || {};
-@@ -628,7 +642,7 @@
+@@ -638,7 +652,7 @@
        const row = nativeSessionRow(session, key, options, now);
        if (row) rows.push(row);
      }
@@ -2188,7 +2188,7 @@ index 7720918a..9bf37724 100644
    }
  
    function groupBackgroundReviewRows(rows, options = {}) {
-@@ -898,6 +912,7 @@
+@@ -909,6 +923,7 @@
      applyBreakdownRowSemantics,
      archivedSessionCount,
      compactSessionTime,
@@ -2196,19 +2196,19 @@ index 7720918a..9bf37724 100644
      groupBackgroundReviewRows,
      groupSessionRows,
      groupSubagentRows,
-@@ -905,6 +920,7 @@
+@@ -916,6 +931,7 @@
      isGrokBotSession,
      sessionRowDetailAvailable,
      handleBreakdownRowKeydown,
 +    normalizeSessionSortMode,
      sessionBreakdownIncomplete,
      sessionCacheHitPercent,
-     sessionIdLabel,
+     cacheHitLabel,
 diff --git a/src/electron/renderer/styles.css b/src/electron/renderer/styles.css
-index 856dce08..0691c011 100644
+index a7312c28..6776d3b5 100644
 --- a/src/electron/renderer/styles.css
 +++ b/src/electron/renderer/styles.css
-@@ -6740,6 +6740,8 @@ html.native-liquid-glass .view-switcher-menu-item { border-radius: 9px; }
+@@ -6945,6 +6945,8 @@ html.native-liquid-glass .view-switcher-menu-item { border-radius: 9px; }
  .detail-session-id-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: text; }
  .detail-session-id-copy { flex-shrink: 0; padding: 0 2px; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; opacity: 0.72; }
  .detail-session-id-copy:hover, .detail-session-id-copy:focus-visible { color: var(--text); opacity: 1; }
@@ -2217,7 +2217,7 @@ index 856dce08..0691c011 100644
  .view-preference-row.has-subgroup {
    grid-template-columns: minmax(0, 1fr) repeat(3, 22px);
  }
-@@ -6934,9 +6936,20 @@ html.native-liquid-glass .view-switcher-menu-item { border-radius: 9px; }
+@@ -7139,9 +7141,20 @@ html.native-liquid-glass .view-switcher-menu-item { border-radius: 9px; }
  .trends-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; padding-right: 2px; overflow: hidden; }
  .trends-cap { flex: none; display: flex; align-items: center; justify-content: space-between; font-size: 0.6875rem; letter-spacing: 0.04em; text-transform: uppercase; opacity: 0.6; }
  .trends-open-hint { opacity: 0.75; cursor: pointer; font-size: 0.8125rem; }
@@ -3187,7 +3187,7 @@ index 00000000..47458a4a
 +});
 +
 diff --git a/tests/electron/edgeDockController.test.js b/tests/electron/edgeDockController.test.js
-index c2452c30..b033c2ac 100644
+index 4b505387..6d9fb7bc 100644
 --- a/tests/electron/edgeDockController.test.js
 +++ b/tests/electron/edgeDockController.test.js
 @@ -193,6 +193,12 @@ function createFixture(options = {}) {
@@ -3628,7 +3628,7 @@ index 00000000..1dfb36f3
 +  assert.deepEqual(events, ['on', 'pull', 'off']);
 +});
 diff --git a/tests/electron/sessionRows.test.js b/tests/electron/sessionRows.test.js
-index 598eb2e3..67318799 100644
+index d27b3c3b..9aaa3169 100644
 --- a/tests/electron/sessionRows.test.js
 +++ b/tests/electron/sessionRows.test.js
 @@ -8,9 +8,11 @@ const test = require('node:test');
@@ -3759,10 +3759,10 @@ index 5d78e762..5e830795 100644
  
  test('tray context menu shows the macOS Quit shortcut on macOS only', () => {
 diff --git a/tests/electron/trayPopoverToggle.test.js b/tests/electron/trayPopoverToggle.test.js
-index a181c7c8..bc585e5d 100644
+index 163cc522..e095ac64 100644
 --- a/tests/electron/trayPopoverToggle.test.js
 +++ b/tests/electron/trayPopoverToggle.test.js
-@@ -59,6 +59,7 @@ function fixture({ visible = true, focused = visible, platform = 'darwin' } = {}
+@@ -61,6 +61,7 @@ function fixture({ visible = true, focused = visible, platform = 'darwin', histo
      popoverBounds: () => ({}), setTimeout: (fn) => timers.push(fn),
      applyMacActivationPolicy() {}, applyMacSpaceBehavior() {}, applyWindowSettings() {},
      nudgeTaskbarZOrder() {}, scheduleFloatingBubbleAutoCollapse() {}, expandFloatingBubble() {},
