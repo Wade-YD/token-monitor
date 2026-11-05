@@ -693,3 +693,22 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
   7) 待手测：额度历史卡（14 天每日用量）、Claude CLI 备用查询开关、dock 无
      额度头条时的 balance 显示、外观切换保留界面状态；贴边/dock 拖拽照旧
      （双屏以手测为准）。
+
+【附加记录（2026-11-05，Pi/CPAHelper 用量检测）】
+  1) 现象：token-monitor 的 Pi 行恒为 0。根因：pi 扫描根目录写死
+     ~/.pi/agent/sessions（src/shared/providers/pi/paths.js，上游明确不认
+     PI_CODING_AGENT_DIR），而 CPAHelper 把会话写在
+     %LOCALAPPDATA%\CPAHelper\{Excel,Word,Agent}\Agent\Pi\sessions\*.jsonl。
+  2) 实测排除（tokscale 4.21.0）：TOKSCALE_EXTRA_DIRS=pi:<dir> 对 pi 无效
+     （同法对 claude 有效）；目录联接/junction 不被 tokscale 遍历跟随；
+     **硬链接有效**（同 inode，进行中的会话追加实时可见）。
+  3) 方案：sync-pi-sessions.ps1（tooling 目录）把 CPAHelper 各处会话硬链接进
+     ~/.pi/agent/sessions；实测 today 1.60 亿 / month 2.11 亿 / allTime 2.41 亿
+     token，应用 session-usage-archive 已入档。
+  4) 插件方案（2026-11-05 上线）：插件 API 无法注入数据源（ctx.data 只读宿主
+     已采集数据、manifest 无采集器贡献点），但插件 Node 后端可做同样的硬链接
+     镜像，宿主自己的 tokscale 扫描即可统计到 —— 等于把手动脚本自动化，无系统
+     计划任务残留。私有仓：https://github.com/Wade-YD/token-monitor-pi-bridge
+     （插件 id pi-bridge，v1.0.0，Release 附 pi-bridge-1.0.0.tmplugin，
+     SHA-256 e2a55736…f8ab）。安装：设置→插件→从文件安装，保留“后台运行”。
+     插件与 PowerShell 脚本幂等共存；应用长期关闭时不再同步（先登录/开应用）。
