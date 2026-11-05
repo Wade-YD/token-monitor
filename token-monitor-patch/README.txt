@@ -724,3 +724,13 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
        P2 顺手修：seen 改到处理后并计 duplicates、删死条件 row.id、UI 按 visible
        起停轮询、CSS 改用 --plugin-* 变量、README 三处措辞与实测对齐。
        Mimosa normal 深度静态扫描 0 发现（seal 073ebb90…）。
+    6) 安装实测（2026-11-06）：应用没有插件安装 CLI，采用 storage 级安装（停应用后
+       改 settings 与 registry）：parsePackage/unpackPackage 解包到 plugins/pi-bridge
+       （.tmplugin 是 JSON format 2 容器，不是 zip）→ plugin-manager/installed.json
+       写 sha256=包文件哈希、contentSha256=contentDigest(pkg) → settings.pluginStates
+       置 {enabled:true, background:true, trustedRevision}（trustedRevision 必须等于
+       contentSha256，否则宿主视为不可信不加载）→ initialSetupPlan 生成首用 patch
+       （page 放置 + background）合并进 settings。
+       验证：启动后 plugin-data/pi-bridge/status.json trigger=activate，
+       5 分钟后 trigger=interval（后台执行在真实 Electron 里生效）；23 个链接全部
+       existing、conflicts 0；应用 9 进程正常运行，设置未被启动流程改写。
