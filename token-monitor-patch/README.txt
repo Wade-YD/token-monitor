@@ -712,3 +712,15 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
      （插件 id pi-bridge，v1.0.0，Release 附 pi-bridge-1.0.0.tmplugin，
      SHA-256 e2a55736…f8ab）。安装：设置→插件→从文件安装，保留“后台运行”。
      插件与 PowerShell 脚本幂等共存；应用长期关闭时不再同步（先登录/开应用）。
+    5) Oracle 验收（2026-11-05）：结论"可交付，无 P0"，3 个 P1 当轮全修 → v1.0.1
+       （pi-bridge-1.0.1.tmplugin，34,242 B，SHA-256 14e01ea3…41dd）：
+       P1-1 只覆盖自己创建的文件（owned.json 台账 + conflicts 计数，宿主/真 Pi
+            同名文件绝不覆写——沙箱实测内容保持不变）；
+       P1-2 首轮同步改 setImmediate，activate 立即返回，不吃宿主 15s 激活超时；
+            去掉 timer.unref()，非 Windows 不再排定时器；
+       P1-3 硬链接改落 ~/.pi/agent/sessions/pi-bridge/ 子目录（扫描器递归），
+            真 Pi 不再枚举到共享 inode；1.0.0 的平铺旧链自动识别并跳过
+            （legacy 计数），迁移后 tokscale today 仍 4 行 / 160,077,547 token。
+       P2 顺手修：seen 改到处理后并计 duplicates、删死条件 row.id、UI 按 visible
+       起停轮询、CSS 改用 --plugin-* 变量、README 三处措辞与实测对齐。
+       Mimosa normal 深度静态扫描 0 发现（seal 073ebb90…）。
