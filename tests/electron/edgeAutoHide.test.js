@@ -293,38 +293,38 @@ test('reduceMotion routes edge animation through the shared motion gate', () => 
   assert.equal(motionPreference.shouldReduceMotion('system', true), true);
   assert.equal(motionPreference.shouldReduceMotion('system', false), false);
 
-  // main.js wiring (source contract, same style as windowBehavior.test.js):
+  // Controller wiring (source contract, same style as windowBehavior.test.js):
   // the tween must bail to an instant, guard-checked move when the gate fires.
-  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
+  const controllerSource = readControllerSource();
   assert.match(
-    mainSource,
+    controllerSource,
     /if \(!source \|\| edgeReducedMotion\(\) \|\| effective <= 0\) \{\s*\n\s*setEdgeWindowPosition\(target\.x, target\.y\);/,
     'animateWindowPosition must move instantly (no tween) when reduceMotion is on'
   );
   assert.match(
-    mainSource,
-    /function edgeReducedMotion\(\) \{\s*\n\s*return motionPreferenceApi\.shouldReduceMotion\(settings\?\.reduceMotion, nativeTheme\.shouldReduceMotion\);/,
+    controllerSource,
+    /function edgeReducedMotion\(\) \{\s*\n\s*return motionPreferenceApi\.shouldReduceMotion\(getSettings\(\)\?\.reduceMotion, nativeTheme\.shouldReduceMotion\);/,
     'edgeReducedMotion must reuse motionPreferenceApi.shouldReduceMotion'
   );
 });
 
-test('hidden state only repositions the window — main.js never resizes it', () => {
+test('hidden state only repositions the window — the controller never resizes it', () => {
   // The animation helper must move via the geometry guard; a setBounds call inside
   // it would resize against WINDOW_LIMITS minWidth=240.
-  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
-  const animateFn = mainSource.match(/function animateWindowPosition[\s\S]*?\n\}/);
-  assert.ok(animateFn, 'animateWindowPosition exists in main.js');
+  const controllerSource = readControllerSource();
+  const animateFn = controllerSource.match(/function animateWindowPosition[\s\S]*?\n  \}/);
+  assert.ok(animateFn, 'animateWindowPosition exists in the controller');
   assert.doesNotMatch(animateFn[0], /\.setBounds\(/, 'animation must not resize the window');
   assert.doesNotMatch(
     animateFn[0],
-    /mainWindow\.setPosition\(/,
+    /getWindow\(\)\.setPosition\(/,
     'the animation must move through the geometry guard, never setPosition directly'
   );
   assert.match(animateFn[0], /setEdgeWindowPosition\(/, 'the animation must move via setEdgeWindowPosition');
   // edgeHiddenBounds is the only geometry source for the hidden state, and the
   // pure tests above pin it to width/height-preserving output.
-  const collapseFn = mainSource.match(/function collapseEdge[\s\S]*?\n\}/);
-  assert.ok(collapseFn, 'collapseEdge exists in main.js');
+  const collapseFn = controllerSource.match(/function collapseEdge[\s\S]*?\n  \}/);
+  assert.ok(collapseFn, 'collapseEdge exists in the controller');
   assert.match(collapseFn[0], /edgeAutoHideApi\.edgeHiddenBounds\(/, 'hidden geometry must come from edgeHiddenBounds');
 });
 
@@ -337,20 +337,30 @@ function stripComments(source) {
   return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
 }
 
+// The edge state machine moved verbatim from main.js into the controller module;
+// contract tests below read whichever file owns the code under assertion.
+function readMainSource() {
+  return fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
+}
+
+function readControllerSource() {
+  return fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'edgeAutoHideController.js'), 'utf8');
+}
+
 
 test('the geometry guard is the only writer and rejects non-finite coordinates', () => {
-  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
-  const guardFn = mainSource.match(/function setEdgeWindowPosition\(x, y\)[\s\S]*?\n\}/);
-  assert.ok(guardFn, 'setEdgeWindowPosition exists in main.js');
+  const controllerSource = readControllerSource();
+  const guardFn = controllerSource.match(/function setEdgeWindowPosition\(x, y\)[\s\S]*?\n  \}/);
+  assert.ok(guardFn, 'setEdgeWindowPosition exists in the controller');
   assert.match(
     guardFn[0],
     /if \(!Number\.isFinite\(x\) \|\| !Number\.isFinite\(y\)\) \{/,
     'the guard must test both coordinates with Number.isFinite'
   );
-  assert.match(guardFn[0], /mainWindow\.setPosition\(x, y, false\);/, 'the guard is the single native writer');
+  assert.match(guardFn[0], /getWindow\(\)\.setPosition\(x, y, false\);/, 'the guard is the single native writer');
 
   // A rejected frame must return without touching native geometry at all.
-  const rejectBranch = guardFn[0].match(/if \(!Number\.isFinite\(x\)[\s\S]*?\n  \}/);
+  const rejectBranch = guardFn[0].match(/if \(!Number\.isFinite\(x\)[\s\S]*?\n    \}/);
   assert.ok(rejectBranch, 'guard has a rejection branch');
   assert.doesNotMatch(rejectBranch[0], /setPosition\(/, 'a rejected frame must not reach setPosition');
 
@@ -363,18 +373,18 @@ test('the geometry guard is the only writer and rejects non-finite coordinates',
 });
 
 test('the in-flight marker expires on its own instead of wedging auto-hide', () => {
-  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
+  const controllerSource = readControllerSource();
   assert.match(
-    mainSource,
+    controllerSource,
     /function edgeIsAnimating\(\) \{\s*\n\s*return Date\.now\(\) < edgeAutoHideState\.animatingUntil;/,
     'in-flight state must be a deadline, not a boolean cleared only on success'
   );
   assert.doesNotMatch(
-    mainSource,
+    controllerSource,
     /edgeAutoHideState\.animating\s*=/,
     'the boolean in-flight flag must not come back: one thrown frame wedged auto-hide permanently'
   );
-  assert.match(mainSource, /edgeAutoHideState\.animatingUntil = 0;/, 'the deadline must be cleared after the last frame');
+  assert.match(controllerSource, /edgeAutoHideState\.animatingUntil = 0;/, 'the deadline must be cleared after the last frame');
   // The deadline must be strictly in the future while animating, so a leaked
   // value can never be "still animating" forever.
   const deadline = Date.now() + 280;
@@ -383,30 +393,32 @@ test('the in-flight marker expires on its own instead of wedging auto-hide', () 
 });
 
 test('a single idempotent reconciler is the only hide/show executor', () => {
-  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
-  assert.match(mainSource, /function reconcileEdgeAutoHide\(\)/, 'the reconciler must exist');
-  assert.match(mainSource, /const desired = edgeAutoHideState\.desired;/, 'the reconciler must be driven by the desired state');
+  const controllerSource = readControllerSource();
+  const mainSource = readMainSource();
+  assert.match(controllerSource, /function reconcileEdgeAutoHide\(\)/, 'the reconciler must exist');
+  assert.match(controllerSource, /const desired = edgeAutoHideState\.desired;/, 'the reconciler must be driven by the desired state');
 
   // The cursor poll decides; it must never move the window itself, or a stray
   // stopTimer() would again leave nothing responsible for hiding the window.
-  const pollFn = mainSource.match(/function startEdgeCursorPolling\(\)[\s\S]*?\n\}/);
-  assert.ok(pollFn, 'startEdgeCursorPolling exists in main.js');
-  assert.doesNotMatch(pollFn[0], /mainWindow\.setPosition\(/, 'the poll must not write geometry');
+  const pollFn = controllerSource.match(/function startEdgeCursorPolling\(\)[\s\S]*?\n  \}/);
+  assert.ok(pollFn, 'startEdgeCursorPolling exists in the controller');
+  assert.doesNotMatch(pollFn[0], /getWindow\(\)\.setPosition\(/, 'the poll must not write geometry');
   assert.doesNotMatch(pollFn[0], /collapseEdge\(/, 'the poll must not collapse directly');
   assert.doesNotMatch(pollFn[0], /expandEdge\(\)/, 'the poll must not expand directly');
   assert.match(pollFn[0], /reconcileEdgeAutoHide\(\)/, 'the poll must delegate movement to the reconciler');
 
   // The slow keeper must re-arm the poll and reconcile, so a killed fast path
-  // self-heals instead of stranding the window.
+  // self-heals instead of stranding the window. The interval itself is wired in
+  // main.js and forwards to the controller's tick body.
   assert.match(
     mainSource,
-    /if \(!edgeAutoHideState\.pollTimer\) startEdgeCursorPolling\(\);\s*\n\s*reconcileEdgeAutoHide\(\);/,
-    'the keeper must re-arm the poll and then reconcile'
+    /setInterval\(\(\) => edgeAutoHide\.keeperTick\(\), 1000\);/,
+    'the keeper must run on a slow interval wired in main.js'
   );
   assert.match(
-    mainSource,
-    /if \(!edgeAutoHideState\.pollTimer\) startEdgeCursorPolling\(\);\s*\n\s*reconcileEdgeAutoHide\(\);\s*\n\s*\}, 1000\);/,
-    'the keeper must run on a slow interval'
+    controllerSource,
+    /function keeperTick\(\) \{\s*\n\s*if \(!canUseEdgeAutoHide\(getSettings\(\)\)\) return;\s*\n\s*if \(!getWindow\(\) \|\| getWindow\(\)\.isDestroyed\(\) \|\| !getWindow\(\)\.isVisible\(\)\) return;\s*\n\s*if \(!edgeAutoHideState\.pollTimer\) startEdgeCursorPolling\(\);\s*\n\s*reconcileEdgeAutoHide\(\);/,
+    'the keeper must re-arm the poll and then reconcile'
   );
 
   // No focus gate may reappear in the collapse decision path (check the code,
@@ -417,15 +429,23 @@ test('a single idempotent reconciler is the only hide/show executor', () => {
 });
 
 test('an uncaught main-process exception is logged instead of raising a modal dialog', () => {
-  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
+  const mainSource = readMainSource();
+  const controllerSource = readControllerSource();
   assert.match(mainSource, /process\.on\('uncaughtException'/, 'the main process must install an uncaught handler');
   const handler = mainSource.match(/process\.on\('uncaughtException',[\s\S]*?\n\}\);/);
   assert.ok(handler, 'the handler must be a single block');
-  assert.match(handler[0], /edgeLog\(/, 'the handler must persist the error');
+  assert.match(handler[0], /edgeAutoHide\.handleUncaught\(err\)/, 'the handler must forward to the controller');
   const handlerCode = stripComments(handler[0]);
   assert.doesNotMatch(handlerCode, /\bthrow\b/, 'the handler must not re-throw: Electron would still show the modal');
   assert.doesNotMatch(handlerCode, /dialog|showMessageBox/, 'the handler must not open a dialog');
-  assert.match(handlerCode, /animatingUntil = 0;/, 'the handler must clear the in-flight deadline so the reconciler can recover');
+  // The edge recovery body lives in the controller's handleUncaught.
+  const recovery = controllerSource.match(/function handleUncaught\(err\) \{[\s\S]*?\n  \}/);
+  assert.ok(recovery, 'the controller owns the uncaught recovery body');
+  const recoveryCode = stripComments(recovery[0]);
+  assert.match(recoveryCode, /edgeLog\(/, 'the recovery must persist the error');
+  assert.doesNotMatch(recoveryCode, /\bthrow\b/, 'the recovery must not re-throw: Electron would still show the modal');
+  assert.doesNotMatch(recoveryCode, /dialog|showMessageBox/, 'the recovery must not open a dialog');
+  assert.match(recoveryCode, /animatingUntil = 0;/, 'the recovery must clear the in-flight deadline so the reconciler can recover');
 });
 
 // --- contracts added by the finalize-edge-auto-hide change ------------------
@@ -437,8 +457,8 @@ test('the dead edgeExpandedBoundsForSide helper is gone', () => {
 });
 
 test('focus alone must not reveal a hidden docked window', () => {
-  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
-  const focusHandler = mainSource.match(/win\.on\('focus', \(\) => \{[\s\S]*?\n  \}\);/);
+  const controllerSource = readControllerSource();
+  const focusHandler = controllerSource.match(/win\.on\('focus', \(\) => \{[\s\S]*?\n    \}\);/);
   assert.ok(focusHandler, 'the focus handler exists');
   const focusCode = stripComments(focusHandler[0]);
   assert.doesNotMatch(focusCode, /expandEdge\(\)/, 'focus must not expand: at startup it popped the restored window out');
@@ -446,8 +466,9 @@ test('focus alone must not reveal a hidden docked window', () => {
 });
 
 test('guarded geometry writes are gated until the window is first shown', () => {
-  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
-  const guardFn = mainSource.match(/function setEdgeWindowPosition\(x, y\)[\s\S]*?\n\}/);
+  const controllerSource = readControllerSource();
+  const mainSource = readMainSource();
+  const guardFn = controllerSource.match(/function setEdgeWindowPosition\(x, y\)[\s\S]*?\n  \}/);
   assert.ok(guardFn, 'setEdgeWindowPosition exists');
   assert.match(
     guardFn[0],
@@ -459,46 +480,50 @@ test('guarded geometry writes are gated until the window is first shown', () => 
   const gateIndex = guardFn[0].indexOf('if (!edgeAutoHideState.geometryReady) return false;');
   const finiteIndex = guardFn[0].indexOf('if (!Number.isFinite(x)');
   assert.ok(gateIndex !== -1 && finiteIndex !== -1 && gateIndex < finiteIndex, 'the gate precedes validation');
-  assert.match(mainSource, /edgeAutoHideState\.geometryReady = true;/, 'something must open the gate');
-  const showHandler = mainSource.match(/win\.on\('show'[\s\S]*?\n  \}\);/);
+  assert.match(controllerSource, /edgeAutoHideState\.geometryReady = true;/, 'something must open the gate');
+  const showHandler = controllerSource.match(/win\.on\('show'[\s\S]*?\n    \}\);/);
   assert.ok(showHandler, 'the show handler exists');
   assert.match(stripComments(showHandler[0]), /geometryReady = true;/, 'first show opens the gate');
   // The reset must sit in the window-creation path, right after the assignment;
   // upstream's material-lifecycle test owns the line right after `mainWindow = win;`,
   // so only insist the gate reset stays within the same creation neighborhood.
-  assert.match(mainSource, /mainWindow = win;[\s\S]{0,200}?edgeAutoHideState\.geometryReady = false;/, 'a recreated window must re-earn readiness');
+  // (attachWindow carries the reset now that the wiring lives in the controller.)
+  assert.match(mainSource, /mainWindow = win;[\s\S]{0,200}?edgeAutoHide\.attachWindow\(win\);/, 'a recreated window must re-earn readiness');
+  const attachFn = controllerSource.match(/function attachWindow\(win\) \{[\s\S]*?\n  \}/);
+  assert.ok(attachFn, 'attachWindow exists');
+  assert.match(attachFn[0], /edgeAutoHideState\.geometryReady = false;/, 'attaching resets readiness');
 });
 
 test('startup restore moves the window without imposing the saved size', () => {
-  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
+  const controllerSource = readControllerSource();
   assert.doesNotMatch(
-    mainSource,
+    controllerSource,
     /setBounds\(saved\.hiddenBounds\)/,
     'the restore must not resurrect the saved width/height over the created size'
   );
-  const restoreFn = mainSource.match(/const created = mainWindow\.getBounds\(\);[\s\S]*?\n      \}\);/);
+  const restoreFn = controllerSource.match(/const created = getWindow\(\)\.getBounds\(\);[\s\S]*?\n        \}\);/);
   assert.ok(restoreFn, 'the restore merges saved position with created size');
   assert.match(restoreFn[0], /width: created\.width/, 'width comes from the created bounds');
   assert.match(restoreFn[0], /height: created\.height/, 'height comes from the created bounds');
 });
 
 test('a hidden dock follows resizes via syncEdgeDockGeometry', () => {
-  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
-  const syncFn = mainSource.match(/function syncEdgeDockGeometry\(\)[\s\S]*?\n\}/);
+  const controllerSource = readControllerSource();
+  const syncFn = controllerSource.match(/function syncEdgeDockGeometry\(\)[\s\S]*?\n  \}/);
   assert.ok(syncFn, 'syncEdgeDockGeometry exists');
   const syncCode = stripComments(syncFn[0]);
   assert.match(syncCode, /!edgeAutoHideState\.hidden/, 'it must only reconcile the hidden state');
   assert.match(syncCode, /edgeAutoHideApi\.edgeSnapToBounds\(/, 'expanded geometry is recomputed from the real bounds');
   assert.match(syncCode, /edgeAutoHideApi\.edgeHiddenBounds\(/, 'hidden geometry is recomputed from the new size');
-  assert.match(syncCode, /settings\.edgeAutoHideBounds = \{ side/, 'the persisted dock geometry must be refreshed');
+  assert.match(syncCode, /getSettings\(\)\.edgeAutoHideBounds = \{ side/, 'the persisted dock geometry must be refreshed');
   assert.match(syncCode, /setEdgeWindowPosition\(hidden\.x, hidden\.y\)/, 'it moves via the guarded writer, position-only');
   assert.doesNotMatch(syncCode, /\.setBounds\(/, 'it must not resize the window');
-  const resizedHandler = mainSource.match(/win\.on\('resized'[\s\S]*?\n  \}\);/);
+  const resizedHandler = controllerSource.match(/win\.on\('resized'[\s\S]*?\n    \}\);/);
   assert.ok(resizedHandler, 'the resized handler exists');
   assert.match(resizedHandler[0], /syncEdgeDockGeometry\(\)/, 'resized events feed the dock sync');
   // 'resized' is silent for programmatic/external resizes on Windows, so the
   // continuous 'resize' event must feed the sync too, debounced.
-  const resizeHandler = mainSource.match(/win\.on\('resize', \(\) => \{[\s\S]*?\n  \}\);/);
+  const resizeHandler = controllerSource.match(/win\.on\('resize', \(\) => \{[\s\S]*?\n    \}\);/);
   assert.ok(resizeHandler, 'the continuous resize handler exists');
   const resizeCode = stripComments(resizeHandler[0]);
   assert.match(resizeCode, /edgeResizeSyncTimer = setTimeout\(/, 'the resize sync must be debounced');
@@ -506,34 +531,34 @@ test('a hidden dock follows resizes via syncEdgeDockGeometry', () => {
 });
 
 test('startup restore recomputes the hidden geometry with the current formula', () => {
-  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
+  const controllerSource = readControllerSource();
   assert.doesNotMatch(
-    mainSource,
+    controllerSource,
     /edgeAutoHideState\.hiddenBounds = saved\.hiddenBounds;/,
     'saved hidden coordinates must not be trusted verbatim: a formula change leaves a stale strip'
   );
-  const restoreBlock = mainSource.match(/const recomputed = edgeAutoHideApi\.edgeHiddenBounds\(saved\.expandedBounds[\s\S]*?\n      \}/);
+  const restoreBlock = controllerSource.match(/const recomputed = edgeAutoHideApi\.edgeHiddenBounds\(saved\.expandedBounds[\s\S]*?\n        \}/);
   assert.ok(restoreBlock, 'the restore recomputes hidden bounds from the saved expanded bounds');
-  assert.match(restoreBlock[0], /settings\.edgeAutoHideBounds = /, 'the corrected geometry is persisted back');
+  assert.match(restoreBlock[0], /getSettings\(\)\.edgeAutoHideBounds = /, 'the corrected geometry is persisted back');
 });
 
 test('a transient native rejection degrades only after repeated consecutive failures', () => {
-  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
-  const guardFn = mainSource.match(/function setEdgeWindowPosition\(x, y\)[\s\S]*?\n\}/);
+  const controllerSource = readControllerSource();
+  const guardFn = controllerSource.match(/function setEdgeWindowPosition\(x, y\)[\s\S]*?\n  \}/);
   assert.ok(guardFn, 'setEdgeWindowPosition exists');
   const guardCode = stripComments(guardFn[0]);
   assert.match(guardCode, /nativeRejectStreak >= 3/, 'the session degrade needs repeated consecutive failures');
   assert.match(guardCode, /nativeRejectStreak = 0;/, 'a successful write must clear the streak');
   // Non-finite coordinates remain an immediate degrade: that is a logic bug,
   // and later frames from broken geometry cannot be trusted.
-  const finiteBranch = guardFn[0].match(/if \(!Number\.isFinite\(x\)[\s\S]*?\n  \}/);
+  const finiteBranch = guardFn[0].match(/if \(!Number\.isFinite\(x\)[\s\S]*?\n    \}/);
   assert.ok(finiteBranch, 'the non-finite branch exists');
   assert.match(finiteBranch[0], /guardTripped = true;/, 'non-finite coordinates degrade immediately');
 });
 
 test('the tween snaps onto its target instead of playing the asymptotic tail', () => {
-  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
-  const animateFn = mainSource.match(/function animateWindowPosition[\s\S]*?\n\}/);
+  const controllerSource = readControllerSource();
+  const animateFn = controllerSource.match(/function animateWindowPosition[\s\S]*?\n  \}/);
   assert.ok(animateFn, 'animateWindowPosition exists');
   assert.match(
     animateFn[0],
@@ -544,10 +569,10 @@ test('the tween snaps onto its target instead of playing the asymptotic tail', (
 });
 
 test('resizing a docked expanded window must never fold it back up', () => {
-  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
+  const controllerSource = readControllerSource();
   // The hold test carries the interaction margin (the resize border lives
   // outside the Electron rect).
-  const pollFn = mainSource.match(/function startEdgeCursorPolling\(\)[\s\S]*?\n\}/);
+  const pollFn = controllerSource.match(/function startEdgeCursorPolling\(\)[\s\S]*?\n  \}/);
   assert.ok(pollFn, 'startEdgeCursorPolling exists');
   assert.match(
     pollFn[0],
@@ -561,14 +586,14 @@ test('resizing a docked expanded window must never fold it back up', () => {
     'the trigger hit test must stay margin-free'
   );
   // Resize activity refreshes the grace timestamp in BOTH resize events.
-  const resizeHandler = mainSource.match(/win\.on\('resize', \(\) => \{[\s\S]*?\n  \}\);/);
+  const resizeHandler = controllerSource.match(/win\.on\('resize', \(\) => \{[\s\S]*?\n    \}\);/);
   assert.ok(resizeHandler, 'the resize handler exists');
   assert.match(resizeHandler[0], /lastResizeAt = Date\.now\(\);/, 'continuous resize feeds the grace');
-  const resizedHandler = mainSource.match(/win\.on\('resized'[\s\S]*?\n  \}\);/);
+  const resizedHandler = controllerSource.match(/win\.on\('resized'[\s\S]*?\n    \}\);/);
   assert.ok(resizedHandler, 'the resized handler exists');
   assert.match(resizedHandler[0], /lastResizeAt = Date\.now\(\);/, 'resize end feeds the grace too');
   // Grace vetoes both the arming and the firing of a collapse.
-  assert.match(mainSource, /function edgeResizeGraceActive\(\)/, 'the grace predicate exists');
+  assert.match(controllerSource, /function edgeResizeGraceActive\(\)/, 'the grace predicate exists');
   const pollCode = stripComments(pollFn[0]);
   assert.match(pollCode, /if \(edgeResizeGraceActive\(\)\) \{\s*\n\s*clearEdgeCollapseTimer\(\);/, 'grace must not arm a collapse');
   const timerBody = pollCode.match(/collapseTimer = setTimeout\(\(\) => \{[\s\S]*?\}, edgeAutoHideApi\.EDGE_COLLAPSE_DELAY_MS\);/);
@@ -581,13 +606,42 @@ test('resizing a docked expanded window must never fold it back up', () => {
 });
 
 test('decision logging is opt-in and never on by default', () => {
-  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
+  const controllerSource = readControllerSource();
   assert.match(
-    mainSource,
-    /return settings\?\.edgeAutoHideDebug === true \|\| process\.env\.TOKEN_MONITOR_EDGE_DEBUG === '1';/,
+    controllerSource,
+    /return getSettings\(\)\?\.edgeAutoHideDebug === true \|\| process\.env\.TOKEN_MONITOR_EDGE_DEBUG === '1';/,
     'the switch is the settings key OR the env var'
   );
-  assert.match(mainSource, /function edgeDebug\(scope, message\)/, 'the debug writer exists');
-  assert.match(mainSource, /'token-monitor-edge-debug\.log'/, 'debug output goes to its own file');
+  assert.match(controllerSource, /function edgeDebug\(scope, message\)/, 'the debug writer exists');
+  assert.match(controllerSource, /'token-monitor-edge-debug\.log'/, 'debug output goes to its own file');
+});
+
+test('main.js wires the controller once and no longer owns the state machine', () => {
+  const mainSource = readMainSource();
+  const controllerSource = readControllerSource();
+  assert.match(mainSource, /const \{ createEdgeAutoHideController \} = require\('\.\/edgeAutoHideController'\);/, 'the controller module is required');
+  assert.match(mainSource, /const edgeAutoHide = createEdgeAutoHideController\(\{/, 'the controller is constructed once in main.js');
+  assert.match(
+    mainSource,
+    /const \{ scheduleEdgeAutoHide, syncEdgeAutoHideAvailability, syncEdgeDockGeometry, stopEdgeAutoHideTimers, edgeLog, edgeDebug \} = edgeAutoHide;/,
+    'existing call sites keep working through the destructured forward'
+  );
+  for (const gone of [
+    /const edgeAutoHideState = /,
+    /function startEdgeCursorPolling\(/,
+    /function stopEdgeAutoHideTimers\(/,
+    /function syncEdgeDockGeometry\(/,
+    /function reconcileEdgeAutoHide\(/,
+    /function setEdgeWindowPosition\(x, y\)/,
+    /function animateWindowPosition\(/,
+    /function collapseEdge\(/,
+    /function expandEdge\(/,
+    /function edgeLog\(/,
+    /function edgeDebug\(/
+  ]) {
+    assert.doesNotMatch(mainSource, gone, 'the state machine must live only in the controller module');
+  }
+  assert.match(controllerSource, /const edgeAutoHideState = \{ hidden: false, side: null,/, 'the controller owns the state object');
+  assert.match(controllerSource, /module\.exports = \{ createEdgeAutoHideController \};/, 'the factory is the module contract');
 });
 

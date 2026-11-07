@@ -126,10 +126,12 @@ test('the packaged entry degrades gracefully when koffi is unavailable', () => {
   assert.ok(api === null || typeof api === 'object', 'loadApi returns bindings or null');
 });
 
-test('main.js consults the popup guard before arming and before firing a collapse', () => {
-  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
-  assert.match(mainSource, /const edgePopupGuardApi = require\('\.\/edgePopupGuard'\);/, 'the guard module is wired in');
-  const pollFn = mainSource.match(/function startEdgeCursorPolling\(\)[\s\S]*?\n\}/);
+test('the edge controller consults the popup guard before arming and before firing a collapse', () => {
+  // The edge wiring moved verbatim from main.js into edgeAutoHideController.js;
+  // the guard requirement moved with it.
+  const controllerSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'edgeAutoHideController.js'), 'utf8');
+  assert.match(controllerSource, /const edgePopupGuardApi = require\('\.\/edgePopupGuard'\);/, 'the guard module is wired in');
+  const pollFn = controllerSource.match(/function startEdgeCursorPolling\(\)[\s\S]*?\n  \}/);
   assert.ok(pollFn, 'startEdgeCursorPolling exists');
   const pollCode = stripComments(pollFn[0]);
   assert.match(

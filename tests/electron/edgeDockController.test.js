@@ -201,7 +201,6 @@ function createFixture(options = {}) {
     // zOrder assertions below only count the controller's own raise paths.
     // Tests that exercise that fallback pass forceTopmostDockWindows: () => 0.
     forceTopmostDockWindows: options.forceTopmostDockWindows || (() => 1),
-    probeDockInput: options.probeDockInput,
     applyShapeMask: (win) => {
       maskWindows.push(win);
       return options.maskAvailable !== false;

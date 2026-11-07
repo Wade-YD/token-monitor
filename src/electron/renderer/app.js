@@ -6348,7 +6348,7 @@ function renderTrends() {
   const model = charts.sparklinePreview(finalPoints, { width: 300, height: 120, gap: 0.3, metric, padLeft: 30 });
   const titles = finalPoints.map((p) => `${trendShortLabel(p[labelKey], labelKey)} · ${formatCompact(p[metric])}`);
   const yTicks = 4;
-  const svg = charts.sparklineSvg(model, { titles, showZeroMarkers: state.period === 'today', yTicks, formatTick: (v) => formatCompact(v) });
+  const svg = charts.sparklineSvg(model, { titles, showZeroMarkers: state.period === 'today', yTicks });
   // Tick values render as HTML (not SVG text): the sparkline stretches
   // non-uniformly, which would distort glyphs. Positions are set via CSSOM
   // below — the app CSP (style-src 'self') drops inline style attributes.
