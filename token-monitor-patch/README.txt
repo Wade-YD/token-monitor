@@ -749,3 +749,21 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
      388b1836…8a20），已热装并真机验证（同步正常/监听 2 目录/相对时间）。
      ⚠️ 插件装在 userData（plugins/ + plugin-data/），不随 app.asar 更新丢失；
      但 Token Monitor 升级后注意插件 API（tmApi）契约兼容性。
+
+【升级记录（2026-11-07，v0.86.0 → v0.87.0）】
+  1) 单版本跨度：9 上游提交、80 文件（+3614/−354）。服务状态页扩展、opendesign
+     工作区订阅额度、codex idle Dots 回避、同步去重传（uploadDelta）、cards
+     时钟共享重构。**无新 npm 依赖、Electron 45.2.1 不变**。
+  2) 安装包 134,961,856 B，API digest sha256 9fe3e87b…466c 实测 MATCH（一次
+     成功）。v0860 锚点移存 opencode\v0860-anchors\ → /S 静默安装（Start-Process）
+     → 重建 app.asar.v0870-official.bak + .unpacked（22,639,575 B）。
+  3) rebase 34 提交 **零冲突**（13 轮首次）；dead syncEdgeDock 清理保持。
+  4) 测试 9637 用例 9585 过，7 红与前三轮同家族同数（symlink EPERM ×3、
+     %APPDATA% 缓存泄漏 ×3、Node libuv titleSync ×1），零回归。
+  5) 交付：asar-extracted-v0870（workspace 根，551 文件）→ git archive HEAD src
+     整树灌入（diff -r 与工作树逐字节一致）→ pack 54,296,254 B → 换装 → 双向
+     断言 24/24（我方 14 + 上游 10，新增 v087 标记 uploadDelta/opendesign）→
+     probeDockInput codes=[3,3,3] raised=3 → error log 本轮零异常。
+  6) **pi-bridge 插件跨升级存活**：插件装在 userData 不受 NSIS 影响，
+     status.json state=ok / 24 链接 / 2 watchers 连续运行——验证了"官方覆盖
+     app.asar 不动插件"的设计。

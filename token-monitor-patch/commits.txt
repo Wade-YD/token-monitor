@@ -1,34 +1,34 @@
-1a02b296 feat(edge): add edge auto-hide window mode (rebased onto v0.57.0)
-cd950766 fix(edge): keep the cursor poll alive so the window can re-hide
-18bf49fc fix(edge): add a slow watchdog so the window can always re-hide
-34686e5e fix(edge): guard geometry, expire the in-flight marker, single reconciler
-89286cc2 fix(edge): contain a native setPosition rejection instead of crashing
-c3eae736 fix(edge): finalize edge auto-hide (startup, strip width, resize sync, opt-in debug)
-27630b66 fix(edge): keep a docked window revealed while the user resizes it
-494c18ad fix(zai): hide the idle cash row behind an active coding plan
-3a8f60e0 fix(edge): keep the dock open while the user interacts with our native popups
-c6e1e4b5 fix(edge): pass currentPid into the popup guard (probe caught it undefined)
-a91458d7 fix(edge): convert cursor to physical pixels before the popup guard (completes 2f8f634)
-0641d57a fix(edge): exempt persistent app windows (dashboard) from the popup guard
-fecf65d9 feat(sessions): zcode session detail drill-down
-7bdc03fd fix(sessions): zcode session rows get the pointer cursor and drill-in chevron
-26e3ecff feat(sessions): sort-mode toggle for the home session list
-a3b3efda feat(dashboard): put the by-tool column before by-model in the overview
-01d97f50 feat(dashboard): refresh button forces a fresh collection with busy feedback
-884c8312 feat(trends): y-axis ticks for the main-window trends chart
-a7b397f9 fix(trends): set tick label positions via CSSOM - CSP drops inline styles
-74b402c6 fix(limits): dedupe zai windows merged from the console-key and ZCode mirror lanes
-74c4d6a0 fix(edge-dock): re-assert topmost in the poll when Windows strips the flag
-f03b69a9 fix(edge-dock): enforce the topmost band natively - Electron 43 stops landing it
-da8e98a7 fix(edge-dock): enforce TOPMOST via FindWindowExW on the live native windows
-b7d3fe3e fix(edge-dock): drop the pid filter - the koffi _Out_ fill silently filtered every match
-f6599915 fix(edge-dock): restore input on shown surfaces - WS_EX_TRANSPARENT was stuck
-f48980ca Fix dock input death: probe WM_MOUSEACTIVATE, self-heal, replay fallback
-f31d405c Arm ack-gated press replay unconditionally; MA probe is logging only
-dca479f5 fix(sessions): restore the sort toggle wiring lost in the v0.64.0 rebase
-25b902d4 fix: settle v0.67.0 rebase fallout
-2a77fcf5 test: expect six locales for the session sort keys (pt-BR added)
-d9bc7f4e fix(edge): stop Windows 11 from winning a top-edge drag with its own maximize
-a331b577 fix: settle v0.69.0 rebase fallout
-49956daf fix(zcode): keep the session-detail event reader alongside upstream's resolver
-d82846b0 test: stub scheduleEdgeAutoHide in the popover blur vm context
+0470d5e8 feat(edge): add edge auto-hide window mode (rebased onto v0.57.0)
+06015505 fix(edge): keep the cursor poll alive so the window can re-hide
+352fe992 fix(edge): add a slow watchdog so the window can always re-hide
+6f7f1ec4 fix(edge): guard geometry, expire the in-flight marker, single reconciler
+4238199a fix(edge): contain a native setPosition rejection instead of crashing
+1094db51 fix(edge): finalize edge auto-hide (startup, strip width, resize sync, opt-in debug)
+1521b81c fix(edge): keep a docked window revealed while the user resizes it
+4d7248c9 fix(zai): hide the idle cash row behind an active coding plan
+8d82d799 fix(edge): keep the dock open while the user interacts with our native popups
+26492b88 fix(edge): pass currentPid into the popup guard (probe caught it undefined)
+611e5a6b fix(edge): convert cursor to physical pixels before the popup guard (completes 2f8f634)
+f4632145 fix(edge): exempt persistent app windows (dashboard) from the popup guard
+a57d1070 feat(sessions): zcode session detail drill-down
+9334f697 fix(sessions): zcode session rows get the pointer cursor and drill-in chevron
+7a7b9107 feat(sessions): sort-mode toggle for the home session list
+05830100 feat(dashboard): put the by-tool column before by-model in the overview
+120ffde1 feat(dashboard): refresh button forces a fresh collection with busy feedback
+c1c21ff5 feat(trends): y-axis ticks for the main-window trends chart
+cd9506ba fix(trends): set tick label positions via CSSOM - CSP drops inline styles
+85359fac fix(limits): dedupe zai windows merged from the console-key and ZCode mirror lanes
+550c61b3 fix(edge-dock): re-assert topmost in the poll when Windows strips the flag
+b056b0c5 fix(edge-dock): enforce the topmost band natively - Electron 43 stops landing it
+f2fafe4d fix(edge-dock): enforce TOPMOST via FindWindowExW on the live native windows
+ae45f9fa fix(edge-dock): drop the pid filter - the koffi _Out_ fill silently filtered every match
+c329efa4 fix(edge-dock): restore input on shown surfaces - WS_EX_TRANSPARENT was stuck
+dc830cc2 Fix dock input death: probe WM_MOUSEACTIVATE, self-heal, replay fallback
+dd10fe29 Arm ack-gated press replay unconditionally; MA probe is logging only
+a4a6defb fix(sessions): restore the sort toggle wiring lost in the v0.64.0 rebase
+dedb30a3 fix: settle v0.67.0 rebase fallout
+65bcb2a3 test: expect six locales for the session sort keys (pt-BR added)
+06fc0a40 fix(edge): stop Windows 11 from winning a top-edge drag with its own maximize
+bff42783 fix: settle v0.69.0 rebase fallout
+a9520ba9 fix(zcode): keep the session-detail event reader alongside upstream's resolver
+52b4a03f test: stub scheduleEdgeAutoHide in the popover blur vm context
