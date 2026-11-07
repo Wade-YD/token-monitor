@@ -791,3 +791,42 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
      编辑的代码此后 rebase 零冲突。
 
   5) 验收：2026-11-07 用户手测通过（edge 冒烟清单全过），重构正式闭合。
+
+【插件记录（2026-11-07，pi-bridge v1.2.0 面板原生风格重设计）】
+  1) 背景：v1.0.2 面板是"边框卡片堆叠"，与应用原生语言不符；用户拍板按宿主
+     设计系统重做。Explore 提取宿主设计系统（styles.css 9040 行 + dashboard.css
+     + pluginViews.css + magpie-routes 参照）→ designer 重写 panel.css 79→133
+     行 + ui.mjs 430→549 行 → Oracle 审查 P0=0（P1×2+P2×5 全修）→ npm test 9/9。
+  2) 设计要点（全部抄宿主配方）：删自带 h3（宿主页头已有标题）；Hero=本月
+     token 大精确数字（display-font+tabular-nums+clamp(24px,8cqw,40px)）+
+     compact 提示+花费行（用户拍板口径=本月）；KPI 4 块 trends-stat 软瓦片
+     （今日/今日花费/全量/全量花费）；近 14 天 div 柱→SVG sparkline（viewBox
+     280x64、rect rx=1、末柱高亮、grid-line×3、首尾轴标、柱顶与最上网格线
+     对齐）；模型/会话改宿主 .row 行模式（名称+右对齐值+全宽 6px bar，scaleX
+     420ms cubic-bezier(0.22,1,0.36,1)）；状态改 uppercase 徽章 pill 三色 tint；
+     「立即同步」挂 ctx.headerActions（宿主页头操作区，无则落 footer）；主题
+     --pb-* 兜底链（--plugin-*→宿主变量→字面量）+ container query 480px +
+     reduced-motion 双通道。
+  3) 实证新知（本轮新增）：
+     - manifest surfaces:["home","page"] 会在主窗同时挂两份 .pb-panel
+       （home-module 卡片 + plugin-main-page 全页），document 级计数翻倍——
+       不是 bug，探针要按父容器区分（本轮误判过一次，静置探针+父链澄清）。
+     - ui.mjs mount 必须 container.replaceChildren(root) 幂等；append 在重开
+       视图时叠实例（v1.0 起的隐患，本轮修掉+测试锁定；测试里二次 mount 必须
+       dispose，否则 interval 挂住 node --test 不退出）。
+     - CDP 验证三坑：主窗 target 要按 title==='Token Monitor' 精确匹配（Dock
+       窗口同名前缀会误命中）；贴边隐藏态 Page.captureScreenshot 回放旧帧
+       （结构探针照跑不误，别信截图）；光标触发显形必须落在
+       edgeAutoHideBounds.expandedBounds 的 x 区间内（本轮 x∈[117,548]，
+       放屏幕中心无效）。
+  4) Oracle P2 全落地：柱高 48 对齐网格线、rx=1、reduced-motion 根守卫
+     (:not([data-reduce-motion="off"])+JS dataset 优先)、.pb-axis[hidden]、
+     测试加硬（provider 前缀/svg namespaceURI）+ headerActions 协议测试
+     （shim remove() 真摘除）。engines 随新 CSS（container query/color-mix）
+     提到 >=0.85.0。
+  5) 交付：pi-bridge-1.2.0.tmplugin（75,565 B，SHA-256 059e36b2…bfb6c，
+     contentDigest 5df5427e…069b）。同版本重装两次（第一包 f3a8abeb… 因加
+     幂等修复作废重打）；installed.json/trustedRevision 同步更新。真机验证：
+     hero 278,653,782/2.8亿/$5.73、4 瓦片、14 柱、4 模型行（provider 前缀
+     完整）、5 会话行、同步正常徽章、「立即同步」在宿主页头；后端 state=ok/
+     2 watchers/24 链接/零冲突。验证后应用已恢复无调试口正常启动。
