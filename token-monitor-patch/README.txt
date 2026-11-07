@@ -767,3 +767,25 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
   6) **pi-bridge 插件跨升级存活**：插件装在 userData 不受 NSIS 影响，
      status.json state=ok / 24 链接 / 2 watchers 连续运行——验证了"官方覆盖
      app.asar 不动插件"的设计。
+
+【重构记录（2026-11-07，防屎山清理 + main.js 状态机下沉，立案 refactor-plan-edge-mainjs.md）】
+  1) Oracle 一审：P0 死代码 3 项 + P1 探针链删除 + P1 main.js 443 行状态机下沉；
+     逐grep证伪"被上游吸收"嫌疑，zai/纵轴/列序/zcode 白名单/readSessionEvents/
+     edgeAutoHide 几何全部确认保留。
+  2) 实施（提交 6d88ad8e，14 文件 +906/−842）：
+     - P0：styles.css data-review-group 死规则、i18n home.sessionSort.title ×6、
+       app.js sparklineSvg formatTick 死参数。⚠️ reasonix cursor 规则经验收发现
+       是活的（app.js:2804 实时设置 dataset），已恢复——一审误判。
+     - P1-1：MA 探针链路全删（probeDockInput/ensureInputAlive/sendMessage 绑定/
+       常量块/测试 2 例）；ack 门控回放与 topmost sweep 完整保留。
+     - P1-2：main.js 2531-2974（443 行状态机 + 6 处接线：applyWindowSettings/
+       窗口事件/uncaught/keeper/IPC）→ 新模块 src/electron/edgeAutoHideController.js
+       （725 行，createEdgeAutoHideController(deps) 13 项依赖注入，模块内自
+       require edgeAutoHide/edgePopupGuard）；main.js 10709→10096 行，触碰面
+       +694/−5 → 解构 6 名 + 一行转发。
+  3) 验证：全量 9636/9584（7 环境红不变）；受影响 6 测试文件 218/218；换装后
+     双向断言 24/24 + 搬移断言 4/4；Oracle 验收"有条件通过"已闭合——归一化
+     diff 零差异证明语义等价，抓回一条被一审误判为死的活规则。
+  4) 遗留手测（用户）：贴边隐藏/悬停展开/隐藏态拖拽缩放/模式切走切回/启动
+     恢复/取色器弹窗不收起。主收益：main.js 触碰面 +699→约 +230，上游永不
+     编辑的代码此后 rebase 零冲突。
