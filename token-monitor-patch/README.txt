@@ -734,3 +734,18 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
        验证：启动后 plugin-data/pi-bridge/status.json trigger=activate，
        5 分钟后 trigger=interval（后台执行在真实 Electron 里生效）；23 个链接全部
        existing、conflicts 0；应用 9 进程正常运行，设置未被启动流程改写。
+
+【插件记录（2026-11-07，pi-bridge v1.1.0）】
+  1) 功能升级：fs.watch 目录监听（1.5s 去抖）→ 新 Pi 会话秒级硬链接，轮询降为
+     兜底（原生设置 syncInterval 1-60 分钟默认 5）；原生设置表单（manifest
+     settings 块，后端 host.call settings.get 读、update(context.settings.values)
+     热生效）；pruneOrphans（默认关）清理失效链接——两击确认（连续 2 pass 源
+     不可见才删）；watcher 必须 on('error')（未处理 error 事件会打死后端进程）。
+  2) 测试入库：npm test 8/8（DOM 桩 UI 3 + 后端集成 5：watch 即时性 1.6s 实测/
+     prune 两击/非 win32 零副作用/设置热更/manual 串行）。
+  3) Oracle 二审：无 P0，2 P1 当轮全修（见上）。Mimosa normal 0 发现
+     （seal 4e7d3bef…）。
+  4) 交付：v1.1.0 Release（pi-bridge-1.1.0.tmplugin，62,881 B，SHA-256
+     388b1836…8a20），已热装并真机验证（同步正常/监听 2 目录/相对时间）。
+     ⚠️ 插件装在 userData（plugins/ + plugin-data/），不随 app.asar 更新丢失；
+     但 Token Monitor 升级后注意插件 API（tmApi）契约兼容性。
