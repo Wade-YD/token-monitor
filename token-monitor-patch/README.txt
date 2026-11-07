@@ -830,3 +830,27 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
      hero 278,653,782/2.8亿/$5.73、4 瓦片、14 柱、4 模型行（provider 前缀
      完整）、5 会话行、同步正常徽章、「立即同步」在宿主页头；后端 state=ok/
      2 watchers/24 链接/零冲突。验证后应用已恢复无调试口正常启动。
+
+【插件记录（2026-11-07，pi-bridge v1.3.0 周期分段切换器）】
+  1) 需求：面板 Hero 区加宿主主窗口右上角 DAY/MONTH/TOTAL 同款分段切换器。
+     ⚠️ 宿主数据源只有 today/month/allTime 三个周期（sessionUsageArchive.js
+     periodWindows 仅 today.day/month.month，全源码无 week）——用户拍板采用
+     宿主原生三档 日/月/全量，不做周档（周需自行聚合且按模型无周数据）。
+  2) 实现：.pb-seg 宿主 .seg 配方（padding 2px/radius 7px/bg overlay 0.05；
+     btn 0.6875rem padding 5px 10px radius 5px；active bg overlay 0.12+accent）；
+     闭包 period 状态 + toolRows 缓存，切档只重渲染不发查询；hero label/精确
+     数字/compact/花费与按模型标题/空态全部随档双语联动；徽章移到标签旁。
+  3) Oracle 增量审查：可发版（P0=0）。P1=测试没锁「切档不发新查询」→ 加
+     query 计数断言（mount 恰 5 次、两次切档后仍 5）；P2=死 outline-offset
+     规则删除。P2-2 备忘：插件 uppercase/letter-spacing 是 .seg 几何+.tab
+     排版的混合，宿主 .seg 本身无大写——有意为之。
+  4) 真机验证（CDP 三档实测）：月 278,653,782/$5.73 → 日 6,211,494/$0.118
+     （按模型（今日）+1 行）→ 全量 308,638,790/$6.71/4 行，active 正确迁移；
+     **allTime 档偶发先显 0 数秒后自愈=宿主 allTime 投影懒加载瞬态，非插件
+     bug**（usageOf(null) 安全渲染按设计）。验证截图两坑复现：①切视图后必须
+     轮询确认 #pluginMainPanel 真激活（offsetParent）再截图，否则拍到的是当前
+     可见视图（本轮拍到同步页一次）；②Page.captureScreenshot 在窗口重现后
+     可能回放旧帧，bringToFront+延时后再拍。
+  5) 交付：pi-bridge-1.3.0.tmplugin（81,397 B，SHA-256 7fca8a61…7d2f，
+     contentDigest dcce67db…ab40）；installed.json previous=1.2.0/059e36b2；
+     npm test 10/10。应用已恢复无调试口正常启动。
