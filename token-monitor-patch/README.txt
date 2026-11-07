@@ -854,3 +854,45 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
   5) 交付：pi-bridge-1.3.0.tmplugin（81,397 B，SHA-256 7fca8a61…7d2f，
      contentDigest dcce67db…ab40）；installed.json previous=1.2.0/059e36b2；
      npm test 10/10。应用已恢复无调试口正常启动。
+
+【插件记录（2026-11-08，pi-bridge v1.4.0 会话标题）】
+  1) 需求：面板「最近会话」每行都显示模型名，用户无法对应真实会话。
+     根因（实证）：宿主插件投影 sessionFields（src/shared/plugins/
+     businessData.js:208-216）不投影 sessionId（只给 opaque id）且 pi 行
+     title 为空串——宿主自己的 breakdown 里 pi 行也是生成标签
+     "Pi · deepseek v4.1 flash"。ui.mjs 回退链 row.title||model 恒取模型名。
+  2) 方案：backend 新增 titles 扫描——读 jsonl 头（**1MB 窗口**，CPAHelper
+     会话首条用户消息可晚至 624KB 处），首行取 id/timestamp，正文取首条
+     role=user 的 text part，剥 <cpahelper_turn_context> 注入块取真实提问
+     （60 字符 code-point 截断）；缓存 plugin-data/pi-bridge/titles.json
+     （mtime+条目形状校验+**schema 版本 v2 整弃**，dirty 守卫只在变化时
+     重写；dev:ino 去重防源/目标双读）。call('titles') 返回 list。UI 按
+     **row.startedAt ↔ jsonl session.timestamp 就近 ±5s 对齐**（实测 5/5
+     偏移 +0.5~1.6s 同号稳定）；tooltip 带转录文件名、subtitle 带
+     #uuid前8——短 id 可直接在文件系统定位会话。
+  3) 本轮四坑（记入铁律）：
+     - 宿主插件投影无 sessionId → startedAt 是唯一可对齐键（opaque id
+       不可逆）；碰撞分析：<3.2s 间隔才可能错位，人工会话分钟级，安全。
+     - 256KB 头窗口不够（实测一条会话首条 user 在 624KB）→ 1MB。
+     - titles.json 缓存条目在行为参数变化时不失效（旧 title:null 形状
+       完整被复用）→ TITLES_CACHE_VERSION 整弃 + 五键形状校验。
+     - **改已装副本文件会破坏 trustedRevision 信任链 → 宿主拒载插件**
+       （切换器无 Pi 项、后端不跑）——调试已装副本必须重算 contentDigest
+       同步 installed.json+settings（pi_retrust.js 模式）。
+     - 附：v1.4.0 安装迭代 6 次打包（幂等修复→P1 守卫→startedAt 对齐→
+       1MB 窗口→缓存 v2→README 1MB 措辞），installed.json previous 始终
+       锚定 1.3.0/7fca8a61。
+  4) Oracle 两轮：全量 diff 轮 P0=0（P1 dirty 守卫修，P2 代理对截断/
+     假断言修）；startedAt 对齐轮 P0=P1=0（5s 容差合理、NaN 无传播、
+     dirty 守卫构造性验证正确，P2 容差拒绝测试已补）。npm test 12/12。
+  5) 真机验证：5/5 标题命中（"根据区域1中的凭证日期和函证号…"/"你参考
+     一下区域2 23年的做法…"/"参照引用图片的检查格式…"/"根据区域1的在建
+     工程待摊余额表…"/"我有哪些 Word 文档处理能力"），tooltip 全带文件名；
+     三档切换器回归正常（month 278,653,782；today=0 系 11/8 新日真实数据）；
+     面板单实例；后端 ok。⚠️ CDP 探针输出经 Bash 管道中文/·会显 GBK 乱码
+     ——显示层问题，DOM 与截图正常，验证以 PNG 目检为准。
+  6) 交付：pi-bridge-1.4.0.tmplugin（92,337 B，SHA-256 70b7eafe…1d41，
+     contentDigest f24b8b41…0dbf），Release v1.4.0，commit 3b78603。
+     优化决策：KPI 瓦片与 Hero 日/全量档数值重复=保留（参照条设计）；
+     ui.mjs 不拆分（单文件加载器契约）；README 已刷新（仪表盘/切换器/
+     标题/1MB Trust 措辞）。
