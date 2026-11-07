@@ -6,9 +6,8 @@
 
 const bridge = window.tokenMonitorEdgeDock;
 // Liveness ack: the main process compares this timestamp against the OS button
-// state to tell a healthy input path from the eat-clicks state (Electron
-// answers WM_MOUSEACTIVATE with MA_NOACTIVATEANDEAT after a native shell
-// rebuild) and only replays presses over the debugger while this is missing.
+// state, and only replays presses over the debugger while the ack is missing
+// (the page never received the press).
 document.addEventListener('pointerdown', () => {
   try { bridge.inputAck(); } catch (_) {}
 }, true);

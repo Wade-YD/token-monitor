@@ -91,7 +91,6 @@ function createEdgeDockController(deps) {
     applyShapeMask,
     installNonActivatingInput = () => {},
     primaryButtonDown = () => null,
-    probeDockInput = null,
     onToggleRateMode,
     onSwitchCodexAccount,
     canRefreshLimits = () => false,
@@ -178,15 +177,13 @@ function createEdgeDockController(deps) {
   let placementOverride = null;
   let fullScreen = false;
   let fullScreenCheckedAt = -Infinity;
-  // Dock input health. Electron 43 answers WM_MOUSEACTIVATE with
-  // MA_NOACTIVATEANDEAT on these windows after a native shell rebuild, which
-  // eats every hardware click while hover moves keep flowing ("paints fine,
-  // cannot be dragged"). The poll probes for that state, tries to recover via
-  // a focusable toggle, and otherwise replays presses into the page through
-  // the debugger protocol, which bypasses the broken OS activation path.
+  // Dock input resilience. A healthy page acks its presses (edgeDock:inputAck)
+  // and the replay below stays dormant; a page that stops acking gets its
+  // presses injected through the debugger protocol, which bypasses every
+  // broken OS input-routing state we have been able to produce. (An earlier
+  // WM_MOUSEACTIVATE probe here was observability-only and got removed: a
+  // controlled experiment showed MA answers are not the gate.)
   const inputHeal = {
-    broken: false,
-    lastProbeAt: 0,
     lastAckAt: { peek: 0, rail: 0, bubble: 0 },
     // { surface, pendingSince, replaying, lastX, lastY } while a press is held
     replay: null
@@ -1355,39 +1352,9 @@ function createEdgeDockController(deps) {
     }
   }
 
-  const INPUT_PROBE_INTERVAL_MS = 2000;
   // How long a held press may stay un-acked before the poll concludes the page
   // never received it and replays the press over the debugger protocol.
   const REPLAY_ACK_WAIT_MS = 120;
-
-  function probeBroken() {
-    if (typeof deps.probeDockInput !== 'function') return null;
-    try {
-      return deps.probeDockInput();
-    } catch (_) {
-      return null;
-    }
-  }
-
-  // Observability only. WM_MOUSEACTIVATE answers were once suspected as the
-  // eat-clicks mechanism, but a controlled experiment (SendInput clicks against
-  // a focusable:false window reporting its own events) showed the real input
-  // path reaches the page with MA=4, so the answer is not the gate. The dock's
-  // actual resilience comes from the ack-gated replay below: a healthy page
-  // acks its presses and the replay stays dormant; a page that stops acking
-  // gets its presses injected over the debugger protocol, which reaches it in
-  // every state we have been able to produce.
-  function ensureInputAlive() {
-    if (typeof deps.probeDockInput !== 'function') return;
-    const now = Date.now();
-    if (now - inputHeal.lastProbeAt < INPUT_PROBE_INTERVAL_MS) return;
-    inputHeal.lastProbeAt = now;
-    const probe = probeBroken();
-    if (!probe) return;
-    if (probe.broken === inputHeal.broken) return;
-    inputHeal.broken = probe.broken;
-    logger(`[edge-dock] dock windows answer WM_MOUSEACTIVATE with ${probe.broken ? 'MA_NOACTIVATEANDEAT (expected on this Electron; input replay fallback covers presses)' : 'MA_NOACTIVATE'}; codes=${probe.codes.join(',')}`);
-  }
 
   function replayClientPoint(point, surface) {
     const win = windows[surface];
@@ -1487,7 +1454,6 @@ function createEdgeDockController(deps) {
 
   function ensureTopmost() {
     ensureInputMatchesVisibility();
-    ensureInputAlive();
     if (typeof deps.forceTopmostDockWindows === 'function') {
       try {
         if (deps.forceTopmostDockWindows() > 0) return;

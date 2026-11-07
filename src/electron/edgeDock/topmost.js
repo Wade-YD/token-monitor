@@ -19,17 +19,6 @@ const SWP_NOACTIVATE = 0x0010;
 const HWND_TOPMOST = -1; // (HWND)-1
 const GWL_EXSTYLE = -20;
 const WS_EX_TRANSPARENT = 0x00000020;
-// WM_MOUSEACTIVATE with wParam=the window and lParam=MAKELPARAM(HTCLIENT,
-// WM_LBUTTONDOWN): asking a window how it will treat a real click. Healthy
-// non-activating windows answer MA_NOACTIVATE (3) and the click is delivered;
-// Electron 43 flipped to MA_NOACTIVATEANDEAT (4) after native shell rebuilds,
-// which eats every hardware click while hover moves keep flowing - the "dock
-// paints fine but cannot be dragged" state. The probe is a pure query: the
-// activation decision is made by win32k from the return value, not by the
-// handler, so asking costs nothing and changes nothing.
-const WM_MOUSEACTIVATE = 0x0021;
-const MA_PROBE_LPARAM = (1 << 16) | 0x0201; // HTCLIENT | WM_LBUTTONDOWN
-const MA_NOACTIVATEANDEAT = 4;
 
 let api;
 let lastHwndKey = null;
@@ -48,10 +37,7 @@ function createApi(koffi) {
       'int SetWindowPos(uintptr_t hwnd, intptr_t after, int x, int y, int cx, int cy, uint flags)'
     ),
     isWindowVisible: user32.func('bool IsWindowVisible(uintptr_t hwnd)'),
-    isWindow: user32.func('bool IsWindow(uintptr_t hwnd)'),
-    sendMessage: user32.func(
-      'intptr_t SendMessageW(uintptr_t hwnd, uint msg, uintptr_t wp, intptr_t lp)'
-    )
+    isWindow: user32.func('bool IsWindow(uintptr_t hwnd)')
   };
 }
 
@@ -117,23 +103,6 @@ function forceTopmostDockWindows(deps = {}) {
   return raised;
 }
 
-// Asks every visible dock window how it treats a real click. `broken` means at
-// least one answers MA_NOACTIVATEANDEAT, i.e. hardware clicks on that surface
-// never reach the renderer. Returns null when the native layer is unavailable.
-function probeDockInput(deps = {}) {
-  const a = deps.api || loadApi();
-  if (!a) return null;
-  const hwnds = dockHwnds(a);
-  const codes = hwnds.map((hwnd) => {
-    try {
-      return Number(a.sendMessage(hwnd, WM_MOUSEACTIVATE, hwnd, MA_PROBE_LPARAM));
-    } catch (_) {
-      return null;
-    }
-  });
-  return { hwnds, codes, broken: codes.some((code) => code === MA_NOACTIVATEANDEAT) };
-}
-
 // Per-window variant kept for callers that already hold a live window object;
 // the by-title sweep above is the primary path because JS-held handles go
 // stale across upstream's native shell rebuilds.
@@ -174,6 +143,5 @@ module.exports = {
   createApi,
   dockHwnds,
   forceTopmost,
-  forceTopmostDockWindows,
-  probeDockInput
+  forceTopmostDockWindows
 };

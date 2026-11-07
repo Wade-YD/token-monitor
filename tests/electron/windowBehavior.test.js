@@ -130,11 +130,16 @@ test('always-on-top windows opt out of the Windows behind-taskbar levels', () =>
   assert.equal(floatingAlwaysOnTopLevel('linux'), 'floating');
 });
 
-// Both always-on-top call sites (the expanded widget and the collapsed bubble)
-// have to go through the helper; a bare 'floating' literal reintroduces #533.
+// Every always-on-top call site (the expanded widget and the collapsed bubble,
+// in main.js and in the extracted edge controller) has to go through the
+// helper; a bare 'floating' literal reintroduces #533.
 test('main.js never passes a bare floating level to setAlwaysOnTop', () => {
   const main = fs.readFileSync(path.join(__dirname, '..', '..', 'src/electron/main.js'), 'utf8');
-  const calls = main.match(/setAlwaysOnTop\([^)]*\)/g) || [];
+  const controller = fs.readFileSync(path.join(__dirname, '..', '..', 'src/electron/edgeAutoHideController.js'), 'utf8');
+  const calls = [
+    ...(main.match(/setAlwaysOnTop\([^)]*\)/g) || []),
+    ...(controller.match(/setAlwaysOnTop\([^)]*\)/g) || [])
+  ];
   assert.ok(calls.length >= 2);
   for (const call of calls) {
     assert.match(call, /floatingAlwaysOnTopLevel\(\)/);
