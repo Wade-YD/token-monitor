@@ -986,3 +986,28 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
   4) **全 0 + 额度加载中 = 先查 app.asar.unpacked，而不是查渲染门控**（本轮
      Oracle 先前把"CDP 看 0"归因为渲染门控，对隐藏态成立，但对"用户可见态
      全 0"不成立——判别标准：用户可见时仍 0 且 anchor mtime 停摆 = 采集死）。
+
+【上游贡献（2026-11-11，首个 PR）】
+  背景：37 提交补丁中，只有少量属"通用 bug 修复"可回馈上游；其余为 fork 内部
+  事务（rebase fallout/重构）或产品级功能（edge 贴边自动隐藏，与上游 edgeDock
+  设计语言冲突，不宜整体推）。上游现况：MIT、3640 stars、353 forks、144 open
+  issues、单人维护，但**外部 PR 有合并先例**（hongsw #1449 已合）。
+  首个 PR 选题：zai 额度窗口去重（874e584d）——console-key lane 与 ZCode mirror
+  lane 同答同一 GLM plan，一叶只带 5 小时桶时 flatMap 合并渲染成
+  "Session 9% / Session 9%"。自包含、与 edge 代码零耦合、任何 zai 用户受益。
+  实现：新分支 fix/zai-limits-dedupe 基于 **upstream/main c43b7f6d**（非 v0.90.0
+  标签，main 领先）；仅改 2 文件——limits.js 新增 dedupeZaiWindows（kind/label/
+  resetsAt/usedPercent 四元组去重，合并点包一层，导出供测试）+ zaiLimits.test.js
+  回归测试（双 lane 只答 5 小时桶 → 单行；不同桶原序保留）。**46/46 通过、eslint
+  零告警、+62/−1**。
+  操作链：`gh repo fork Javis603/token-monitor --clone=false`（此前旧 fork 已被
+  用户删除，本次新建 Wade-YD/token-monitor）→ 提交身份改用
+  `Wade-YD <283058524+Wade-YD@users.noreply.github.com>`（保证与账号关联；
+  原 29871@localhost 是本地身份）→ push fork 分支 → gh pr create
+  → **PR #1458**（https://github.com/Javis603/token-monitor/pull/1458，
+  OPEN/MERGEABLE）。
+  待办：跟进 review；若上游合并，下轮 rebase 该提交会变成"已在上游"→ 用
+  `git rebase --skip` 或 cherry-pick 剔除，避免重复。若被拒，保持 fork 内维护。
+  下一步候选（视本次反应再定）：edgeDock topmost 原生族（koffi FindWindowExW/
+  HWND_TOPMOST intptr_t/WS_EX_TRANSPARENT 卡死）整理成一个干净 Windows 修复 PR；
+  edge 贴边模式先开 feature request issue 探口风，不直接 PR。
