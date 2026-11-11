@@ -1498,7 +1498,7 @@ test('sort toggle is wired in the renderer sources and localized', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'renderer', 'index.html'), 'utf8');
   assert.match(html, /id="sessionSortToggle"/);
   const i18n = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'renderer', 'i18n.js'), 'utf8');
-  assert.equal((i18n.match(/'home\.sessionSort\.recent'/g) || []).length, 6, 'every bundled locale carries the key');
-  assert.equal((i18n.match(/'home\.sessionSort\.tokens'/g) || []).length, 6);
+  assert.equal((i18n.match(/'home\.sessionSort\.recent'/g) || []).length, 7, 'every bundled locale carries the key');
+  assert.equal((i18n.match(/'home\.sessionSort\.tokens'/g) || []).length, 7);
 
 });
