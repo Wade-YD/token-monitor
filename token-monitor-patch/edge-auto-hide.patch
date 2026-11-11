@@ -1,14 +1,3 @@
-diff --git a/.gitignore b/.gitignore
-index 2872f45b..807261ba 100644
---- a/.gitignore
-+++ b/.gitignore
-@@ -24,3 +24,6 @@ worker/.wrangler/
- worker/node_modules/
- worker/.dev.vars
- devlog/
-+
-+# Mimosa hook writes per-session state into the worktree; never commit it
-+.mimosa/
 diff --git a/src/electron/edgeAutoHide.js b/src/electron/edgeAutoHide.js
 new file mode 100644
 index 00000000..20381e1f
@@ -232,31 +221,752 @@ index 00000000..20381e1f
 +  edgeSnapToBounds,
 +  edgeTriggerHitTest
 +};
+diff --git a/src/electron/edgeAutoHideController.js b/src/electron/edgeAutoHideController.js
+new file mode 100644
+index 00000000..2fc31ec6
+--- /dev/null
++++ b/src/electron/edgeAutoHideController.js
+@@ -0,0 +1,725 @@
++'use strict';
++
++// Edge auto-hide controller: the docked-edge hide/show state machine that used
++// to live inline in main.js. Extracted as a behavior-frozen move so upstream
++// rebases cannot collide with it: main.js keeps only the factory call, a
++// destructured forward of the public entry points, and one-line forwarders in
++// createWindow()/applyWindowSettings()/the IPC handlers. Every dependency that
++// main.js owns as a reassigned binding (mainWindow, settings, dashboardWindow)
++// arrives through a getter in `deps` so the controller always sees live values.
++
++const edgeAutoHideApi = require('./edgeAutoHide');
++const edgePopupGuardApi = require('./edgePopupGuard');
++
++function createEdgeAutoHideController(deps) {
++  const {
++    getWindow,
++    getDashboardWindow,
++    getSettings,
++    saveSettings,
++    displayForBounds,
++    persistWindowBounds,
++    persistBoundsSoon,
++    stopTaskbarZOrderKeeper,
++    describeWindowBehavior,
++    motionPreferenceApi,
++    nativeTheme,
++    screen,
++    windowChrome
++  } = deps;
++
++  const edgeAutoHideState = { hidden: false, side: null, expandedBounds: null, hiddenBounds: null, animatingUntil: 0, desired: null, guardTripped: false, geometryReady: false, nativeRejectStreak: 0, lastResizeAt: 0, collapseTimer: null, pollTimer: null };
++
++  function stopEdgeAutoHideTimers() {
++    if (edgeAutoHideState.collapseTimer) { clearTimeout(edgeAutoHideState.collapseTimer); edgeAutoHideState.collapseTimer = null; }
++    if (edgeAutoHideState.pollTimer) { clearInterval(edgeAutoHideState.pollTimer); edgeAutoHideState.pollTimer = null; }
++  }
++
++  function edgeReducedMotion() {
++    return motionPreferenceApi.shouldReduceMotion(getSettings()?.reduceMotion, nativeTheme.shouldReduceMotion);
++  }
++
++  // While the user is grabbing an edge to resize, the window must never fold
++  // back under their hand. Electron exposes no "a native resize drag is active"
++  // API, so resize activity is observed through the resize events: a grace window
++  // after the last one vetoed every collapse arming/firing.
++  const EDGE_RESIZE_GRACE_MS = 700;
++
++  function edgeResizeGraceActive() {
++    return Date.now() - edgeAutoHideState.lastResizeAt < EDGE_RESIZE_GRACE_MS;
++  }
++
++  // The dashboard is a persistent second window of ours — a workspace the user
++  // deliberately works in, unlike the transient native popups the guard exists
++  // for. It must never hold the dock open, or the home panel would stay spread
++  // over the dashboard until the app restarted. Any future persistent window
++  // (a widget, a separate editor) belongs on this same list.
++  function edgePersistentWindowHwnds() {
++    if (!getDashboardWindow() || getDashboardWindow().isDestroyed()) return [];
++    try {
++      const hwnd = edgePopupGuardApi.hwndOf(getDashboardWindow());
++      return hwnd ? [hwnd] : [];
++    } catch (_) {
++      return [];
++    }
++  }
++
++  // Native popups we spawn (the vendor-color chooser, context menus, <select>
++  // dropdowns) are windows of our own process OUTSIDE the BrowserWindow rect.
++  // While the cursor is on one of them — or one holds focus — the docked window
++  // must not fold, or the user loses the popup mid-interaction. win32 only; the
++  // guard degrades to false everywhere else and when the FFI is unavailable.
++  function edgeNativePopupHoldsCursor(cursor) {
++    if (process.platform !== 'win32' || !getWindow() || getWindow().isDestroyed()) return false;
++    try {
++      // Electron screen APIs speak DIPs; WindowFromPoint speaks physical pixels.
++      // Convert when the scales differ (identity at 100% zoom).
++      let physical = cursor;
++      try {
++        if (typeof screen.dipToScreenPoint === 'function') physical = screen.dipToScreenPoint(cursor);
++      } catch (_) {}
++      return edgePopupGuardApi.popupHoldsCollapse({
++        mainHwnd: edgePopupGuardApi.hwndOf(getWindow()),
++        cursor: physical,
++        persistentHwnds: edgePersistentWindowHwnds(),
++        debug: (m) => edgeDebug('popup', 'cursor=' + JSON.stringify(cursor) + ' physical=' + JSON.stringify(physical) + ' | ' + m)
++      });
++    } catch (err) {
++      edgeDebug('popup', 'guard threw: ' + ((err && err.message) || String(err)));
++      return false;
++    }
++  }
++
++  // ---- Edge geometry guard -------------------------------------------------
++  // No non-finite coordinate may ever reach an Electron window API (a NaN reaches
++  // setPosition as "Error processing argument at index 1, conversion failure" and
++  // surfaces as a modal crash dialog). A rejected frame is logged verbatim, once,
++  // so the next occurrence is self-diagnosing instead of needing a re-probe.
++  function edgeLog(scope, message, file = 'token-monitor-edge-error.log') {
++    try {
++      require('fs').appendFileSync(
++        require('path').join(require('os').tmpdir(), file),
++        new Date().toISOString() + ' [' + scope + '] ' + message + '\n');
++    } catch (_) { /* logging must never throw */ }
++  }
++
++  // Decision-path logging is opt-in: enabled via settings.edgeAutoHideDebug or
++  // TOKEN_MONITOR_EDGE_DEBUG=1, writing to a separate debug log so the error
++  // log keeps its "only written on a failure" contract.
++  function edgeDebugEnabled() {
++    return getSettings()?.edgeAutoHideDebug === true || process.env.TOKEN_MONITOR_EDGE_DEBUG === '1';
++  }
++
++  function edgeDebug(scope, message) {
++    if (!edgeDebugEnabled()) return;
++    edgeLog(scope, message, 'token-monitor-edge-debug.log');
++  }
++
++  function edgeGuardTripped() {
++    return edgeAutoHideState.guardTripped === true;
++  }
++
++  // An "in flight" marker must expire on its own. A boolean cleared only by the
++  // animation's success path is what previously wedged auto-hide forever: one
++  // thrown frame left the flag set, the cursor poll early-returned on it, and the
++  // window never hid again.
++  function edgeIsAnimating() {
++    return Date.now() < edgeAutoHideState.animatingUntil;
++  }
++
++  function edgeAnimationDuration(duration) {
++    // Once a frame has been rejected we no longer trust animated frames, so the
++    // rest of the session jumps instead of tweening.
++    return edgeGuardTripped() ? 0 : duration;
++  }
++
++  function setEdgeWindowPosition(x, y) {
++    if (!getWindow() || getWindow().isDestroyed()) return false;
++    // Before the first show the native layer can reject even finite positions.
++    // Skipping silently is not an error: the watchdog and the cursor poll
++    // converge the geometry once the window is shown, so this must not trip the
++    // session-wide animation degrade.
++    if (!edgeAutoHideState.geometryReady) return false;
++    if (!Number.isFinite(x) || !Number.isFinite(y)) {
++      if (!edgeGuardTripped()) {
++        edgeAutoHideState.guardTripped = true;
++        edgeLog('geometry-guard', 'refused a non-finite position: x=' + String(x)
++          + ' y=' + String(y) + ' -- tweening disabled for this session');
++      }
++      return false;
++    }
++    try {
++      getWindow().setPosition(x, y, false);
++    } catch (err) {
++      // Defensive: the native layer has been observed to intermittently reject a
++      // call whose coordinates we already verified (an occasional late tween
++      // frame; the same call succeeds on the next transition). That is transient,
++      // so it degrades the session to instant-only moves only after REPEATED
++      // consecutive failures -- one flaky frame must not cost the whole session
++      // its animation. (The startup class of rejections is prevented upstream by
++      // the geometryReady gate, so what survives to here is rare and transient.)
++      // Never let it escape as an uncaught exception: Electron would surface it
++      // as a modal dialog.
++      edgeAutoHideState.nativeRejectStreak += 1;
++      edgeLog('geometry-guard', 'native setPosition rejected a finite position: x=' + String(x)
++        + ' y=' + String(y) + ' err=' + ((err && err.message) || String(err))
++        + ' streak=' + edgeAutoHideState.nativeRejectStreak);
++      if (edgeAutoHideState.nativeRejectStreak >= 3) {
++        edgeAutoHideState.guardTripped = true;
++        edgeLog('geometry-guard', 'repeated native rejections -- tweening disabled for this session');
++      }
++      return false;
++    }
++    edgeAutoHideState.nativeRejectStreak = 0;
++    return true;
++  }
++
++  function animateWindowPosition(from, to, duration, onComplete) {
++    if (!getWindow() || getWindow().isDestroyed()) { if (onComplete) onComplete(); return; }
++    const target = to && Number.isFinite(to.x) && Number.isFinite(to.y) ? to : null;
++    const source = from && Number.isFinite(from.x) && Number.isFinite(from.y) ? from : null;
++    if (!target) {
++      setEdgeWindowPosition(to ? to.x : undefined, to ? to.y : undefined);
++      if (onComplete) onComplete();
++      return;
++    }
++    const effective = edgeAnimationDuration(duration);
++    if (!source || edgeReducedMotion() || effective <= 0) {
++      setEdgeWindowPosition(target.x, target.y);
++      if (onComplete) onComplete();
++      return;
++    }
++    edgeAutoHideState.animatingUntil = Date.now() + effective + 100;
++    const startTime = Date.now();
++    const interval = 16; // ~60fps
++    function tick() {
++      if (!getWindow() || getWindow().isDestroyed()) { edgeAutoHideState.animatingUntil = 0; return; }
++      const elapsed = Date.now() - startTime;
++      const t = Math.min(1, elapsed / effective);
++      // Cubic ease-out: 1 - (1-t)^3
++      const eased = 1 - Math.pow(1 - t, 3);
++      const x = Math.round(source.x + (target.x - source.x) * eased);
++      const y = Math.round(source.y + (target.y - source.y) * eased);
++      // Snap straight onto the target instead of tweening the asymptotic tail:
++      // the sub-pixel frames add nothing visually, and the native layer has been
++      // observed to intermittently reject exactly such a late frame.
++      const remaining = Math.max(Math.abs(target.x - x), Math.abs(target.y - y));
++      if (t >= 1 || remaining < 1) {
++        if (!setEdgeWindowPosition(target.x, target.y)) {
++          edgeDebug('animate', 'final frame rejected to=' + JSON.stringify(target));
++        }
++        edgeAutoHideState.animatingUntil = 0;
++        if (onComplete) onComplete();
++        return;
++      }
++      if (!setEdgeWindowPosition(x, y)) {
++        edgeDebug('animate', 'frame rejected from=' + JSON.stringify(source) + ' to=' + JSON.stringify(target));
++        edgeAutoHideState.animatingUntil = 0;
++        if (onComplete) onComplete();
++        return;
++      }
++      setTimeout(tick, interval);
++    }
++    tick();
++  }
++
++  function collapseEdge(expandedBounds, side) {
++    if (!getWindow() || getWindow().isDestroyed() || !expandedBounds || !side) return false;
++    stopEdgeAutoHideTimers();
++    const display = displayForBounds(expandedBounds);
++    if (!display) return false;
++    const hidden = edgeAutoHideApi.edgeHiddenBounds(expandedBounds, side, display, process.platform);
++    if (!hidden) return false;
++    edgeDebug('collapse', 'side=' + side + ' from=' + JSON.stringify(getWindow().getBounds()) + ' to=' + JSON.stringify(hidden));
++    edgeAutoHideState.hidden = true;
++    edgeAutoHideState.desired = 'hidden';
++    edgeAutoHideState.side = side;
++    edgeAutoHideState.expandedBounds = expandedBounds;
++    edgeAutoHideState.hiddenBounds = hidden;
++    getSettings().edgeAutoHideBounds = { side, expandedBounds, hiddenBounds: hidden };
++    saveSettings();
++    const current = getWindow().getBounds();
++    animateWindowPosition(current, hidden, edgeAutoHideApi.EDGE_ANIMATION_DURATION_MS, () => {
++      startEdgeCursorPolling();
++    });
++    return true;
++  }
++
++  function expandEdge() {
++    if (!getWindow() || getWindow().isDestroyed() || !edgeAutoHideState.hidden) return false;
++    stopEdgeAutoHideTimers();
++    const expanded = edgeAutoHideState.expandedBounds;
++    if (!expanded) return false;
++    edgeDebug('expand', 'side=' + edgeAutoHideState.side + ' from=' + JSON.stringify(getWindow().getBounds()) + ' to=' + JSON.stringify(expanded));
++    edgeAutoHideState.hidden = false;
++    edgeAutoHideState.desired = 'revealed';
++    const current = getWindow().getBounds();
++    animateWindowPosition(current, expanded, edgeAutoHideApi.EDGE_ANIMATION_DURATION_MS, () => {
++      // Re-arm the cursor poll FIRST. expandEdge() already stopped the poll, and the
++      // poll is the only thing that can ever hide the window again -- so a throw from
++      // the persistence call below must not be able to skip it, or the window would
++      // stay revealed forever with no timer left to collapse it.
++      scheduleEdgeAutoHide();
++      // Persist whatever bounds the window actually ended at: the user may have
++      // resized while expanded, so state.expandedBounds alone can be stale.
++      if (getWindow() && !getWindow().isDestroyed()) {
++        try {
++          persistWindowBounds(getWindow().getBounds());
++        } catch (err) {
++          try {
++            require('fs').appendFileSync(
++              require('path').join(require('os').tmpdir(), 'token-monitor-edge-error.log'),
++              new Date().toISOString() + ' expandEdge persist failed: ' + (err && err.stack || err) + '\n');
++          } catch (_) { /* a logging failure must never break the hide/show chain */ }
++        }
++      }
++    });
++    return true;
++  }
++
++  // The cursor poll owns every hide/show transition; this entry point just (re)arms
++  // it, so blur/mode-switch/drag-release paths cannot race the poll into collapsing
++  // the window underneath the user's cursor.
++  function scheduleEdgeAutoHide() {
++    if (!canUseEdgeAutoHide(getSettings())) return;
++    startEdgeCursorPolling();
++  }
++
++  // Keep state.expandedBounds in sync while the window sits expanded and docked,
++  // so re-hiding and re-expanding never animate to a stale size or position.
++  function trackEdgeExpandedBounds() {
++    if (edgeIsAnimating() || edgeAutoHideState.hidden || !edgeAutoHideState.side) return;
++    if (!canUseEdgeAutoHide(getSettings()) || !getWindow() || getWindow().isDestroyed()) return;
++    edgeAutoHideState.expandedBounds = getWindow().getBounds();
++  }
++
++  // While HIDDEN, the window can be resized underneath us (display/DPI change or
++  // a programmatic resize). The remembered dock geometry must follow the new
++  // size, or the strip width drifts and the next start restores a stale size.
++  // Deliberately hidden-state only: while expanded the user may be mid-drag on
++  // an edge, and snapping the dock axis under their hand would fight the drag.
++  function syncEdgeDockGeometry() {
++    if (!canUseEdgeAutoHide(getSettings()) || edgeIsAnimating() || !edgeAutoHideState.hidden) return;
++    if (!edgeAutoHideState.side || !getWindow() || getWindow().isDestroyed()) return;
++    const current = getWindow().getBounds();
++    const display = displayForBounds(current);
++    if (!display) return;
++    const side = edgeAutoHideState.side;
++    const expanded = edgeAutoHideApi.edgeSnapToBounds(current, side, display, process.platform);
++    const hidden = expanded && edgeAutoHideApi.edgeHiddenBounds(expanded, side, display, process.platform);
++    if (!expanded || !hidden) return;
++    edgeAutoHideState.expandedBounds = expanded;
++    edgeAutoHideState.hiddenBounds = hidden;
++    getSettings().edgeAutoHideBounds = { side, expandedBounds: expanded, hiddenBounds: hidden };
++    saveSettings();
++    setEdgeWindowPosition(hidden.x, hidden.y);
++    edgeDebug('resize-sync', 'side=' + side + ' bounds=' + JSON.stringify(hidden));
++  }
++
++  function clearEdgeCollapseTimer() {
++    if (edgeAutoHideState.collapseTimer) {
++      clearTimeout(edgeAutoHideState.collapseTimer);
++      edgeAutoHideState.collapseTimer = null;
++    }
++  }
++
++  // The one and only executor for every hide/show transition. It is idempotent:
++  // it compares the desired state against the real window geometry and only moves
++  // when the two disagree. A lost timer or a killed poll therefore cannot strand the
++  // window -- the next reconcile simply re-discovers the drift and corrects it.
++  function reconcileEdgeAutoHide() {
++    if (!canUseEdgeAutoHide(getSettings())) return false;
++    if (!getWindow() || getWindow().isDestroyed() || !getWindow().isVisible()) return false;
++    if (edgeIsAnimating()) return false;
++    const desired = edgeAutoHideState.desired;
++    if (desired === 'hidden') {
++      if (edgeAutoHideState.hidden) return false;
++      const bounds = getWindow().getBounds();
++      const display = displayForBounds(bounds);
++      if (!display) return false;
++      const side = edgeAutoHideState.side || edgeAutoHideApi.edgeSide(bounds, display, process.platform);
++      if (!side) return false;
++      const snapped = edgeAutoHideApi.edgeSnapToBounds(bounds, side, display, process.platform);
++      return collapseEdge(snapped, side);
++    }
++    if (desired === 'revealed') {
++      if (!edgeAutoHideState.hidden) return false;
++      return expandEdge();
++    }
++    return false;
++  }
++
++  // The cursor poll only DECIDES the desired state; it never moves the window
++  // itself. Keeping a single executor means no stray stopTimer() can leave the
++  // window with nothing left to hide it.
++  function startEdgeCursorPolling() {
++    stopEdgeAutoHideTimers();
++    if (!canUseEdgeAutoHide(getSettings())) return;
++    if (typeof screen.getCursorScreenPoint !== 'function') return;
++    edgeAutoHideState.pollTimer = setInterval(() => {
++      if (!getWindow() || getWindow().isDestroyed() || edgeIsAnimating()) return;
++      if (!getWindow().isVisible()) return;
++      if (!canUseEdgeAutoHide(getSettings())) { stopEdgeAutoHideTimers(); return; }
++      let cursor;
++      try { cursor = screen.getCursorScreenPoint(); } catch (_) { return; }
++      const expanded = edgeAutoHideState.expandedBounds;
++      const side = edgeAutoHideState.side;
++      if (edgeAutoHideState.hidden) {
++        if (!expanded || !side) return;
++        const display = displayForBounds(expanded);
++        if (!display) return;
++        // Hidden state: only the slim strip zone (edge ± perpendicular tolerance,
++        // constrained along the window's own span) may reveal the window. The full
++        // expanded rect must NOT trigger, or sweeping the cursor across the middle
++        // of the screen would pull the window out.
++        if (edgeAutoHideApi.edgeTriggerHitTest(cursor, expanded, side, display, process.platform)) {
++          edgeDebug('poll', 'hidden hit side=' + side + ' cursor=' + JSON.stringify(cursor));
++          clearEdgeCollapseTimer();
++          edgeAutoHideState.desired = 'revealed';
++          reconcileEdgeAutoHide();
++        }
++        return;
++      }
++      // Expanded state (docked, or merely parked near an edge). Deliberately no
++      // isFocused() gate: this window is focusable and keeps focus for long
++      // stretches, so gating on focus meant the collapse never armed. The cursor
++      // check alone already expresses "do not hide while the user is using it".
++      const bounds = getWindow().getBounds();
++      const display = displayForBounds(bounds);
++      if (!display) return;
++      const dockSide = side || edgeAutoHideApi.edgeSide(bounds, display, process.platform);
++      if (!dockSide) { clearEdgeCollapseTimer(); return; }
++      const docked = edgeAutoHideApi.edgeSnapToBounds(bounds, dockSide, display, process.platform);
++      // A cursor grabbing a resize border sits on the Win32 outer frame, OUTSIDE
++      // the Electron rect — without the interaction margin the window folded
++      // back up mid-resize, every single time.
++      if (edgeAutoHideApi.edgeCursorInExpandedBounds(cursor, docked, edgeAutoHideApi.EDGE_INTERACTION_MARGIN_PX)) {
++        clearEdgeCollapseTimer();
++        edgeAutoHideState.desired = 'revealed';
++        return;
++      }
++      if (edgeResizeGraceActive()) {
++        // Resizing was seen moments ago: the cursor may have drifted past the
++        // margin while the user still holds an edge. Never arm a collapse here.
++        clearEdgeCollapseTimer();
++        return;
++      }
++      if (edgeNativePopupHoldsCursor(cursor)) {
++        // The cursor sits on one of our own native popups (vendor-color chooser,
++        // context menu, <select>) — part of the interaction, not "the user left".
++        clearEdgeCollapseTimer();
++        edgeAutoHideState.desired = 'revealed';
++        edgeDebug('poll', 'popup hold cursor=' + JSON.stringify(cursor));
++        return;
++      }
++      if (!edgeAutoHideState.collapseTimer) {
++        edgeDebug('poll', 'arm collapse side=' + dockSide + ' cursor=' + JSON.stringify(cursor));
++        edgeAutoHideState.collapseTimer = setTimeout(() => {
++          edgeAutoHideState.collapseTimer = null;
++          if (!canUseEdgeAutoHide(getSettings())) return;
++          // The user may have grabbed an edge or opened a popup after this timer
++          // was armed; a collapse firing into either is a UX betrayal (and a
++          // known source of transient native rejections).
++          if (edgeResizeGraceActive()) return;
++          let cursorNow = null;
++          try { cursorNow = screen.getCursorScreenPoint(); } catch (_) { cursorNow = null; }
++          if (cursorNow && edgeNativePopupHoldsCursor(cursorNow)) {
++            edgeDebug('poll', 'collapse vetoed by popup at cursor=' + JSON.stringify(cursorNow));
++            return;
++          }
++          // The grace period only flips the desired state; the move itself stays
++          // with the single executor, so it remains subject to the geometry guard.
++          edgeAutoHideState.desired = 'hidden';
++          reconcileEdgeAutoHide();
++        }, edgeAutoHideApi.EDGE_COLLAPSE_DELAY_MS);
++      }
++    }, 100); // Poll every 100ms
++  }
++
++  function maybeCollapseEdge(bounds) {
++    if (!canUseEdgeAutoHide(getSettings()) || edgeAutoHideState.hidden) return false;
++    const display = displayForBounds(bounds);
++    if (!display) return false;
++    const side = edgeAutoHideApi.edgeSide(bounds, display, process.platform);
++    if (!side) return false;
++    const snapped = edgeAutoHideApi.edgeSnapToBounds(bounds, side, display, process.platform);
++    return collapseEdge(snapped, side);
++  }
++
++  function canUseEdgeAutoHide(source = getSettings()) {
++    return edgeAutoHideApi.canUseEdgeAutoHide(source);
++  }
++
++  function syncEdgeAutoHideAvailability() {
++    if (!canUseEdgeAutoHide(getSettings())) {
++      if (edgeAutoHideState.hidden) expandEdge();
++      else {
++        edgeAutoHideState.side = null;
++        edgeAutoHideState.expandedBounds = null;
++        edgeAutoHideState.hiddenBounds = null;
++        stopEdgeAutoHideTimers();
++      }
++      return;
++    }
++    // If switching to edge mode and window is near an edge, collapse it
++    if (getWindow() && !getWindow().isDestroyed() && !edgeAutoHideState.hidden) {
++      const bounds = getWindow().getBounds();
++      const display = displayForBounds(bounds);
++      if (display) {
++        const side = edgeAutoHideApi.edgeSide(bounds, display, process.platform);
++        if (side) {
++          scheduleEdgeAutoHide();
++        }
++      }
++    }
++  }
++
++  // ---- Integration surface (wiring moved verbatim out of main.js) ----------
++
++  // Registers the edge-related window event listeners that used to be inlined in
++  // createWindow(). The non-edge increments (floating-bubble timer stop on focus,
++  // popover/blur gating, 'restore'/'minimize' taskbar hooks) stay in main.js.
++  function attachWindow(win) {
++    edgeAutoHideState.geometryReady = false;
++    win.on('focus', () => {
++      stopEdgeAutoHideTimers();
++      // Deliberately NO expandEdge() here. The cursor trigger owns reveal: a
++      // focus gain without the cursor at the edge must not pop the window out,
++      // and at startup the automatic focus fired this path against the freshly
++      // restored hidden window — a native setPosition rejection on every launch,
++      // which also tripped the session-wide animation degrade. The poll is all
++      // the reveal path needs (clicking the strip is inside the trigger zone).
++      scheduleEdgeAutoHide();
++    });
++    // 'resized' only fires for interactive drags; external/programmatic resizes
++    // (observed with an external MoveWindow) leave it silent on Windows. The
++    // hidden-state dock sync therefore also watches the continuous 'resize'
++    // event, debounced so a resize burst settles first.
++    let edgeResizeSyncTimer = null;
++    win.on('resize', () => {
++      edgeAutoHideState.lastResizeAt = Date.now();
++      if (!edgeAutoHideState.hidden) return;
++      if (edgeResizeSyncTimer) clearTimeout(edgeResizeSyncTimer);
++      edgeResizeSyncTimer = setTimeout(() => {
++        edgeResizeSyncTimer = null;
++        syncEdgeDockGeometry();
++      }, 200);
++    });
++    win.on('resized', () => {
++      edgeAutoHideState.lastResizeAt = Date.now();
++      persistBoundsSoon();
++      windowChrome.syncTaskbarZOrder();
++      trackEdgeExpandedBounds();
++      syncEdgeDockGeometry();
++    });
++    win.on('moved', () => {
++      persistBoundsSoon();
++      windowChrome.syncTaskbarZOrder();
++      // Programmatic animation frames land here too; only react to real drags.
++      if (edgeIsAnimating() || !getWindow() || getWindow().isDestroyed()) return;
++      if (!canUseEdgeAutoHide(getSettings()) || edgeAutoHideState.hidden) return;
++      const bounds = getWindow().getBounds();
++      const display = displayForBounds(bounds);
++      if (!display) return;
++      const side = edgeAutoHideApi.edgeSide(bounds, display, process.platform);
++      if (side) {
++        // Window was dropped near an edge: arm the cursor poll, which re-hides it
++        // after the grace delay — never while the cursor rests on the window.
++        scheduleEdgeAutoHide();
++      } else if (edgeAutoHideState.side || getSettings().edgeAutoHideBounds) {
++        // Dragged away from every edge: forget the remembered dock so a later
++        // restart cannot yank the window back to a stale hidden position.
++        edgeAutoHideState.side = null;
++        edgeAutoHideState.expandedBounds = null;
++        edgeAutoHideState.hiddenBounds = null;
++        if (edgeAutoHideState.collapseTimer) {
++          clearTimeout(edgeAutoHideState.collapseTimer);
++          edgeAutoHideState.collapseTimer = null;
++        }
++        if (getSettings().edgeAutoHideBounds) {
++          delete getSettings().edgeAutoHideBounds;
++          saveSettings();
++        }
++      }
++    });
++    win.on('show', () => {
++      // Geometry writes through the guard become legal only once the window has
++      // actually been shown; a window recreated later must re-earn this.
++      edgeAutoHideState.geometryReady = true;
++      windowChrome.syncTaskbarZOrder();
++      scheduleEdgeAutoHide();
++    });
++    win.on('hide', () => { stopTaskbarZOrderKeeper(); stopEdgeAutoHideTimers(); });
++  }
++
++  // The non-edge head of main.js applyWindowSettings() (the !mainWindow guard and
++  // the collapsed-floating-bubble early return) stays in main.js; everything from
++  // here on is the verbatim remainder, including the general behavior path that
++  // the edge branches early-return past.
++  function applyWindowSettings() {
++    // Edge auto-hide: restore a saved hidden dock exactly once per session, before
++    // any in-session edge state exists (edgeAutoHideState.side === null). Without
++    // that guard, every applyWindowSettings() call (e.g. any settings change made
++    // while the user is actively using the expanded window) would yank the window
++    // back off-screen. Saved bounds are validated against the current displays so
++    // an unplugged monitor cannot strand the window off-screen.
++    if (canUseEdgeAutoHide(getSettings()) && edgeAutoHideState.side === null && !edgeAutoHideState.hidden && getSettings().edgeAutoHideBounds) {
++      const saved = getSettings().edgeAutoHideBounds;
++      if (saved.side && saved.expandedBounds && saved.hiddenBounds
++        && displayForBounds(saved.expandedBounds) && displayForBounds(saved.hiddenBounds)) {
++        edgeAutoHideState.hidden = true;
++        edgeAutoHideState.side = saved.side;
++        edgeAutoHideState.expandedBounds = saved.expandedBounds;
++        // Recompute the hidden geometry with the CURRENT formula instead of
++        // trusting the saved coordinates: the formula can change between builds
++        // (e.g. the win32 frame-overhang compensation), and a stale saved y left
++        // a 9px strip showing until the first re-hide.
++        const restoreDisplay = displayForBounds(saved.expandedBounds);
++        const recomputed = edgeAutoHideApi.edgeHiddenBounds(saved.expandedBounds, saved.side, restoreDisplay, process.platform);
++        edgeAutoHideState.hiddenBounds = recomputed || saved.hiddenBounds;
++        if (recomputed) {
++          getSettings().edgeAutoHideBounds = { side: saved.side, expandedBounds: saved.expandedBounds, hiddenBounds: recomputed };
++          saveSettings();
++        }
++        // Move to the hidden POSITION only: the window was just created with the
++        // size from windowBounds (which carries the user's latest resize), and
++        // forcing the saved width/height here would resurrect a stale size over
++        // it. No animation on startup.
++        const created = getWindow().getBounds();
++        const restoreTarget = edgeAutoHideState.hiddenBounds;
++        getWindow().setBounds({
++          x: restoreTarget.x,
++          y: restoreTarget.y,
++          width: created.width,
++          height: created.height
++        });
++        edgeDebug('restore', 'side=' + saved.side + ' hidden=' + JSON.stringify(restoreTarget) + ' size=' + created.width + 'x' + created.height);
++        getWindow().setAlwaysOnTop(true, windowChrome.floatingAlwaysOnTopLevel());
++        if (typeof getWindow().setMovable === 'function') getWindow().setMovable(true);
++        if (typeof getWindow().setResizable === 'function') getWindow().setResizable(true);
++        // A maximizable window lets Windows 11's Aero Snap win a drag toward the
++        // top edge: the drop maximizes instead of docking, and the top dock can
++        // never engage (left/right survive because their tiled results still sit
++        // on an edge). Non-maximizable windows are exempt from drag snapping.
++        if (typeof getWindow().setMaximizable === 'function') getWindow().setMaximizable(false);
++        if (typeof getWindow().setIgnoreMouseEvents === 'function') getWindow().setIgnoreMouseEvents(false);
++        if (typeof getWindow().setFocusable === 'function') getWindow().setFocusable(true);
++        if (typeof getWindow().setSkipTaskbar === 'function') getWindow().setSkipTaskbar(windowChrome.skipTaskbarForSettings(getSettings()));
++        windowChrome.syncTaskbarZOrder();
++        startEdgeCursorPolling();
++        return;
++      }
++    }
++    if (edgeAutoHideState.hidden && canUseEdgeAutoHide(getSettings())) {
++      // Edge auto-hide hidden state: keep window at hidden position. Mode-guarded
++      // so switching away from edge mode can never strand the window off-screen.
++      // Position-only: keep the current size, same reasoning as the startup path.
++      if (edgeAutoHideState.hiddenBounds) {
++        const kept = getWindow().getBounds();
++        getWindow().setBounds({
++          x: edgeAutoHideState.hiddenBounds.x,
++          y: edgeAutoHideState.hiddenBounds.y,
++          width: kept.width,
++          height: kept.height
++        });
++      }
++      getWindow().setAlwaysOnTop(true, windowChrome.floatingAlwaysOnTopLevel());
++      if (typeof getWindow().setMovable === 'function') getWindow().setMovable(true);
++      if (typeof getWindow().setResizable === 'function') getWindow().setResizable(true);
++      // Same Aero-Snap guard as the startup path above.
++      if (typeof getWindow().setMaximizable === 'function') getWindow().setMaximizable(false);
++      if (typeof getWindow().setIgnoreMouseEvents === 'function') getWindow().setIgnoreMouseEvents(false);
++      if (typeof getWindow().setFocusable === 'function') getWindow().setFocusable(true);
++      if (typeof getWindow().setSkipTaskbar === 'function') getWindow().setSkipTaskbar(windowChrome.skipTaskbarForSettings(getSettings()));
++      windowChrome.syncTaskbarZOrder();
++      startEdgeCursorPolling();
++      return;
++    }
++    const behavior = describeWindowBehavior(getSettings());
++    getWindow().setAlwaysOnTop(behavior.alwaysOnTop, windowChrome.floatingAlwaysOnTopLevel());
++    if (typeof getWindow().setMovable === 'function') getWindow().setMovable(behavior.draggable);
++    if (typeof getWindow().setResizable === 'function') getWindow().setResizable(behavior.resizable);
++    // Edge mode must not be maximizable: Windows 11 claims a drag toward the top
++    // edge for its own maximize, which starves the top dock. Restore the flag in
++    // every other mode so behavior switches keep the window maximizable.
++    if (typeof getWindow().setMaximizable === 'function') getWindow().setMaximizable(behavior.mode !== 'edge');
++    if (typeof getWindow().setIgnoreMouseEvents === 'function') {
++      getWindow().setIgnoreMouseEvents(behavior.mousePassthrough);
++    }
++    if (typeof getWindow().setFocusable === 'function') getWindow().setFocusable(behavior.focusable);
++    if (typeof getWindow().setSkipTaskbar === 'function') getWindow().setSkipTaskbar(windowChrome.skipTaskbarForSettings(getSettings()));
++    if (!behavior.focusable && typeof getWindow().blur === 'function') getWindow().blur();
++    windowChrome.syncTaskbarZOrder();
++    // If switching to edge mode, schedule auto-hide if near edge
++    if (behavior.mode === 'edge') {
++      scheduleEdgeAutoHide();
++    } else {
++      stopEdgeAutoHideTimers();
++      // Clear edge state when leaving edge mode
++      if (getSettings().edgeAutoHideBounds) {
++        delete getSettings().edgeAutoHideBounds;
++        saveSettings();
++      }
++    }
++  }
++
++  // Body of main.js' uncaughtException handler (edge portion). Called from the
++  // process-level handler that stays in main.js.
++  function handleUncaught(err) {
++    try {
++      edgeLog('uncaught', (err && err.stack) || String(err));
++    } catch (_) { /* logging must never throw */ }
++    try {
++      edgeAutoHideState.animatingUntil = 0;
++      edgeAutoHideState.guardTripped = true;
++      clearEdgeCollapseTimer();
++      if (edgeAutoHideState.desired === 'hidden') reconcileEdgeAutoHide();
++    } catch (_) { /* recovery must never throw */ }
++  }
++
++  // Body of the slow keeper interval in main.js (app.whenReady): re-arms the
++  // poll when it is missing and then reconciles.
++  function keeperTick() {
++    if (!canUseEdgeAutoHide(getSettings())) return;
++    if (!getWindow() || getWindow().isDestroyed() || !getWindow().isVisible()) return;
++    if (!edgeAutoHideState.pollTimer) startEdgeCursorPolling();
++    reconcileEdgeAutoHide();
++  }
++
++  // Body of the 'edgeAutoHide:expand' IPC handler in main.js.
++  function expand() {
++    return expandEdge();
++  }
++
++  // Body of the 'edgeAutoHide:collapse' IPC handler in main.js.
++  function collapse() {
++    if (!getWindow() || getWindow().isDestroyed() || !canUseEdgeAutoHide(getSettings())) return false;
++    if (edgeAutoHideState.hidden) return true;
++    const bounds = getWindow().getBounds();
++    return maybeCollapseEdge(bounds);
++  }
++
++  // Predicate for main.js persistBoundsSoon(): the dock is hidden and its
++  // expanded bounds are tracked, so hidden geometry must not reach windowBounds.
++  function isHiddenWithExpandedBounds() {
++    return edgeAutoHideState.hidden && edgeAutoHideState.expandedBounds;
++  }
++
++  return {
++    scheduleEdgeAutoHide,
++    syncEdgeAutoHideAvailability,
++    syncEdgeDockGeometry,
++    stopEdgeAutoHideTimers,
++    edgeLog,
++    edgeDebug,
++    applyWindowSettings,
++    attachWindow,
++    handleUncaught,
++    keeperTick,
++    expand,
++    collapse,
++    isHiddenWithExpandedBounds
++  };
++}
++
++module.exports = { createEdgeAutoHideController };
 diff --git a/src/electron/edgeDock/controller.js b/src/electron/edgeDock/controller.js
-index d9f68123..fb4d3810 100644
+index 00c3575b..fd665ca6 100644
 --- a/src/electron/edgeDock/controller.js
 +++ b/src/electron/edgeDock/controller.js
-@@ -88,6 +88,7 @@ function createEdgeDockController(deps) {
-     applyShapeMask,
-     installNonActivatingInput = () => {},
-     primaryButtonDown = () => null,
-+    probeDockInput = null,
-     onToggleRateMode,
-     onSwitchCodexAccount,
-     canRefreshLimits = () => false,
-@@ -169,6 +170,19 @@ function createEdgeDockController(deps) {
+@@ -171,6 +171,17 @@ function createEdgeDockController(deps) {
    let placementOverride = null;
    let fullScreen = false;
    let fullScreenCheckedAt = -Infinity;
-+  // Dock input health. Electron 43 answers WM_MOUSEACTIVATE with
-+  // MA_NOACTIVATEANDEAT on these windows after a native shell rebuild, which
-+  // eats every hardware click while hover moves keep flowing ("paints fine,
-+  // cannot be dragged"). The poll probes for that state, tries to recover via
-+  // a focusable toggle, and otherwise replays presses into the page through
-+  // the debugger protocol, which bypasses the broken OS activation path.
++  // Dock input resilience. A healthy page acks its presses (edgeDock:inputAck)
++  // and the replay below stays dormant; a page that stops acking gets its
++  // presses injected through the debugger protocol, which bypasses every
++  // broken OS input-routing state we have been able to produce. (An earlier
++  // WM_MOUSEACTIVATE probe here was observability-only and got removed: a
++  // controlled experiment showed MA answers are not the gate.)
 +  const inputHeal = {
-+    broken: false,
-+    lastProbeAt: 0,
 +    lastAckAt: { peek: 0, rail: 0, bubble: 0 },
 +    // { surface, pendingSince, replaying, lastX, lastY } while a press is held
 +    replay: null
@@ -264,7 +974,7 @@ index d9f68123..fb4d3810 100644
    let ipcRegistered = false;
    let displayListenersAttached = false;
    const shapes = { peek: null, rail: null, bubble: null };
-@@ -1203,7 +1217,7 @@ function createEdgeDockController(deps) {
+@@ -1205,7 +1216,7 @@ function createEdgeDockController(deps) {
      const snapshot = intent.snapshot();
      // The approach zone is on the way to the handle, and only the poll lets the
      // handle take the pointer, so it runs at the active rate from there on.
@@ -273,7 +983,7 @@ index d9f68123..fb4d3810 100644
      pollTimer = setTimeout(poll, delay);
    }
  
-@@ -1215,6 +1229,8 @@ function createEdgeDockController(deps) {
+@@ -1217,6 +1228,8 @@ function createEdgeDockController(deps) {
        const current = layout();
        syncRailPointer();
        syncBubblePointer();
@@ -282,7 +992,7 @@ index d9f68123..fb4d3810 100644
        if (drag) {
          tickDrag(point, current);
        } else if (current) {
-@@ -1284,6 +1300,194 @@ function createEdgeDockController(deps) {
+@@ -1286,6 +1299,163 @@ function createEdgeDockController(deps) {
      }
    }
  
@@ -325,39 +1035,9 @@ index d9f68123..fb4d3810 100644
 +    }
 +  }
 +
-+  const INPUT_PROBE_INTERVAL_MS = 2000;
 +  // How long a held press may stay un-acked before the poll concludes the page
 +  // never received it and replays the press over the debugger protocol.
 +  const REPLAY_ACK_WAIT_MS = 120;
-+
-+  function probeBroken() {
-+    if (typeof deps.probeDockInput !== 'function') return null;
-+    try {
-+      return deps.probeDockInput();
-+    } catch (_) {
-+      return null;
-+    }
-+  }
-+
-+  // Observability only. WM_MOUSEACTIVATE answers were once suspected as the
-+  // eat-clicks mechanism, but a controlled experiment (SendInput clicks against
-+  // a focusable:false window reporting its own events) showed the real input
-+  // path reaches the page with MA=4, so the answer is not the gate. The dock's
-+  // actual resilience comes from the ack-gated replay below: a healthy page
-+  // acks its presses and the replay stays dormant; a page that stops acking
-+  // gets its presses injected over the debugger protocol, which reaches it in
-+  // every state we have been able to produce.
-+  function ensureInputAlive() {
-+    if (typeof deps.probeDockInput !== 'function') return;
-+    const now = Date.now();
-+    if (now - inputHeal.lastProbeAt < INPUT_PROBE_INTERVAL_MS) return;
-+    inputHeal.lastProbeAt = now;
-+    const probe = probeBroken();
-+    if (!probe) return;
-+    if (probe.broken === inputHeal.broken) return;
-+    inputHeal.broken = probe.broken;
-+    logger(`[edge-dock] dock windows answer WM_MOUSEACTIVATE with ${probe.broken ? 'MA_NOACTIVATEANDEAT (expected on this Electron; input replay fallback covers presses)' : 'MA_NOACTIVATE'}; codes=${probe.codes.join(',')}`);
-+  }
 +
 +  function replayClientPoint(point, surface) {
 +    const win = windows[surface];
@@ -457,7 +1137,6 @@ index d9f68123..fb4d3810 100644
 +
 +  function ensureTopmost() {
 +    ensureInputMatchesVisibility();
-+    ensureInputAlive();
 +    if (typeof deps.forceTopmostDockWindows === 'function') {
 +      try {
 +        if (deps.forceTopmostDockWindows() > 0) return;
@@ -477,7 +1156,7 @@ index d9f68123..fb4d3810 100644
    function followDrag(point, current) {
      let targetDisplay;
      try { targetDisplay = screen.getDisplayNearestPoint?.(point) || display(); } catch (_) { targetDisplay = display(); }
-@@ -1431,6 +1635,15 @@ function createEdgeDockController(deps) {
+@@ -1433,6 +1603,15 @@ function createEdgeDockController(deps) {
      ipcMain.on('edgeDock:cardFrame', (event, payload) => {
        if (surfaceFor(event.sender) === 'bubble') cardFrameDriver.frame(payload?.motionId);
      });
@@ -494,7 +1173,7 @@ index d9f68123..fb4d3810 100644
        if (surfaceFor(event.sender) !== 'rail') return;
        handleDragEnd();
 diff --git a/src/electron/edgeDock/geometry.js b/src/electron/edgeDock/geometry.js
-index c9090b53..41f358b8 100644
+index 83478af0..e405c6d6 100644
 --- a/src/electron/edgeDock/geometry.js
 +++ b/src/electron/edgeDock/geometry.js
 @@ -72,8 +72,10 @@ const EDGE_DOCK_TIMING = Object.freeze({
@@ -526,10 +1205,10 @@ index 8ddb4fb4..74fd89ce 100644
    dragEnd: () => ipcRenderer.send('edgeDock:dragEnd'),
 diff --git a/src/electron/edgeDock/topmost.js b/src/electron/edgeDock/topmost.js
 new file mode 100644
-index 00000000..17fe9fe8
+index 00000000..517c150c
 --- /dev/null
 +++ b/src/electron/edgeDock/topmost.js
-@@ -0,0 +1,179 @@
+@@ -0,0 +1,147 @@
 +'use strict';
 +
 +// Electron's setAlwaysOnTop stops landing on the dock's transparent frameless
@@ -551,17 +1230,6 @@ index 00000000..17fe9fe8
 +const HWND_TOPMOST = -1; // (HWND)-1
 +const GWL_EXSTYLE = -20;
 +const WS_EX_TRANSPARENT = 0x00000020;
-+// WM_MOUSEACTIVATE with wParam=the window and lParam=MAKELPARAM(HTCLIENT,
-+// WM_LBUTTONDOWN): asking a window how it will treat a real click. Healthy
-+// non-activating windows answer MA_NOACTIVATE (3) and the click is delivered;
-+// Electron 43 flipped to MA_NOACTIVATEANDEAT (4) after native shell rebuilds,
-+// which eats every hardware click while hover moves keep flowing - the "dock
-+// paints fine but cannot be dragged" state. The probe is a pure query: the
-+// activation decision is made by win32k from the return value, not by the
-+// handler, so asking costs nothing and changes nothing.
-+const WM_MOUSEACTIVATE = 0x0021;
-+const MA_PROBE_LPARAM = (1 << 16) | 0x0201; // HTCLIENT | WM_LBUTTONDOWN
-+const MA_NOACTIVATEANDEAT = 4;
 +
 +let api;
 +let lastHwndKey = null;
@@ -580,10 +1248,7 @@ index 00000000..17fe9fe8
 +      'int SetWindowPos(uintptr_t hwnd, intptr_t after, int x, int y, int cx, int cy, uint flags)'
 +    ),
 +    isWindowVisible: user32.func('bool IsWindowVisible(uintptr_t hwnd)'),
-+    isWindow: user32.func('bool IsWindow(uintptr_t hwnd)'),
-+    sendMessage: user32.func(
-+      'intptr_t SendMessageW(uintptr_t hwnd, uint msg, uintptr_t wp, intptr_t lp)'
-+    )
++    isWindow: user32.func('bool IsWindow(uintptr_t hwnd)')
 +  };
 +}
 +
@@ -649,23 +1314,6 @@ index 00000000..17fe9fe8
 +  return raised;
 +}
 +
-+// Asks every visible dock window how it treats a real click. `broken` means at
-+// least one answers MA_NOACTIVATEANDEAT, i.e. hardware clicks on that surface
-+// never reach the renderer. Returns null when the native layer is unavailable.
-+function probeDockInput(deps = {}) {
-+  const a = deps.api || loadApi();
-+  if (!a) return null;
-+  const hwnds = dockHwnds(a);
-+  const codes = hwnds.map((hwnd) => {
-+    try {
-+      return Number(a.sendMessage(hwnd, WM_MOUSEACTIVATE, hwnd, MA_PROBE_LPARAM));
-+    } catch (_) {
-+      return null;
-+    }
-+  });
-+  return { hwnds, codes, broken: codes.some((code) => code === MA_NOACTIVATEANDEAT) };
-+}
-+
 +// Per-window variant kept for callers that already hold a live window object;
 +// the by-title sweep above is the primary path because JS-held handles go
 +// stale across upstream's native shell rebuilds.
@@ -706,8 +1354,7 @@ index 00000000..17fe9fe8
 +  createApi,
 +  dockHwnds,
 +  forceTopmost,
-+  forceTopmostDockWindows,
-+  probeDockInput
++  forceTopmostDockWindows
 +};
 diff --git a/src/electron/edgePopupGuard.js b/src/electron/edgePopupGuard.js
 new file mode 100644
@@ -842,19 +1489,18 @@ index 77571fa1..f9315e9e 100644
  
  function floatingBubbleNativeGlassEnabled(settings = {}) {
 diff --git a/src/electron/main.js b/src/electron/main.js
-index dd770de7..e12f1c83 100644
+index 8bdbf7d7..d82c5cff 100644
 --- a/src/electron/main.js
 +++ b/src/electron/main.js
-@@ -27,6 +27,8 @@ const fontSettingsApi = require('../shared/fontSettings');
+@@ -35,6 +35,7 @@ const fontSettingsApi = require('../shared/fontSettings');
  const motionPreferenceApi = require('./motionPreference');
  const tokenNumberAnimationApi = require('./tokenNumberAnimation');
  const { clearBackgroundImage, getBackgroundImage, importBackgroundImage } = require('./backgroundImage');
-+const edgeAutoHideApi = require('./edgeAutoHide');
-+const edgePopupGuardApi = require('./edgePopupGuard');
++const { createEdgeAutoHideController } = require('./edgeAutoHideController');
  const { createClientSourceIpcHandlers } = require('./clientSourceIpc');
  const { createClaudeWebFetch } = require('./providers/claude/webFetch');
  const { createMimoExchangeFetch } = require('./providers/mimo/exchangeFetch');
-@@ -473,6 +475,7 @@ const { NOTCH_PANEL_STAT_ITEMS, notchLimitItems, notchPanelItems, notchWeek } =
+@@ -484,6 +485,7 @@ const { NOTCH_PANEL_STAT_ITEMS, notchLimitItems, notchPanelItems, notchWeek } =
  const { createNotchHistory } = require('./notch/history');
  const trayLayoutApi = require('../shared/trayLayout');
  const { createFullScreenProbe } = require('./edgeDock/fullScreenProbe');
@@ -862,7 +1508,7 @@ index dd770de7..e12f1c83 100644
  const {
    normalizeEdgeDockCustomScale,
    normalizeEdgeDockDisplayId,
-@@ -658,6 +661,7 @@ function defaultSettings() {
+@@ -670,6 +672,7 @@ function defaultSettings() {
      liveTokenRateScope: 'all',
      compactTokenUnits: 'western',
      tokenRateMode: 'speed',
@@ -870,7 +1516,7 @@ index dd770de7..e12f1c83 100644
      heatmapMetric: 'cost',
      modelRankingMetric: 'tokens',
      homeActiveDaysWindow: 'all',
-@@ -842,6 +846,10 @@ function normalizeTokenRateMode(value) {
+@@ -856,6 +859,10 @@ function normalizeTokenRateMode(value) {
    return value === 'burn' ? 'burn' : 'speed';
  }
  
@@ -881,478 +1527,47 @@ index dd770de7..e12f1c83 100644
  function normalizeLiveTokenRateScope(value) {
    return value === 'device' ? 'device' : 'all';
  }
-@@ -2264,6 +2272,7 @@ function restoredBounds() {
+@@ -2279,6 +2286,28 @@ function restoredBounds() {
  let persistBoundsTimer = null;
  let floatingBubbleAutoCollapseTimer = null;
  const floatingBubbleState = { collapsed: false, side: null, collapsedBounds: null, expandedBounds: null, suppressNextCollapse: false, contentSize: null };
-+const edgeAutoHideState = { hidden: false, side: null, expandedBounds: null, hiddenBounds: null, animatingUntil: 0, desired: null, guardTripped: false, geometryReady: false, nativeRejectStreak: 0, lastResizeAt: 0, collapseTimer: null, pollTimer: null };
++// Edge auto-hide: the whole docked-edge state machine lives in
++// edgeAutoHideController.js; main.js only constructs it here and forwards to it.
++const edgeAutoHide = createEdgeAutoHideController({
++  getWindow: () => mainWindow,
++  getDashboardWindow: () => dashboardWindow,
++  getSettings: () => settings,
++  saveSettings,
++  displayForBounds,
++  persistWindowBounds,
++  persistBoundsSoon,
++  stopTaskbarZOrderKeeper,
++  describeWindowBehavior,
++  motionPreferenceApi,
++  nativeTheme,
++  screen,
++  windowChrome: {
++    skipTaskbarForSettings,
++    floatingAlwaysOnTopLevel,
++    syncTaskbarZOrder
++  }
++});
++const { scheduleEdgeAutoHide, syncEdgeAutoHideAvailability, syncEdgeDockGeometry, stopEdgeAutoHideTimers, edgeLog, edgeDebug } = edgeAutoHide;
  let mainWindowChrome = { collapsedFloatingBubble: false };
  let mainWindowReplacementEpoch = 0;
  let mainWindowReplacementTask = Promise.resolve();
-@@ -2519,6 +2528,451 @@ function syncFloatingBubbleAvailability() {
-   sendFloatingBubbleState();
- }
- 
-+// Edge auto-hide: slide window off-screen when docked to an edge, slide back on hover.
-+function stopEdgeAutoHideTimers() {
-+  if (edgeAutoHideState.collapseTimer) { clearTimeout(edgeAutoHideState.collapseTimer); edgeAutoHideState.collapseTimer = null; }
-+  if (edgeAutoHideState.pollTimer) { clearInterval(edgeAutoHideState.pollTimer); edgeAutoHideState.pollTimer = null; }
-+}
-+
-+function edgeReducedMotion() {
-+  return motionPreferenceApi.shouldReduceMotion(settings?.reduceMotion, nativeTheme.shouldReduceMotion);
-+}
-+
-+// While the user is grabbing an edge to resize, the window must never fold
-+// back under their hand. Electron exposes no "a native resize drag is active"
-+// API, so resize activity is observed through the resize events: a grace window
-+// after the last one vetoed every collapse arming/firing.
-+const EDGE_RESIZE_GRACE_MS = 700;
-+
-+function edgeResizeGraceActive() {
-+  return Date.now() - edgeAutoHideState.lastResizeAt < EDGE_RESIZE_GRACE_MS;
-+}
-+
-+// The dashboard is a persistent second window of ours — a workspace the user
-+// deliberately works in, unlike the transient native popups the guard exists
-+// for. It must never hold the dock open, or the home panel would stay spread
-+// over the dashboard until the app restarted. Any future persistent window
-+// (a widget, a separate editor) belongs on this same list.
-+function edgePersistentWindowHwnds() {
-+  if (!dashboardWindow || dashboardWindow.isDestroyed()) return [];
-+  try {
-+    const hwnd = edgePopupGuardApi.hwndOf(dashboardWindow);
-+    return hwnd ? [hwnd] : [];
-+  } catch (_) {
-+    return [];
-+  }
-+}
-+
-+// Native popups we spawn (the vendor-color chooser, context menus, <select>
-+// dropdowns) are windows of our own process OUTSIDE the BrowserWindow rect.
-+// While the cursor is on one of them — or one holds focus — the docked window
-+// must not fold, or the user loses the popup mid-interaction. win32 only; the
-+// guard degrades to false everywhere else and when the FFI is unavailable.
-+function edgeNativePopupHoldsCursor(cursor) {
-+  if (process.platform !== 'win32' || !mainWindow || mainWindow.isDestroyed()) return false;
-+  try {
-+    // Electron screen APIs speak DIPs; WindowFromPoint speaks physical pixels.
-+    // Convert when the scales differ (identity at 100% zoom).
-+    let physical = cursor;
-+    try {
-+      if (typeof screen.dipToScreenPoint === 'function') physical = screen.dipToScreenPoint(cursor);
-+    } catch (_) {}
-+    return edgePopupGuardApi.popupHoldsCollapse({
-+      mainHwnd: edgePopupGuardApi.hwndOf(mainWindow),
-+      cursor: physical,
-+      persistentHwnds: edgePersistentWindowHwnds(),
-+      debug: (m) => edgeDebug('popup', 'cursor=' + JSON.stringify(cursor) + ' physical=' + JSON.stringify(physical) + ' | ' + m)
-+    });
-+  } catch (err) {
-+    edgeDebug('popup', 'guard threw: ' + ((err && err.message) || String(err)));
-+    return false;
-+  }
-+}
-+
-+// ---- Edge geometry guard -------------------------------------------------
-+// No non-finite coordinate may ever reach an Electron window API (a NaN reaches
-+// setPosition as "Error processing argument at index 1, conversion failure" and
-+// surfaces as a modal crash dialog). A rejected frame is logged verbatim, once,
-+// so the next occurrence is self-diagnosing instead of needing a re-probe.
-+function edgeLog(scope, message, file = 'token-monitor-edge-error.log') {
-+  try {
-+    require('fs').appendFileSync(
-+      require('path').join(require('os').tmpdir(), file),
-+      new Date().toISOString() + ' [' + scope + '] ' + message + '\n');
-+  } catch (_) { /* logging must never throw */ }
-+}
-+
-+// Decision-path logging is opt-in: enabled via settings.edgeAutoHideDebug or
-+// TOKEN_MONITOR_EDGE_DEBUG=1, writing to a separate debug log so the error
-+// log keeps its "only written on a failure" contract.
-+function edgeDebugEnabled() {
-+  return settings?.edgeAutoHideDebug === true || process.env.TOKEN_MONITOR_EDGE_DEBUG === '1';
-+}
-+
-+function edgeDebug(scope, message) {
-+  if (!edgeDebugEnabled()) return;
-+  edgeLog(scope, message, 'token-monitor-edge-debug.log');
-+}
-+
-+function edgeGuardTripped() {
-+  return edgeAutoHideState.guardTripped === true;
-+}
-+
-+// An "in flight" marker must expire on its own. A boolean cleared only by the
-+// animation's success path is what previously wedged auto-hide forever: one
-+// thrown frame left the flag set, the cursor poll early-returned on it, and the
-+// window never hid again.
-+function edgeIsAnimating() {
-+  return Date.now() < edgeAutoHideState.animatingUntil;
-+}
-+
-+function edgeAnimationDuration(duration) {
-+  // Once a frame has been rejected we no longer trust animated frames, so the
-+  // rest of the session jumps instead of tweening.
-+  return edgeGuardTripped() ? 0 : duration;
-+}
-+
-+function setEdgeWindowPosition(x, y) {
-+  if (!mainWindow || mainWindow.isDestroyed()) return false;
-+  // Before the first show the native layer can reject even finite positions.
-+  // Skipping silently is not an error: the watchdog and the cursor poll
-+  // converge the geometry once the window is shown, so this must not trip the
-+  // session-wide animation degrade.
-+  if (!edgeAutoHideState.geometryReady) return false;
-+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
-+    if (!edgeGuardTripped()) {
-+      edgeAutoHideState.guardTripped = true;
-+      edgeLog('geometry-guard', 'refused a non-finite position: x=' + String(x)
-+        + ' y=' + String(y) + ' -- tweening disabled for this session');
-+    }
-+    return false;
-+  }
-+  try {
-+    mainWindow.setPosition(x, y, false);
-+  } catch (err) {
-+    // Defensive: the native layer has been observed to intermittently reject a
-+    // call whose coordinates we already verified (an occasional late tween
-+    // frame; the same call succeeds on the next transition). That is transient,
-+    // so it degrades the session to instant-only moves only after REPEATED
-+    // consecutive failures -- one flaky frame must not cost the whole session
-+    // its animation. (The startup class of rejections is prevented upstream by
-+    // the geometryReady gate, so what survives to here is rare and transient.)
-+    // Never let it escape as an uncaught exception: Electron would surface it
-+    // as a modal dialog.
-+    edgeAutoHideState.nativeRejectStreak += 1;
-+    edgeLog('geometry-guard', 'native setPosition rejected a finite position: x=' + String(x)
-+      + ' y=' + String(y) + ' err=' + ((err && err.message) || String(err))
-+      + ' streak=' + edgeAutoHideState.nativeRejectStreak);
-+    if (edgeAutoHideState.nativeRejectStreak >= 3) {
-+      edgeAutoHideState.guardTripped = true;
-+      edgeLog('geometry-guard', 'repeated native rejections -- tweening disabled for this session');
-+    }
-+    return false;
-+  }
-+  edgeAutoHideState.nativeRejectStreak = 0;
-+  return true;
-+}
-+
-+function animateWindowPosition(from, to, duration, onComplete) {
-+  if (!mainWindow || mainWindow.isDestroyed()) { if (onComplete) onComplete(); return; }
-+  const target = to && Number.isFinite(to.x) && Number.isFinite(to.y) ? to : null;
-+  const source = from && Number.isFinite(from.x) && Number.isFinite(from.y) ? from : null;
-+  if (!target) {
-+    setEdgeWindowPosition(to ? to.x : undefined, to ? to.y : undefined);
-+    if (onComplete) onComplete();
-+    return;
-+  }
-+  const effective = edgeAnimationDuration(duration);
-+  if (!source || edgeReducedMotion() || effective <= 0) {
-+    setEdgeWindowPosition(target.x, target.y);
-+    if (onComplete) onComplete();
-+    return;
-+  }
-+  edgeAutoHideState.animatingUntil = Date.now() + effective + 100;
-+  const startTime = Date.now();
-+  const interval = 16; // ~60fps
-+  function tick() {
-+    if (!mainWindow || mainWindow.isDestroyed()) { edgeAutoHideState.animatingUntil = 0; return; }
-+    const elapsed = Date.now() - startTime;
-+    const t = Math.min(1, elapsed / effective);
-+    // Cubic ease-out: 1 - (1-t)^3
-+    const eased = 1 - Math.pow(1 - t, 3);
-+    const x = Math.round(source.x + (target.x - source.x) * eased);
-+    const y = Math.round(source.y + (target.y - source.y) * eased);
-+    // Snap straight onto the target instead of tweening the asymptotic tail:
-+    // the sub-pixel frames add nothing visually, and the native layer has been
-+    // observed to intermittently reject exactly such a late frame.
-+    const remaining = Math.max(Math.abs(target.x - x), Math.abs(target.y - y));
-+    if (t >= 1 || remaining < 1) {
-+      if (!setEdgeWindowPosition(target.x, target.y)) {
-+        edgeDebug('animate', 'final frame rejected to=' + JSON.stringify(target));
-+      }
-+      edgeAutoHideState.animatingUntil = 0;
-+      if (onComplete) onComplete();
-+      return;
-+    }
-+    if (!setEdgeWindowPosition(x, y)) {
-+      edgeDebug('animate', 'frame rejected from=' + JSON.stringify(source) + ' to=' + JSON.stringify(target));
-+      edgeAutoHideState.animatingUntil = 0;
-+      if (onComplete) onComplete();
-+      return;
-+    }
-+    setTimeout(tick, interval);
-+  }
-+  tick();
-+}
-+
-+function collapseEdge(expandedBounds, side) {
-+  if (!mainWindow || mainWindow.isDestroyed() || !expandedBounds || !side) return false;
-+  stopEdgeAutoHideTimers();
-+  const display = displayForBounds(expandedBounds);
-+  if (!display) return false;
-+  const hidden = edgeAutoHideApi.edgeHiddenBounds(expandedBounds, side, display, process.platform);
-+  if (!hidden) return false;
-+  edgeDebug('collapse', 'side=' + side + ' from=' + JSON.stringify(mainWindow.getBounds()) + ' to=' + JSON.stringify(hidden));
-+  edgeAutoHideState.hidden = true;
-+  edgeAutoHideState.desired = 'hidden';
-+  edgeAutoHideState.side = side;
-+  edgeAutoHideState.expandedBounds = expandedBounds;
-+  edgeAutoHideState.hiddenBounds = hidden;
-+  settings.edgeAutoHideBounds = { side, expandedBounds, hiddenBounds: hidden };
-+  saveSettings();
-+  const current = mainWindow.getBounds();
-+  animateWindowPosition(current, hidden, edgeAutoHideApi.EDGE_ANIMATION_DURATION_MS, () => {
-+    startEdgeCursorPolling();
-+  });
-+  return true;
-+}
-+
-+function expandEdge() {
-+  if (!mainWindow || mainWindow.isDestroyed() || !edgeAutoHideState.hidden) return false;
-+  stopEdgeAutoHideTimers();
-+  const expanded = edgeAutoHideState.expandedBounds;
-+  if (!expanded) return false;
-+  edgeDebug('expand', 'side=' + edgeAutoHideState.side + ' from=' + JSON.stringify(mainWindow.getBounds()) + ' to=' + JSON.stringify(expanded));
-+  edgeAutoHideState.hidden = false;
-+  edgeAutoHideState.desired = 'revealed';
-+  const current = mainWindow.getBounds();
-+  animateWindowPosition(current, expanded, edgeAutoHideApi.EDGE_ANIMATION_DURATION_MS, () => {
-+    // Re-arm the cursor poll FIRST. expandEdge() already stopped the poll, and the
-+    // poll is the only thing that can ever hide the window again -- so a throw from
-+    // the persistence call below must not be able to skip it, or the window would
-+    // stay revealed forever with no timer left to collapse it.
-+    scheduleEdgeAutoHide();
-+    // Persist whatever bounds the window actually ended at: the user may have
-+    // resized while expanded, so state.expandedBounds alone can be stale.
-+    if (mainWindow && !mainWindow.isDestroyed()) {
-+      try {
-+        persistWindowBounds(mainWindow.getBounds());
-+      } catch (err) {
-+        try {
-+          require('fs').appendFileSync(
-+            require('path').join(require('os').tmpdir(), 'token-monitor-edge-error.log'),
-+            new Date().toISOString() + ' expandEdge persist failed: ' + (err && err.stack || err) + '\n');
-+        } catch (_) { /* a logging failure must never break the hide/show chain */ }
-+      }
-+    }
-+  });
-+  return true;
-+}
-+
-+// The cursor poll owns every hide/show transition; this entry point just (re)arms
-+// it, so blur/mode-switch/drag-release paths cannot race the poll into collapsing
-+// the window underneath the user's cursor.
-+function scheduleEdgeAutoHide() {
-+  if (!canUseEdgeAutoHide(settings)) return;
-+  startEdgeCursorPolling();
-+}
-+
-+// Keep state.expandedBounds in sync while the window sits expanded and docked,
-+// so re-hiding and re-expanding never animate to a stale size or position.
-+function trackEdgeExpandedBounds() {
-+  if (edgeIsAnimating() || edgeAutoHideState.hidden || !edgeAutoHideState.side) return;
-+  if (!canUseEdgeAutoHide(settings) || !mainWindow || mainWindow.isDestroyed()) return;
-+  edgeAutoHideState.expandedBounds = mainWindow.getBounds();
-+}
-+
-+// While HIDDEN, the window can be resized underneath us (display/DPI change or
-+// a programmatic resize). The remembered dock geometry must follow the new
-+// size, or the strip width drifts and the next start restores a stale size.
-+// Deliberately hidden-state only: while expanded the user may be mid-drag on
-+// an edge, and snapping the dock axis under their hand would fight the drag.
-+function syncEdgeDockGeometry() {
-+  if (!canUseEdgeAutoHide(settings) || edgeIsAnimating() || !edgeAutoHideState.hidden) return;
-+  if (!edgeAutoHideState.side || !mainWindow || mainWindow.isDestroyed()) return;
-+  const current = mainWindow.getBounds();
-+  const display = displayForBounds(current);
-+  if (!display) return;
-+  const side = edgeAutoHideState.side;
-+  const expanded = edgeAutoHideApi.edgeSnapToBounds(current, side, display, process.platform);
-+  const hidden = expanded && edgeAutoHideApi.edgeHiddenBounds(expanded, side, display, process.platform);
-+  if (!expanded || !hidden) return;
-+  edgeAutoHideState.expandedBounds = expanded;
-+  edgeAutoHideState.hiddenBounds = hidden;
-+  settings.edgeAutoHideBounds = { side, expandedBounds: expanded, hiddenBounds: hidden };
-+  saveSettings();
-+  setEdgeWindowPosition(hidden.x, hidden.y);
-+  edgeDebug('resize-sync', 'side=' + side + ' bounds=' + JSON.stringify(hidden));
-+}
-+
-+function clearEdgeCollapseTimer() {
-+  if (edgeAutoHideState.collapseTimer) {
-+    clearTimeout(edgeAutoHideState.collapseTimer);
-+    edgeAutoHideState.collapseTimer = null;
-+  }
-+}
-+
-+// The one and only executor for every hide/show transition. It is idempotent:
-+// it compares the desired state against the real window geometry and only moves
-+// when the two disagree. A lost timer or a killed poll therefore cannot strand the
-+// window -- the next reconcile simply re-discovers the drift and corrects it.
-+function reconcileEdgeAutoHide() {
-+  if (!canUseEdgeAutoHide(settings)) return false;
-+  if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isVisible()) return false;
-+  if (edgeIsAnimating()) return false;
-+  const desired = edgeAutoHideState.desired;
-+  if (desired === 'hidden') {
-+    if (edgeAutoHideState.hidden) return false;
-+    const bounds = mainWindow.getBounds();
-+    const display = displayForBounds(bounds);
-+    if (!display) return false;
-+    const side = edgeAutoHideState.side || edgeAutoHideApi.edgeSide(bounds, display, process.platform);
-+    if (!side) return false;
-+    const snapped = edgeAutoHideApi.edgeSnapToBounds(bounds, side, display, process.platform);
-+    return collapseEdge(snapped, side);
-+  }
-+  if (desired === 'revealed') {
-+    if (!edgeAutoHideState.hidden) return false;
-+    return expandEdge();
-+  }
-+  return false;
-+}
-+
-+// The cursor poll only DECIDES the desired state; it never moves the window
-+// itself. Keeping a single executor means no stray stopTimer() can leave the
-+// window with nothing left to hide it.
-+function startEdgeCursorPolling() {
-+  stopEdgeAutoHideTimers();
-+  if (!canUseEdgeAutoHide(settings)) return;
-+  if (typeof screen.getCursorScreenPoint !== 'function') return;
-+  edgeAutoHideState.pollTimer = setInterval(() => {
-+    if (!mainWindow || mainWindow.isDestroyed() || edgeIsAnimating()) return;
-+    if (!mainWindow.isVisible()) return;
-+    if (!canUseEdgeAutoHide(settings)) { stopEdgeAutoHideTimers(); return; }
-+    let cursor;
-+    try { cursor = screen.getCursorScreenPoint(); } catch (_) { return; }
-+    const expanded = edgeAutoHideState.expandedBounds;
-+    const side = edgeAutoHideState.side;
-+    if (edgeAutoHideState.hidden) {
-+      if (!expanded || !side) return;
-+      const display = displayForBounds(expanded);
-+      if (!display) return;
-+      // Hidden state: only the slim strip zone (edge ± perpendicular tolerance,
-+      // constrained along the window's own span) may reveal the window. The full
-+      // expanded rect must NOT trigger, or sweeping the cursor across the middle
-+      // of the screen would pull the window out.
-+      if (edgeAutoHideApi.edgeTriggerHitTest(cursor, expanded, side, display, process.platform)) {
-+        edgeDebug('poll', 'hidden hit side=' + side + ' cursor=' + JSON.stringify(cursor));
-+        clearEdgeCollapseTimer();
-+        edgeAutoHideState.desired = 'revealed';
-+        reconcileEdgeAutoHide();
-+      }
-+      return;
-+    }
-+    // Expanded state (docked, or merely parked near an edge). Deliberately no
-+    // isFocused() gate: this window is focusable and keeps focus for long
-+    // stretches, so gating on focus meant the collapse never armed. The cursor
-+    // check alone already expresses "do not hide while the user is using it".
-+    const bounds = mainWindow.getBounds();
-+    const display = displayForBounds(bounds);
-+    if (!display) return;
-+    const dockSide = side || edgeAutoHideApi.edgeSide(bounds, display, process.platform);
-+    if (!dockSide) { clearEdgeCollapseTimer(); return; }
-+    const docked = edgeAutoHideApi.edgeSnapToBounds(bounds, dockSide, display, process.platform);
-+    // A cursor grabbing a resize border sits on the Win32 outer frame, OUTSIDE
-+    // the Electron rect — without the interaction margin the window folded
-+    // back up mid-resize, every single time.
-+    if (edgeAutoHideApi.edgeCursorInExpandedBounds(cursor, docked, edgeAutoHideApi.EDGE_INTERACTION_MARGIN_PX)) {
-+      clearEdgeCollapseTimer();
-+      edgeAutoHideState.desired = 'revealed';
-+      return;
-+    }
-+    if (edgeResizeGraceActive()) {
-+      // Resizing was seen moments ago: the cursor may have drifted past the
-+      // margin while the user still holds an edge. Never arm a collapse here.
-+      clearEdgeCollapseTimer();
-+      return;
-+    }
-+    if (edgeNativePopupHoldsCursor(cursor)) {
-+      // The cursor sits on one of our own native popups (vendor-color chooser,
-+      // context menu, <select>) — part of the interaction, not "the user left".
-+      clearEdgeCollapseTimer();
-+      edgeAutoHideState.desired = 'revealed';
-+      edgeDebug('poll', 'popup hold cursor=' + JSON.stringify(cursor));
-+      return;
-+    }
-+    if (!edgeAutoHideState.collapseTimer) {
-+      edgeDebug('poll', 'arm collapse side=' + dockSide + ' cursor=' + JSON.stringify(cursor));
-+      edgeAutoHideState.collapseTimer = setTimeout(() => {
-+        edgeAutoHideState.collapseTimer = null;
-+        if (!canUseEdgeAutoHide(settings)) return;
-+        // The user may have grabbed an edge or opened a popup after this timer
-+        // was armed; a collapse firing into either is a UX betrayal (and a
-+        // known source of transient native rejections).
-+        if (edgeResizeGraceActive()) return;
-+        let cursorNow = null;
-+        try { cursorNow = screen.getCursorScreenPoint(); } catch (_) { cursorNow = null; }
-+        if (cursorNow && edgeNativePopupHoldsCursor(cursorNow)) {
-+          edgeDebug('poll', 'collapse vetoed by popup at cursor=' + JSON.stringify(cursorNow));
-+          return;
-+        }
-+        // The grace period only flips the desired state; the move itself stays
-+        // with the single executor, so it remains subject to the geometry guard.
-+        edgeAutoHideState.desired = 'hidden';
-+        reconcileEdgeAutoHide();
-+      }, edgeAutoHideApi.EDGE_COLLAPSE_DELAY_MS);
-+    }
-+  }, 100); // Poll every 100ms
-+}
-+
-+function maybeCollapseEdge(bounds) {
-+  if (!canUseEdgeAutoHide(settings) || edgeAutoHideState.hidden) return false;
-+  const display = displayForBounds(bounds);
-+  if (!display) return false;
-+  const side = edgeAutoHideApi.edgeSide(bounds, display, process.platform);
-+  if (!side) return false;
-+  const snapped = edgeAutoHideApi.edgeSnapToBounds(bounds, side, display, process.platform);
-+  return collapseEdge(snapped, side);
-+}
-+
-+function canUseEdgeAutoHide(source = settings) {
-+  return edgeAutoHideApi.canUseEdgeAutoHide(source);
-+}
-+
-+function syncEdgeAutoHideAvailability() {
-+  if (!canUseEdgeAutoHide(settings)) {
-+    if (edgeAutoHideState.hidden) expandEdge();
-+    else {
-+      edgeAutoHideState.side = null;
-+      edgeAutoHideState.expandedBounds = null;
-+      edgeAutoHideState.hiddenBounds = null;
-+      stopEdgeAutoHideTimers();
-+    }
-+    return;
-+  }
-+  // If switching to edge mode and window is near an edge, collapse it
-+  if (mainWindow && !mainWindow.isDestroyed() && !edgeAutoHideState.hidden) {
-+    const bounds = mainWindow.getBounds();
-+    const display = displayForBounds(bounds);
-+    if (display) {
-+      const side = edgeAutoHideApi.edgeSide(bounds, display, process.platform);
-+      if (side) {
-+        scheduleEdgeAutoHide();
-+      }
-+    }
-+  }
-+}
-+
- function persistBoundsSoon() {
-   if (!mainWindow || mainWindow.isDestroyed()) return;
-   if (!shouldPersistWindowBounds(mainWindow)) {
-@@ -2536,6 +2990,10 @@ function persistBoundsSoon() {
+@@ -2551,6 +2580,10 @@ function persistBoundsSoon() {
        // Popover x/y is anchored to the tray icon each open; only the size carries over.
        if (prev.width === next.width && prev.height === next.height) return;
        settings.windowBounds = { ...prev, width: next.width, height: next.height };
-+    } else if (edgeAutoHideState.hidden && edgeAutoHideState.expandedBounds) {
++    } else if (edgeAutoHide.isHiddenWithExpandedBounds()) {
 +      // Edge auto-hide: don't persist hidden bounds to windowBounds.
 +      // The expanded bounds are already saved in settings.edgeAutoHideBounds.
 +      return;
      } else if (floatingBubbleState.collapsed && floatingBubbleState.expandedBounds) {
        floatingBubbleState.collapsedBounds = next;
        const display = displayForBounds(next);
-@@ -2803,6 +3261,7 @@ function readSettings() {
+@@ -2822,6 +2855,7 @@ function readSettings() {
      merged.interfaceFontFamily = fontSettingsApi.normalizeFontFamily(merged.interfaceFontFamily);
      merged.displayFontFamily = fontSettingsApi.normalizeFontFamily(merged.displayFontFamily);
      merged.tokenRateMode = normalizeTokenRateMode(merged.tokenRateMode);
@@ -1360,118 +1575,26 @@ index dd770de7..e12f1c83 100644
      if (saved.serviceProviderDisplayOrder !== undefined) {
        merged.serviceProviderDisplayOrder = String(saved.serviceProviderDisplayOrder || '');
      }
-@@ -3142,10 +3601,92 @@ function applyWindowSettings() {
+@@ -3163,17 +3197,7 @@ function applyWindowSettings() {
      applyCollapsedFloatingBubbleLimits(mainWindow.getBounds());
      return;
    }
-+  // Edge auto-hide: restore a saved hidden dock exactly once per session, before
-+  // any in-session edge state exists (edgeAutoHideState.side === null). Without
-+  // that guard, every applyWindowSettings() call (e.g. any settings change made
-+  // while the user is actively using the expanded window) would yank the window
-+  // back off-screen. Saved bounds are validated against the current displays so
-+  // an unplugged monitor cannot strand the window off-screen.
-+  if (canUseEdgeAutoHide(settings) && edgeAutoHideState.side === null && !edgeAutoHideState.hidden && settings.edgeAutoHideBounds) {
-+    const saved = settings.edgeAutoHideBounds;
-+    if (saved.side && saved.expandedBounds && saved.hiddenBounds
-+      && displayForBounds(saved.expandedBounds) && displayForBounds(saved.hiddenBounds)) {
-+      edgeAutoHideState.hidden = true;
-+      edgeAutoHideState.side = saved.side;
-+      edgeAutoHideState.expandedBounds = saved.expandedBounds;
-+      // Recompute the hidden geometry with the CURRENT formula instead of
-+      // trusting the saved coordinates: the formula can change between builds
-+      // (e.g. the win32 frame-overhang compensation), and a stale saved y left
-+      // a 9px strip showing until the first re-hide.
-+      const restoreDisplay = displayForBounds(saved.expandedBounds);
-+      const recomputed = edgeAutoHideApi.edgeHiddenBounds(saved.expandedBounds, saved.side, restoreDisplay, process.platform);
-+      edgeAutoHideState.hiddenBounds = recomputed || saved.hiddenBounds;
-+      if (recomputed) {
-+        settings.edgeAutoHideBounds = { side: saved.side, expandedBounds: saved.expandedBounds, hiddenBounds: recomputed };
-+        saveSettings();
-+      }
-+      // Move to the hidden POSITION only: the window was just created with the
-+      // size from windowBounds (which carries the user's latest resize), and
-+      // forcing the saved width/height here would resurrect a stale size over
-+      // it. No animation on startup.
-+      const created = mainWindow.getBounds();
-+      const restoreTarget = edgeAutoHideState.hiddenBounds;
-+      mainWindow.setBounds({
-+        x: restoreTarget.x,
-+        y: restoreTarget.y,
-+        width: created.width,
-+        height: created.height
-+      });
-+      edgeDebug('restore', 'side=' + saved.side + ' hidden=' + JSON.stringify(restoreTarget) + ' size=' + created.width + 'x' + created.height);
-+      mainWindow.setAlwaysOnTop(true, floatingAlwaysOnTopLevel());
-+      if (typeof mainWindow.setMovable === 'function') mainWindow.setMovable(true);
-+      if (typeof mainWindow.setResizable === 'function') mainWindow.setResizable(true);
-+      // A maximizable window lets Windows 11's Aero Snap win a drag toward the
-+      // top edge: the drop maximizes instead of docking, and the top dock can
-+      // never engage (left/right survive because their tiled results still sit
-+      // on an edge). Non-maximizable windows are exempt from drag snapping.
-+      if (typeof mainWindow.setMaximizable === 'function') mainWindow.setMaximizable(false);
-+      if (typeof mainWindow.setIgnoreMouseEvents === 'function') mainWindow.setIgnoreMouseEvents(false);
-+      if (typeof mainWindow.setFocusable === 'function') mainWindow.setFocusable(true);
-+      if (typeof mainWindow.setSkipTaskbar === 'function') mainWindow.setSkipTaskbar(skipTaskbarForSettings(settings));
-+      syncTaskbarZOrder();
-+      startEdgeCursorPolling();
-+      return;
-+    }
-+  }
-+  if (edgeAutoHideState.hidden && canUseEdgeAutoHide(settings)) {
-+    // Edge auto-hide hidden state: keep window at hidden position. Mode-guarded
-+    // so switching away from edge mode can never strand the window off-screen.
-+    // Position-only: keep the current size, same reasoning as the startup path.
-+    if (edgeAutoHideState.hiddenBounds) {
-+      const kept = mainWindow.getBounds();
-+      mainWindow.setBounds({
-+        x: edgeAutoHideState.hiddenBounds.x,
-+        y: edgeAutoHideState.hiddenBounds.y,
-+        width: kept.width,
-+        height: kept.height
-+      });
-+    }
-+    mainWindow.setAlwaysOnTop(true, floatingAlwaysOnTopLevel());
-+    if (typeof mainWindow.setMovable === 'function') mainWindow.setMovable(true);
-+    if (typeof mainWindow.setResizable === 'function') mainWindow.setResizable(true);
-+    // Same Aero-Snap guard as the startup path above.
-+    if (typeof mainWindow.setMaximizable === 'function') mainWindow.setMaximizable(false);
-+    if (typeof mainWindow.setIgnoreMouseEvents === 'function') mainWindow.setIgnoreMouseEvents(false);
-+    if (typeof mainWindow.setFocusable === 'function') mainWindow.setFocusable(true);
-+    if (typeof mainWindow.setSkipTaskbar === 'function') mainWindow.setSkipTaskbar(skipTaskbarForSettings(settings));
-+    syncTaskbarZOrder();
-+    startEdgeCursorPolling();
-+    return;
-+  }
-   const behavior = describeWindowBehavior(settings);
-   mainWindow.setAlwaysOnTop(behavior.alwaysOnTop, floatingAlwaysOnTopLevel());
-   if (typeof mainWindow.setMovable === 'function') mainWindow.setMovable(behavior.draggable);
-   if (typeof mainWindow.setResizable === 'function') mainWindow.setResizable(behavior.resizable);
-+  // Edge mode must not be maximizable: Windows 11 claims a drag toward the top
-+  // edge for its own maximize, which starves the top dock. Restore the flag in
-+  // every other mode so behavior switches keep the window maximizable.
-+  if (typeof mainWindow.setMaximizable === 'function') mainWindow.setMaximizable(behavior.mode !== 'edge');
-   if (typeof mainWindow.setIgnoreMouseEvents === 'function') {
-     mainWindow.setIgnoreMouseEvents(behavior.mousePassthrough);
-   }
-@@ -3153,6 +3694,17 @@ function applyWindowSettings() {
-   if (typeof mainWindow.setSkipTaskbar === 'function') mainWindow.setSkipTaskbar(skipTaskbarForSettings(settings));
-   if (!behavior.focusable && typeof mainWindow.blur === 'function') mainWindow.blur();
-   syncTaskbarZOrder();
-+  // If switching to edge mode, schedule auto-hide if near edge
-+  if (behavior.mode === 'edge') {
-+    scheduleEdgeAutoHide();
-+  } else {
-+    stopEdgeAutoHideTimers();
-+    // Clear edge state when leaving edge mode
-+    if (settings.edgeAutoHideBounds) {
-+      delete settings.edgeAutoHideBounds;
-+      saveSettings();
-+    }
-+  }
+-  const behavior = describeWindowBehavior(settings);
+-  mainWindow.setAlwaysOnTop(behavior.alwaysOnTop, floatingAlwaysOnTopLevel());
+-  if (typeof mainWindow.setMovable === 'function') mainWindow.setMovable(behavior.draggable);
+-  if (typeof mainWindow.setResizable === 'function') mainWindow.setResizable(behavior.resizable);
+-  if (typeof mainWindow.setIgnoreMouseEvents === 'function') {
+-    mainWindow.setIgnoreMouseEvents(behavior.mousePassthrough);
+-  }
+-  if (typeof mainWindow.setFocusable === 'function') mainWindow.setFocusable(behavior.focusable);
+-  if (typeof mainWindow.setSkipTaskbar === 'function') mainWindow.setSkipTaskbar(skipTaskbarForSettings(settings));
+-  if (!behavior.focusable && typeof mainWindow.blur === 'function') mainWindow.blur();
+-  syncTaskbarZOrder();
++  edgeAutoHide.applyWindowSettings();
  }
  
  function nativeBlurEnabled(source = settings) {
-@@ -6297,6 +6849,15 @@ function ensureEdgeDockController() {
+@@ -6375,6 +6399,11 @@ function ensureEdgeDockController() {
      rendererDir: path.join(__dirname, 'renderer'),
      preloadPath: path.join(__dirname, 'edgeDock', 'preload.js'),
      getSettings: () => settings,
@@ -1480,14 +1603,10 @@ index dd770de7..e12f1c83 100644
 +    forceTopmostDockWindows: () => edgeDockTopmost.forceTopmostDockWindows({
 +      onHwndSetChange: (info) => edgeLog('edge-dock', `dock hwnd set changed: ${info.hwnds.join(',')} (was ${info.previous})`)
 +    }),
-+    // Asks the dock windows how they treat a real click; the controller uses
-+    // it to detect and self-heal the MA_NOACTIVATEANDEAT state that eats every
-+    // hardware click after a native shell rebuild.
-+    probeDockInput: () => edgeDockTopmost.probeDockInput(),
      nativeGlass: () => nativeBlurEnabled(),
      // The dock follows the widget's glass style unless it has its own; the
      // controller decides whether there is material at all. Reduce Transparency
-@@ -6531,6 +7092,8 @@ function setWindowPresentationFromMenu(value) {
+@@ -6614,6 +6643,8 @@ function setWindowPresentationFromMenu(value) {
    saveSettings();
    if (previousTrayMode) exitTrayMode();
    else {
@@ -1496,30 +1615,15 @@ index dd770de7..e12f1c83 100644
      applyWindowSettings();
      focusExistingWindow();
    }
-@@ -7702,6 +8265,7 @@ function createWindow(boundsOverride, options = {}) {
+@@ -7779,6 +7810,7 @@ function createWindow(boundsOverride, options = {}) {
      ? createRetainedWindow({ BaseWindow, WebContentsView }, windowOptions, options.previousWindow)
      : new BrowserWindow(windowOptions);
    mainWindow = win;
-+  edgeAutoHideState.geometryReady = false;
++  edgeAutoHide.attachWindow(win);
    mainWindowChrome = { collapsedFloatingBubble };
    applyMacSpaceBehavior();
    applyWindowsChrome(win, { round: true });
-@@ -7734,6 +8298,14 @@ function createWindow(boundsOverride, options = {}) {
-   applyNativeMaterial();
-   win.on('focus', () => {
-     stopFloatingBubbleAutoCollapseTimer();
-+    stopEdgeAutoHideTimers();
-+    // Deliberately NO expandEdge() here. The cursor trigger owns reveal: a
-+    // focus gain without the cursor at the edge must not pop the window out,
-+    // and at startup the automatic focus fired this path against the freshly
-+    // restored hidden window — a native setPosition rejection on every launch,
-+    // which also tripped the session-wide animation degrade. The poll is all
-+    // the reveal path needs (clicking the strip is inside the trigger zone).
-+    scheduleEdgeAutoHide();
-   });
-   win.on('blur', () => {
-     limitsHistoryController?.hide();
-@@ -7749,13 +8321,71 @@ function createWindow(boundsOverride, options = {}) {
+@@ -7826,13 +7858,14 @@ function createWindow(boundsOverride, options = {}) {
          if (point && tray?.isPointerOverIcon?.(point)) recentPopoverBlur = { at: performance.now(), point };
        }
      }
@@ -1528,75 +1632,16 @@ index dd770de7..e12f1c83 100644
 +      scheduleFloatingBubbleAutoCollapse();
 +      scheduleEdgeAutoHide();
 +    }
-+  });
-+  // 'resized' only fires for interactive drags; external/programmatic resizes
-+  // (observed with an external MoveWindow) leave it silent on Windows. The
-+  // hidden-state dock sync therefore also watches the continuous 'resize'
-+  // event, debounced so a resize burst settles first.
-+  let edgeResizeSyncTimer = null;
-+  win.on('resize', () => {
-+    edgeAutoHideState.lastResizeAt = Date.now();
-+    if (!edgeAutoHideState.hidden) return;
-+    if (edgeResizeSyncTimer) clearTimeout(edgeResizeSyncTimer);
-+    edgeResizeSyncTimer = setTimeout(() => {
-+      edgeResizeSyncTimer = null;
-+      syncEdgeDockGeometry();
-+    }, 200);
-+  });
-+  win.on('resized', () => {
-+    edgeAutoHideState.lastResizeAt = Date.now();
-+    persistBoundsSoon();
-+    syncTaskbarZOrder();
-+    trackEdgeExpandedBounds();
-+    syncEdgeDockGeometry();
-+  });
-+  win.on('moved', () => {
-+    persistBoundsSoon();
-+    syncTaskbarZOrder();
-+    // Programmatic animation frames land here too; only react to real drags.
-+    if (edgeIsAnimating() || !mainWindow || mainWindow.isDestroyed()) return;
-+    if (!canUseEdgeAutoHide(settings) || edgeAutoHideState.hidden) return;
-+    const bounds = mainWindow.getBounds();
-+    const display = displayForBounds(bounds);
-+    if (!display) return;
-+    const side = edgeAutoHideApi.edgeSide(bounds, display, process.platform);
-+    if (side) {
-+      // Window was dropped near an edge: arm the cursor poll, which re-hides it
-+      // after the grace delay — never while the cursor rests on the window.
-+      scheduleEdgeAutoHide();
-+    } else if (edgeAutoHideState.side || settings.edgeAutoHideBounds) {
-+      // Dragged away from every edge: forget the remembered dock so a later
-+      // restart cannot yank the window back to a stale hidden position.
-+      edgeAutoHideState.side = null;
-+      edgeAutoHideState.expandedBounds = null;
-+      edgeAutoHideState.hiddenBounds = null;
-+      if (edgeAutoHideState.collapseTimer) {
-+        clearTimeout(edgeAutoHideState.collapseTimer);
-+        edgeAutoHideState.collapseTimer = null;
-+      }
-+      if (settings.edgeAutoHideBounds) {
-+        delete settings.edgeAutoHideBounds;
-+        saveSettings();
-+      }
-+    }
-+  });
-+  win.on('show', () => {
-+    // Geometry writes through the guard become legal only once the window has
-+    // actually been shown; a window recreated later must re-earn this.
-+    edgeAutoHideState.geometryReady = true;
-+    syncTaskbarZOrder();
-+    scheduleEdgeAutoHide();
    });
--  win.on('resized', () => { persistBoundsSoon(); syncTaskbarZOrder(); });
--  win.on('moved', () => { persistBoundsSoon(); syncTaskbarZOrder(); });
+   const onBoundsChange = () => { persistBoundsSoon(); syncTaskbarZOrder(); };
+   for (const eventName of ['resize', 'resized', 'move', 'moved']) win.on(eventName, onBoundsChange);
 -  win.on('show', syncTaskbarZOrder);
    win.on('restore', syncTaskbarZOrder);
 -  win.on('hide', stopTaskbarZOrderKeeper);
-+  win.on('hide', () => { stopTaskbarZOrderKeeper(); stopEdgeAutoHideTimers(); });
    win.on('minimize', stopTaskbarZOrderKeeper);
    win.on('close', (event) => {
      if (quitRequested) return;
-@@ -8017,6 +8647,28 @@ async function cursorStatusValue({ discover = false } = {}) {
+@@ -8101,6 +8134,20 @@ async function cursorStatusValue({ discover = false } = {}) {
  // accepts before 'ready'.
  registerPluginScheme(protocol);
  
@@ -1611,21 +1656,13 @@ index dd770de7..e12f1c83 100644
 +// diagnosable. Tweening is additionally disabled for the session, since an
 +// animation frame we could not trust is worse than no animation.
 +process.on('uncaughtException', (err) => {
-+  try {
-+    edgeLog('uncaught', (err && err.stack) || String(err));
-+  } catch (_) { /* logging must never throw */ }
-+  try {
-+    edgeAutoHideState.animatingUntil = 0;
-+    edgeAutoHideState.guardTripped = true;
-+    clearEdgeCollapseTimer();
-+    if (edgeAutoHideState.desired === 'hidden') reconcileEdgeAutoHide();
-+  } catch (_) { /* recovery must never throw */ }
++  edgeAutoHide.handleUncaught(err);
 +});
 +
  app.whenReady().then(() => {
    if (process.platform === 'darwin' && app.dock) app.dock.setIcon(APP_ICON_PATH);
    ensureSettingsLoaded();
-@@ -8345,6 +8997,7 @@ app.whenReady().then(() => {
+@@ -8430,6 +8477,7 @@ app.whenReady().then(() => {
          patch.displayFontFamily ?? settings.displayFontFamily
        ),
        tokenRateMode: normalizeTokenRateMode(patch.tokenRateMode ?? settings.tokenRateMode),
@@ -1633,7 +1670,7 @@ index dd770de7..e12f1c83 100644
        floatingBubbleEnabled: parseBoolean(patch.floatingBubbleEnabled ?? settings.floatingBubbleEnabled, false),
        notchEnabled: parseBoolean(patch.notchEnabled ?? settings.notchEnabled, false),
        notchStyle: normalizeNotchStyle(patch.notchStyle ?? settings.notchStyle),
-@@ -8546,6 +9199,7 @@ app.whenReady().then(() => {
+@@ -8633,6 +8681,7 @@ app.whenReady().then(() => {
      applyWindowSettings();
      syncFloatingBubbleAvailability();
      syncDockSurfaces();
@@ -1641,7 +1678,7 @@ index dd770de7..e12f1c83 100644
      applyNativeMaterial();
      const runtimeChange = classifySettingsChange(previousRuntimeSettings, settings);
      const widgetHistorySourceChanged = previousRuntimeSettings.historyEnabled !== settings.historyEnabled;
-@@ -8665,6 +9319,27 @@ app.whenReady().then(() => {
+@@ -8755,6 +8804,17 @@ app.whenReady().then(() => {
    });
    ipcMain.handle('floatingBubble:expand', () => expandFloatingBubble());
    ipcMain.handle('floatingBubble:peek', () => expandFloatingBubble({ focus: false }));
@@ -1653,23 +1690,13 @@ index dd770de7..e12f1c83 100644
 +  // drift caused by a killed timer or a rejected animation frame is corrected
 +  // without depending on the fast paths cooperating. It is deliberately slow so
 +  // that an idle widget costs nothing.
-+  setInterval(() => {
-+    if (!canUseEdgeAutoHide(settings)) return;
-+    if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isVisible()) return;
-+    if (!edgeAutoHideState.pollTimer) startEdgeCursorPolling();
-+    reconcileEdgeAutoHide();
-+  }, 1000);
-+  ipcMain.handle('edgeAutoHide:expand', () => expandEdge());
-+  ipcMain.handle('edgeAutoHide:collapse', () => {
-+    if (!mainWindow || mainWindow.isDestroyed() || !canUseEdgeAutoHide(settings)) return false;
-+    if (edgeAutoHideState.hidden) return true;
-+    const bounds = mainWindow.getBounds();
-+    return maybeCollapseEdge(bounds);
-+  });
++  setInterval(() => edgeAutoHide.keeperTick(), 1000);
++  ipcMain.handle('edgeAutoHide:expand', () => edgeAutoHide.expand());
++  ipcMain.handle('edgeAutoHide:collapse', () => edgeAutoHide.collapse());
    ipcMain.handle('floatingBubble:collapseIfIdle', () => {
      if (!mainWindow || mainWindow.isDestroyed()) return false;
      if (floatingBubbleState.collapsed || !canUseFloatingBubble(settings)) return false;
-@@ -9886,6 +10561,20 @@ app.whenReady().then(() => {
+@@ -9993,6 +10053,20 @@ app.whenReady().then(() => {
    });
    ipcMain.handle('dashboard:open', () => { createDashboardWindow(); return true; });
    ipcMain.handle('dashboard:getHistory', (_event, options) => getDashboardHistory(options));
@@ -1691,7 +1718,7 @@ index dd770de7..e12f1c83 100644
      const win = BrowserWindow.fromWebContents(event.sender);
      if (!win || win !== dashboardWindow || win.isDestroyed()) return;
 diff --git a/src/electron/preload.js b/src/electron/preload.js
-index bad067ce..9d81eca9 100644
+index 83d8253f..37c67d2a 100644
 --- a/src/electron/preload.js
 +++ b/src/electron/preload.js
 @@ -47,6 +47,7 @@ contextBridge.exposeInMainWorld('tokenMonitor', {
@@ -1703,10 +1730,10 @@ index bad067ce..9d81eca9 100644
      const listener = () => { try { callback(); } catch (_) {} };
      ipcRenderer.on('dashboard:historyChanged', listener);
 diff --git a/src/electron/renderer/app.js b/src/electron/renderer/app.js
-index 5616e7dd..23aa28e4 100644
+index 2ac963be..c43683cc 100644
 --- a/src/electron/renderer/app.js
 +++ b/src/electron/renderer/app.js
-@@ -204,8 +204,8 @@ const projectRowsApi = window.TokenMonitorProjectRows;
+@@ -209,8 +209,8 @@ const projectRowsApi = window.TokenMonitorProjectRows;
  const sessionDetailApi = window.TokenMonitorSessionDetail;
  const windowShortcutApi = window.TokenMonitorWindowShortcut;
  const LIMIT_REFRESH_OPTIONS = [60000, 120000, 300000, 900000, 1800000];
@@ -1717,7 +1744,7 @@ index 5616e7dd..23aa28e4 100644
  const LIMIT_CAPABILITY_TAG_KEYS = {
    Auto: 'settings.limits.capability.auto',
    'OAuth/CLI': 'settings.limits.capability.oauthCli',
-@@ -418,6 +418,8 @@ Object.assign(els, {
+@@ -423,6 +423,8 @@ Object.assign(els, {
    projectBreakdownFooter: document.getElementById('projectBreakdownFooter'),
    projectBreakdownFooterTools: document.getElementById('projectBreakdownFooterTools'),
    projectBreakdownFooterModels: document.getElementById('projectBreakdownFooterModels'),
@@ -1726,7 +1753,7 @@ index 5616e7dd..23aa28e4 100644
    monthPeriodMenu: document.getElementById('monthPeriodMenu'),
    monthPeriodTab: document.getElementById('monthPeriodTab'),
    periodMonthModeInput: document.getElementById('periodMonthModeInput'),
-@@ -698,6 +700,14 @@ els.toolDetailFooterModels.addEventListener('click', () => setActiveToolDetailMo
+@@ -704,6 +706,14 @@ els.toolDetailFooterModels.addEventListener('click', () => setActiveToolDetailMo
  els.projectBreakdownFooterTools.addEventListener('click', () => { void saveSettings({ projectBreakdownMode: 'tool' }).catch(() => {}); });
  els.projectBreakdownFooterModels.addEventListener('click', () => { void saveSettings({ projectBreakdownMode: 'model' }).catch(() => {}); });
  
@@ -1741,7 +1768,7 @@ index 5616e7dd..23aa28e4 100644
  document.addEventListener('pointerdown', (event) => {
    if (state.viewSwitcherOpen && !event.target.closest('#viewSwitcher')) {
      setViewSwitcherOpen(false);
-@@ -1124,6 +1134,7 @@ function scheduleDisplayLiveTokenRateExpiry() {
+@@ -1130,6 +1140,7 @@ function scheduleDisplayLiveTokenRateExpiry() {
      void maybeUpdateBarsIcon({ refreshComposers: false });
      renderFloatingBubbleContent();
      if (isSettingsSurfaceVisible()) refreshTrayComposers();
@@ -1749,7 +1776,7 @@ index 5616e7dd..23aa28e4 100644
      scheduleDisplayLiveTokenRateExpiry();
    }, Math.max(0, Math.min(...expiries) - Date.now()) + 10);
  }
-@@ -3379,6 +3390,21 @@ function modelRowsForPeriod(period, rankingMetric = state.settings?.modelRanking
+@@ -3386,6 +3397,21 @@ function modelRowsForPeriod(period, rankingMetric = state.settings?.modelRanking
    return toolRowsForPeriod(period);
  }
  
@@ -1771,7 +1798,7 @@ index 5616e7dd..23aa28e4 100644
  function sessionPresentationOptions() {
    const localDevice = state.stats?.devices?.find(device => device.deviceId === state.settings?.deviceId);
    return {
-@@ -3395,6 +3421,10 @@ function sessionPresentationOptions() {
+@@ -3403,6 +3429,10 @@ function sessionPresentationOptions() {
      nativeSessions: state.stats?.nativeSessions?.[state.period] || {},
      localSourceDevice: localDevice ? { deviceId: localDevice.deviceId,
        name: deviceBreakdownApi.deviceLabel(localDevice), platform: localDevice.platform || '', deviceKind: localDevice.deviceKind || 'computer' } : undefined,
@@ -1781,8 +1808,8 @@ index 5616e7dd..23aa28e4 100644
 +    sortMode: state.settings?.sessionSortMode === 'tokens' ? 'tokens' : 'recent',
      subagents: {
        countLabel: (count) => t('sessions.subagentCount', { count }),
-       unattributedLabel: t('dashboard.tooltip.unclassified')
-@@ -3423,7 +3453,8 @@ function rawSessionRowsForPeriod(period) {
+       latestModelLabel: t('session.latestModel'),
+@@ -3432,7 +3462,8 @@ function rawSessionRowsForPeriod(period) {
  function sessionRowsForPeriod(period) {
    const rows = rawSessionRowsForPeriod(period);
    if (rows.length > 0) {
@@ -1792,7 +1819,7 @@ index 5616e7dd..23aa28e4 100644
      return sessionRowsApi.groupSessionRows(rows, sessionPresentationOptions());
    }
    if (Number(period?.totalTokens || 0) === 0) return [];
-@@ -5909,9 +5940,16 @@ function renderTrends() {
+@@ -5961,9 +5992,16 @@ function renderTrends() {
      return;
    }
  
@@ -1801,7 +1828,7 @@ index 5616e7dd..23aa28e4 100644
    const titles = finalPoints.map((p) => `${trendShortLabel(p[labelKey], labelKey)} · ${formatCompact(p[metric])}`);
 -  const svg = charts.sparklineSvg(model, { titles, showZeroMarkers: state.period === 'today' });
 +  const yTicks = 4;
-+  const svg = charts.sparklineSvg(model, { titles, showZeroMarkers: state.period === 'today', yTicks, formatTick: (v) => formatCompact(v) });
++  const svg = charts.sparklineSvg(model, { titles, showZeroMarkers: state.period === 'today', yTicks });
 +  // Tick values render as HTML (not SVG text): the sparkline stretches
 +  // non-uniformly, which would distort glyphs. Positions are set via CSSOM
 +  // below — the app CSP (style-src 'self') drops inline style attributes.
@@ -1811,7 +1838,7 @@ index 5616e7dd..23aa28e4 100644
  
    const summary = homeOverviewApi.activityStatsForPeriod({
      period: state.period,
-@@ -5937,9 +5975,18 @@ function renderTrends() {
+@@ -5989,9 +6027,18 @@ function renderTrends() {
  
    els.trendsPanel.innerHTML =
      `<div class="trends-cap"><span>${rangeLabel}</span><span class="trends-open-hint" aria-label="${t('trends.open')}">↗</span></div>`
@@ -1831,7 +1858,7 @@ index 5616e7dd..23aa28e4 100644
    bindTrendTooltip(els.trendsPanel.querySelector('.trends-spark'), model, finalPoints, labelKey, metric);
    const bars = Array.from(els.trendsPanel.querySelectorAll('.spark-bar'));
    bars.forEach((bar, index) => {
-@@ -13710,7 +13757,7 @@ els.breakdown.addEventListener('click', (event) => {
+@@ -13861,7 +13908,7 @@ els.breakdown.addEventListener('click', (event) => {
    }
    const key = rowEl.dataset.key || '';            // "session:<client>:<sessionId>"
    const client = rowEl.dataset.client || '';
@@ -1870,7 +1897,7 @@ index 63c1fe3b..dd532f9d 100644
    </body>
  </html>
 diff --git a/src/electron/renderer/dashboard.js b/src/electron/renderer/dashboard.js
-index f929bcb7..1a016361 100644
+index 59961f43..2a2c8396 100644
 --- a/src/electron/renderer/dashboard.js
 +++ b/src/electron/renderer/dashboard.js
 @@ -432,7 +432,7 @@ function renderBreakdown() {
@@ -1897,17 +1924,16 @@ index f929bcb7..1a016361 100644
  els.closeBtn.addEventListener('click', () => window.tokenMonitor.dashboard.close());
  
 diff --git a/src/electron/renderer/edgeDock/dock.js b/src/electron/renderer/edgeDock/dock.js
-index 390a9946..6a3e7686 100644
+index 4f40a6d5..b0a5582a 100644
 --- a/src/electron/renderer/edgeDock/dock.js
 +++ b/src/electron/renderer/edgeDock/dock.js
-@@ -5,6 +5,13 @@
+@@ -5,6 +5,12 @@
  // projected data and reports input and measured content size.
  
  const bridge = window.tokenMonitorEdgeDock;
 +// Liveness ack: the main process compares this timestamp against the OS button
-+// state to tell a healthy input path from the eat-clicks state (Electron
-+// answers WM_MOUSEACTIVATE with MA_NOACTIVATEANDEAT after a native shell
-+// rebuild) and only replays presses over the debugger while this is missing.
++// state, and only replays presses over the debugger while the ack is missing
++// (the page never received the press).
 +document.addEventListener('pointerdown', () => {
 +  try { bridge.inputAck(); } catch (_) {}
 +}, true);
@@ -1915,20 +1941,19 @@ index 390a9946..6a3e7686 100644
  // The running reading is derived from the projected rows at paint time rather than
  // frozen into the cell, so the rail and the card answer at the same clock (see
 diff --git a/src/electron/renderer/i18n.js b/src/electron/renderer/i18n.js
-index b43069ae..70495e4d 100644
+index 3f04d277..bee8fd57 100644
 --- a/src/electron/renderer/i18n.js
 +++ b/src/electron/renderer/i18n.js
-@@ -880,6 +880,9 @@
+@@ -933,6 +933,8 @@
        'home.liveTokenRate.burnTitle': 'Live token burn ({scope}): {value}. Click to show live tok/s.',
        'home.liveTokenRate.speedIdleTitle': 'Last observed generation speed ({scope}): {value}. Click to show TPM.',
        'home.liveTokenRate.burnIdleTitle': 'Last observed token burn ({scope}): {value}. Click to show tok/s.',
 +      'home.sessionSort.recent': 'Recent',
 +      'home.sessionSort.tokens': 'Tokens',
-+      'home.sessionSort.title': 'Toggle session sort (recent activity / token size)',
        'home.less': 'Less',
        'home.more': 'More',
        'home.used': 'used',
-@@ -1795,6 +1798,7 @@
+@@ -1866,6 +1868,7 @@
        'settings.windowBehavior.floating': 'Floating above apps',
        'settings.windowBehavior.normal': 'Normal window',
        'settings.windowBehavior.desktop': 'Desktop pinned',
@@ -1936,7 +1961,7 @@ index b43069ae..70495e4d 100644
        'settings.windowBehavior.buttonTitle': '{current}; click for {next}',
        'settings.display.floatingBubble': 'Floating Bubble',
        'settings.display.floatingBubbleNote': 'Collapse the widget into a slim draggable mini-window; click it to reopen.',
-@@ -2138,6 +2142,7 @@
+@@ -2219,6 +2222,7 @@
        'trayMenu.presentation.floating': 'Floating Above Apps',
        'trayMenu.presentation.normal': 'Normal Window',
        'trayMenu.presentation.desktop': 'Desktop Pinned',
@@ -1944,17 +1969,16 @@ index b43069ae..70495e4d 100644
        'settings.startup.title': 'Startup',
        'settings.startup.startAtLogin': 'Start at login',
        'settings.startup.available': 'Available in packaged builds. On Linux, run the AppImage build to enable.',
-@@ -3247,6 +3252,9 @@
+@@ -3385,6 +3389,8 @@
        'home.liveTokenRate.burnTitle': '即時 Token 消耗（{scope}）：{value}。點擊切換至即時 tok/s。',
        'home.liveTokenRate.speedIdleTitle': '最近一次生成速度（{scope}）：{value}。點擊切換至 TPM。',
        'home.liveTokenRate.burnIdleTitle': '最近一次 Token 消耗（{scope}）：{value}。點擊切換至 tok/s。',
 +      'home.sessionSort.recent': '最近',
 +      'home.sessionSort.tokens': 'Token',
-+      'home.sessionSort.title': '切換會話排序（最近活躍 / Token 大小）',
        'home.less': '較少',
        'home.more': '較多',
        'home.used': '已用',
-@@ -4162,6 +4170,7 @@
+@@ -4318,6 +4324,7 @@
        'settings.windowBehavior.floating': '浮在其他 app 上方',
        'settings.windowBehavior.normal': '一般視窗',
        'settings.windowBehavior.desktop': '固定在桌面',
@@ -1962,7 +1986,7 @@ index b43069ae..70495e4d 100644
        'settings.windowBehavior.buttonTitle': '目前：{current}；點擊切換為 {next}',
        'settings.display.floatingBubble': '懸浮小窗',
        'settings.display.floatingBubbleNote': '將 widget 收成可拖曳的窄長小窗，點擊即可重新展開。',
-@@ -4505,6 +4514,7 @@
+@@ -4671,6 +4678,7 @@
        'trayMenu.presentation.floating': '浮動於其他 App 上方',
        'trayMenu.presentation.normal': '一般視窗',
        'trayMenu.presentation.desktop': '固定於桌面',
@@ -1970,17 +1994,16 @@ index b43069ae..70495e4d 100644
        'settings.startup.title': '啟動',
        'settings.startup.startAtLogin': '登入時啟動',
        'settings.startup.available': '僅在打包後的版本可用；Linux 需以 AppImage 執行。',
-@@ -5614,6 +5624,9 @@
+@@ -5837,6 +5845,8 @@
        'home.liveTokenRate.burnTitle': '实时 Token 消耗（{scope}）：{value}。点击切换至实时 tok/s。',
        'home.liveTokenRate.speedIdleTitle': '最近一次生成速度（{scope}）：{value}。点击切换至 TPM。',
        'home.liveTokenRate.burnIdleTitle': '最近一次 Token 消耗（{scope}）：{value}。点击切换至 tok/s。',
 +      'home.sessionSort.recent': '最近',
 +      'home.sessionSort.tokens': 'Token',
-+      'home.sessionSort.title': '切换会话排序（最近活跃 / Token 大小）',
        'home.less': '较少',
        'home.more': '较多',
        'home.used': '已用',
-@@ -6529,6 +6542,7 @@
+@@ -6770,6 +6780,7 @@
        'settings.windowBehavior.floating': '浮在其他 app 上方',
        'settings.windowBehavior.normal': '普通窗口',
        'settings.windowBehavior.desktop': '固定在桌面',
@@ -1988,7 +2011,7 @@ index b43069ae..70495e4d 100644
        'settings.windowBehavior.buttonTitle': '当前：{current}；点击切换为 {next}',
        'settings.display.floatingBubble': '悬浮小窗',
        'settings.display.floatingBubbleNote': '将组件收成可拖动的窄长小窗，点击即可重新展开。',
-@@ -6872,6 +6886,7 @@
+@@ -7123,6 +7134,7 @@
        'trayMenu.presentation.floating': '浮动于其他 App 上方',
        'trayMenu.presentation.normal': '普通窗口',
        'trayMenu.presentation.desktop': '固定到桌面',
@@ -1996,17 +2019,16 @@ index b43069ae..70495e4d 100644
        'settings.startup.title': '启动',
        'settings.startup.startAtLogin': '登录时启动',
        'settings.startup.available': '仅在打包后的版本可用；Linux 需以 AppImage 运行。',
-@@ -7552,6 +7567,9 @@
+@@ -7858,6 +7870,8 @@
        'home.liveTokenRate.burnTitle': '실시간 토큰 소모량({scope}): {value}. 클릭하여 실시간 tok/s로 전환합니다.',
        'home.liveTokenRate.speedIdleTitle': '마지막으로 관찰된 생성 속도({scope}): {value}. 클릭하여 TPM으로 전환합니다.',
        'home.liveTokenRate.burnIdleTitle': '마지막으로 관찰된 토큰 소모량({scope}): {value}. 클릭하여 tok/s로 전환합니다.',
 +      'home.sessionSort.recent': '최근',
 +      'home.sessionSort.tokens': 'Token',
-+      'home.sessionSort.title': '세션 정렬 전환(최근 활동 / 토큰 크기)',
        'home.reset': '{value} 초기화',
        'home.staleDevice': '오프라인',
        'home.tools': '도구',
-@@ -9421,6 +9439,7 @@
+@@ -9762,6 +9776,7 @@
        'trayMenu.presentation.floating': '다른 앱 위에 띄우기',
        'trayMenu.presentation.normal': '일반 창',
        'trayMenu.presentation.desktop': '데스크톱에 고정',
@@ -2014,7 +2036,7 @@ index b43069ae..70495e4d 100644
        'settings.views.configureHome': '{name} 설정',
        'settings.views.configureLimits': '{name} 설정',
        'settings.views.configureTrend': '{name} 설정',
-@@ -9445,6 +9464,7 @@
+@@ -9786,6 +9801,7 @@
        'settings.views.trendIntervalMinutes': '{n}분',
        'settings.windowBehavior.buttonTitle': '{current}; {next}로 전환하려면 클릭',
        'settings.windowBehavior.desktop': '데스크톱 고정',
@@ -2022,17 +2044,16 @@ index b43069ae..70495e4d 100644
        'settings.windowBehavior.floating': '앱 위에 플로팅',
        'settings.windowBehavior.normal': '일반 창',
        'sortMostTokens': '↕ 토큰 많은 순',
-@@ -9919,6 +9939,9 @@
+@@ -10310,6 +10326,8 @@
        'home.liveTokenRate.burnTitle': 'ライブ Token 消費（{scope}）：{value}。クリックするとライブ tok/s に切り替わります。',
        'home.liveTokenRate.speedIdleTitle': '直近の生成速度（{scope}）：{value}。クリックすると TPM に切り替わります。',
        'home.liveTokenRate.burnIdleTitle': '直近の Token 消費（{scope}）：{value}。クリックすると tok/s に切り替わります。',
 +      'home.sessionSort.recent': '最近',
 +      'home.sessionSort.tokens': 'Token',
-+      'home.sessionSort.title': 'セッションの並び替え（最近の活動 / Token サイズ）',
        'home.reset': '{value}をリセット',
        'home.staleDevice': 'オフライン',
        'home.tools': 'ツール',
-@@ -11788,6 +11811,7 @@
+@@ -12214,6 +12232,7 @@
        'trayMenu.presentation.floating': '他のアプリの前面に表示',
        'trayMenu.presentation.normal': '通常ウィンドウ',
        'trayMenu.presentation.desktop': 'デスクトップに固定',
@@ -2040,7 +2061,7 @@ index b43069ae..70495e4d 100644
        'settings.views.configureHome': '{name}を設定',
        'settings.views.configureLimits': '{name}を設定',
        'settings.views.configureTrend': '{name}を設定',
-@@ -11812,6 +11836,7 @@
+@@ -12238,6 +12257,7 @@
        'settings.views.trendIntervalMinutes': '{n}分',
        'settings.windowBehavior.buttonTitle': '{current}; {next}に切り替えるにはクリック',
        'settings.windowBehavior.desktop': 'デスクトップに固定',
@@ -2048,17 +2069,41 @@ index b43069ae..70495e4d 100644
        'settings.windowBehavior.floating': 'アプリの上にフローティング',
        'settings.windowBehavior.normal': '通常ウィンドウ',
        'sortMostTokens': '↕ トークン数順',
-@@ -12686,6 +12711,9 @@
+@@ -13287,6 +13307,8 @@
+       "home.liveTokenRate.burnTitle": "Consumo de tokens en tiempo real ({scope}): {value}. Haz clic para mostrar los tok/s en tiempo real.",
+       "home.liveTokenRate.speedIdleTitle": "Última velocidad de generación observada ({scope}): {value}. Haz clic para mostrar los TPM.",
+       "home.liveTokenRate.burnIdleTitle": "Último consumo de tokens observado ({scope}): {value}. Haz clic para mostrar los tok/s.",
++      'home.sessionSort.recent': 'Recientes',
++      'home.sessionSort.tokens': 'Tokens',
+       "home.less": "Menos",
+       "home.more": "Más",
+       "home.used": "usado",
+@@ -14154,6 +14176,7 @@
+       "settings.windowBehavior.floating": "Flotante sobre las aplicaciones",
+       "settings.windowBehavior.normal": "Ventana normal",
+       "settings.windowBehavior.desktop": "Anclado al escritorio",
++      'settings.windowBehavior.edge': 'Ocultar automáticamente en el borde',
+       "settings.windowBehavior.buttonTitle": "{current}; haz clic para {next}",
+       "settings.display.floatingBubble": "Burbuja flotante",
+       "settings.display.floatingBubbleNote": "Contrae el widget en una miniventana estrecha que puedes arrastrar; haz clic para volver a abrirlo.",
+@@ -14498,6 +14521,7 @@
+       "trayMenu.presentation.floating": "Flotante sobre las aplicaciones",
+       "trayMenu.presentation.normal": "Ventana normal",
+       "trayMenu.presentation.desktop": "Anclado al escritorio",
++      'trayMenu.presentation.edge': 'Ocultar automáticamente en el borde',
+       "settings.startup.title": "Inicio",
+       "settings.startup.startAtLogin": "Iniciar al iniciar sesión",
+       "settings.startup.available": "Disponible en versiones empaquetadas. En Linux, ejecuta la versión AppImage para activarlo.",
+@@ -15611,6 +15635,8 @@
        'home.limit.session': 'Sessão',
        'home.limit.daily': 'Diária',
        'home.limit.weekly': 'Semanal',
 +      'home.sessionSort.recent': 'Recentes',
 +      'home.sessionSort.tokens': 'Tokens',
-+      'home.sessionSort.title': 'Alternar ordenação das sessões (atividade recente / tamanho em tokens)',
        'home.limit.billing': 'Cobrança',
        'home.limit.monthly': 'Mensal',
        'home.reset': 'Redefinir {value}',
-@@ -13631,6 +13659,7 @@
+@@ -16574,6 +16600,7 @@
        'settings.windowBehavior.normal': 'Janela normal',
        'settings.windowBehavior.desktop': 'Fixado na área de trabalho',
        'settings.windowBehavior.buttonTitle': '{current}; clique para {next}',
@@ -2066,7 +2111,7 @@ index b43069ae..70495e4d 100644
        'settings.display.floatingBubble': 'Bolha flutuante',
        'settings.display.floatingBubbleNote': 'Reduz o widget a uma mini-janela slim e arrastável; clique nela para reabrir.',
        'edgeDock.period.today': 'Hoje',
-@@ -13973,6 +14002,7 @@
+@@ -16926,6 +16953,7 @@
        'trayMenu.presentation.floating': 'Flutuante sobre os aplicativos',
        'trayMenu.presentation.normal': 'Janela normal',
        'trayMenu.presentation.desktop': 'Fixado na área de trabalho',
@@ -2075,18 +2120,18 @@ index b43069ae..70495e4d 100644
        'settings.startup.startAtLogin': 'Iniciar ao entrar no sistema',
        'settings.startup.available': 'Disponível nas versões empacotadas. No Linux, execute a versão AppImage para ativar.',
 diff --git a/src/electron/renderer/index.html b/src/electron/renderer/index.html
-index 1307a4b0..3453df27 100644
+index cac0d549..18a62e4a 100644
 --- a/src/electron/renderer/index.html
 +++ b/src/electron/renderer/index.html
-@@ -251,6 +251,7 @@
+@@ -252,6 +252,7 @@
                    <option value="floating" data-i18n="settings.windowBehavior.floating">Floating above apps</option>
                    <option value="normal" data-i18n="settings.windowBehavior.normal">Normal window</option>
-                   <option value="desktop" data-i18n="settings.windowBehavior.desktop">Desktop pinned</option>
+                   <option value="desktop" data-i18n="settings.windowBehavior.desktop" data-select-description="settings.display.windowBehaviorNote">Desktop pinned</option>
 +                  <option value="edge" data-i18n="settings.windowBehavior.edge">Edge auto-hide</option>
                  </select>
-                 <span class="settings-note settings-item-desc" data-i18n="settings.display.windowBehaviorNote">Desktop pinned keeps the widget below other apps and locks drag/resize while staying clickable.</span>
                </label>
-@@ -1687,6 +1688,10 @@
+               <label id="keepAboveTaskbarRow" class="checkbox-label settings-item hidden">
+@@ -1742,6 +1743,10 @@
        <div id="sessionPagerHost" class="session-pager-host hidden"></div>
        <footer class="footer">
          <div id="viewSwitcher" class="view-switcher"></div>
@@ -2146,10 +2191,10 @@ index 00000000..63fc4423
 +  return { createManualRefreshController, delay };
 +});
 diff --git a/src/electron/renderer/sessionRows.js b/src/electron/renderer/sessionRows.js
-index 0981a936..ce31e93d 100644
+index 7ae881ba..6a9f8bbf 100644
 --- a/src/electron/renderer/sessionRows.js
 +++ b/src/electron/renderer/sessionRows.js
-@@ -424,7 +424,7 @@
+@@ -433,7 +433,7 @@
    }
  
    function sessionRowDetailAvailable(row) {
@@ -2158,7 +2203,7 @@ index 0981a936..ce31e93d 100644
        || (row?.client === 'reasonix' && row?.sessionDetailAvailable === true);
    }
  
-@@ -529,6 +529,20 @@
+@@ -539,6 +539,20 @@
      };
    }
  
@@ -2179,7 +2224,7 @@ index 0981a936..ce31e93d 100644
    function sessionRowsForPeriod(period, options = {}) {
      const labels = options.clientLabels || {};
      const colors = options.clientColors || {};
-@@ -638,7 +652,7 @@
+@@ -650,7 +664,7 @@
        const row = nativeSessionRow(session, key, options, now);
        if (row) rows.push(row);
      }
@@ -2188,7 +2233,7 @@ index 0981a936..ce31e93d 100644
    }
  
    function groupBackgroundReviewRows(rows, options = {}) {
-@@ -909,6 +923,7 @@
+@@ -921,6 +935,7 @@
      applyBreakdownRowSemantics,
      archivedSessionCount,
      compactSessionTime,
@@ -2196,7 +2241,7 @@ index 0981a936..ce31e93d 100644
      groupBackgroundReviewRows,
      groupSessionRows,
      groupSubagentRows,
-@@ -916,6 +931,7 @@
+@@ -928,6 +943,7 @@
      isGrokBotSession,
      sessionRowDetailAvailable,
      handleBreakdownRowKeydown,
@@ -2205,19 +2250,18 @@ index 0981a936..ce31e93d 100644
      sessionCacheHitPercent,
      cacheHitLabel,
 diff --git a/src/electron/renderer/styles.css b/src/electron/renderer/styles.css
-index a7312c28..6776d3b5 100644
+index de76c4f1..9cf26950 100644
 --- a/src/electron/renderer/styles.css
 +++ b/src/electron/renderer/styles.css
-@@ -6945,6 +6945,8 @@ html.native-liquid-glass .view-switcher-menu-item { border-radius: 9px; }
+@@ -6998,6 +6998,7 @@ html.native-liquid-glass .view-switcher-menu-item { border-radius: 9px; }
  .detail-session-id-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: text; }
  .detail-session-id-copy { flex-shrink: 0; padding: 0 2px; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; opacity: 0.72; }
  .detail-session-id-copy:hover, .detail-session-id-copy:focus-visible { color: var(--text); opacity: 1; }
-+.row.summary-row[data-review-group="true"] { cursor: pointer; }
 +.row.session-row[data-client="reasonix"][data-detail-unavailable="true"] { cursor: default; }
  .view-preference-row.has-subgroup {
    grid-template-columns: minmax(0, 1fr) repeat(3, 22px);
  }
-@@ -7139,9 +7141,20 @@ html.native-liquid-glass .view-switcher-menu-item { border-radius: 9px; }
+@@ -7192,9 +7193,20 @@ html.native-liquid-glass .view-switcher-menu-item { border-radius: 9px; }
  .trends-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; padding-right: 2px; overflow: hidden; }
  .trends-cap { flex: none; display: flex; align-items: center; justify-content: space-between; font-size: 0.6875rem; letter-spacing: 0.04em; text-transform: uppercase; opacity: 0.6; }
  .trends-open-hint { opacity: 0.75; cursor: pointer; font-size: 0.8125rem; }
@@ -2240,7 +2284,7 @@ index a7312c28..6776d3b5 100644
    fill: var(--chart-bar);
    opacity: 0.5;
 diff --git a/src/electron/renderer/usageCharts.js b/src/electron/renderer/usageCharts.js
-index 14266d19..48a2b3e5 100644
+index 5fc0e39c..8cd3ff89 100644
 --- a/src/electron/renderer/usageCharts.js
 +++ b/src/electron/renderer/usageCharts.js
 @@ -309,18 +309,20 @@
@@ -2268,7 +2312,7 @@ index 14266d19..48a2b3e5 100644
    }
  
    function areaLineChart(daily, options) {
-@@ -484,10 +486,21 @@
+@@ -498,10 +500,21 @@
    }
  
    function sparklineSvg(model, options) {
@@ -2291,7 +2335,7 @@ index 14266d19..48a2b3e5 100644
      const zeroMarkers = o.showZeroMarkers
        ? bars.map((b, i) => {
          if (b.value !== 0) return '';
-@@ -499,7 +512,7 @@
+@@ -513,7 +526,7 @@
        const tip = o.showZeroMarkers && b.value === 0 ? '' : titleOf(i);
        return `<rect x="${svgRound(b.x)}" y="${svgRound(b.y)}" width="${svgRound(b.width)}" height="${svgRound(Math.max(0, b.height))}" rx="${o.radius}" class="spark-bar${b.last ? ' spark-bar--last' : ''}">${tip}</rect>`;
      }).join('');
@@ -2301,10 +2345,10 @@ index 14266d19..48a2b3e5 100644
  
    function areaLineSvg(model) {
 diff --git a/src/electron/tray.js b/src/electron/tray.js
-index 87483beb..df97f429 100644
+index 3ffc9a2d..9d0819dd 100644
 --- a/src/electron/tray.js
 +++ b/src/electron/tray.js
-@@ -275,7 +275,8 @@ const WINDOW_PRESENTATION_MENU_ITEMS = [
+@@ -279,7 +279,8 @@ const WINDOW_PRESENTATION_MENU_ITEMS = [
    ['tray', 'trayMenu.presentation.tray'],
    ['floating', 'trayMenu.presentation.floating'],
    ['normal', 'trayMenu.presentation.normal'],
@@ -2587,1579 +2631,3 @@ index a6c152c0..07138541 100644
    if (client === 'reasonix') return readReasonixSessionDetail({ sessionId, period, home, deps });
    const filePath = resolveSessionFile(client, sessionId, home, { env, useEnvRoots, fs: deps.fs });
    if (!filePath && client === 'codebuddy') {
-diff --git a/tests/electron/edgeAutoHide.test.js b/tests/electron/edgeAutoHide.test.js
-new file mode 100644
-index 00000000..47458a4a
---- /dev/null
-+++ b/tests/electron/edgeAutoHide.test.js
-@@ -0,0 +1,593 @@
-+'use strict';
-+
-+const assert = require('node:assert/strict');
-+const fs = require('node:fs');
-+const path = require('node:path');
-+const test = require('node:test');
-+
-+const edgeAutoHide = require('../../src/electron/edgeAutoHide');
-+const floatingBubble = require('../../src/electron/floatingBubble');
-+const motionPreference = require('../../src/electron/motionPreference');
-+
-+const {
-+  EDGE_VISIBLE_PX,
-+  EDGE_SNAP_THRESHOLD,
-+  EDGE_TRIGGER_ALONG_PADDING,
-+  EDGE_TRIGGER_PERPENDICULAR_TOLERANCE,
-+  EDGE_COLLAPSE_DELAY_MS,
-+  EDGE_ANIMATION_DURATION_MS,
-+  EDGE_WIN32_FRAME_OVERHANG_PX,
-+  EDGE_INTERACTION_MARGIN_PX,
-+  canUseEdgeAutoHide,
-+  edgeCursorInExpandedBounds,
-+  edgeHiddenBounds,
-+  edgeSide,
-+  edgeSnapToBounds,
-+  edgeTriggerHitTest
-+} = edgeAutoHide;
-+
-+// Work area with a 40px taskbar at the bottom of a 1920x1080 screen.
-+const AREA = { x: 0, y: 0, width: 1920, height: 1040 };
-+const DISPLAY = { bounds: { x: 0, y: 0, width: 1920, height: 1080 }, workArea: AREA };
-+const WINDOW = { x: 100, y: 10, width: 340, height: 650 };
-+
-+function displayFor(platform) {
-+  return platform === 'win32'
-+    ? { bounds: DISPLAY.bounds, workArea: AREA }
-+    : DISPLAY;
-+}
-+
-+test('keeps the spec constants that the trigger geometry relies on', () => {
-+  assert.equal(EDGE_VISIBLE_PX, 3);
-+  assert.equal(EDGE_SNAP_THRESHOLD, 12);
-+  assert.equal(EDGE_TRIGGER_ALONG_PADDING, 8);
-+  assert.equal(EDGE_TRIGGER_PERPENDICULAR_TOLERANCE, 12);
-+  assert.equal(typeof EDGE_COLLAPSE_DELAY_MS, 'number');
-+  assert.equal(typeof EDGE_ANIMATION_DURATION_MS, 'number');
-+});
-+
-+test('hidden bounds leave only the 3px strip on-screen for every edge', () => {
-+  for (const platform of ['win32', 'darwin']) {
-+    // getArea() anchors to display.bounds on win32 and workArea elsewhere.
-+    const area = platform === 'win32' ? DISPLAY.bounds : AREA;
-+    const display = displayFor(platform);
-+    // Win32 compensates the DWM frame overhang; the strip width is measured on
-+    // the OUTER Win32 rect, which extends overhang px past the Electron bounds.
-+    const oh = platform === 'win32' ? EDGE_WIN32_FRAME_OVERHANG_PX : 0;
-+    for (const side of ['top', 'bottom', 'left', 'right']) {
-+      const hidden = edgeHiddenBounds(WINDOW, side, display, platform);
-+      assert.ok(hidden, `${platform}/${side} produced bounds`);
-+      // Only the position moves; the window must keep its original size so it
-+      // never fights WINDOW_LIMITS minWidth/minHeight or DWM tiny-window painting.
-+      assert.equal(hidden.width, WINDOW.width, `${platform}/${side} width must not change`);
-+      assert.equal(hidden.height, WINDOW.height, `${platform}/${side} height must not change`);
-+    }
-+
-+    const top = edgeHiddenBounds(WINDOW, 'top', display, platform);
-+    assert.equal(top.x, WINDOW.x);
-+    // Outer bottom = top.y + top.height + oh must sit at area.y + EDGE_VISIBLE_PX.
-+    assert.equal(top.y + top.height + oh, area.y + EDGE_VISIBLE_PX);
-+    assert.ok(top.y < area.y, 'top dock must sit mostly above the screen');
-+
-+    const bottom = edgeHiddenBounds(WINDOW, 'bottom', display, platform);
-+    assert.equal(bottom.x, WINDOW.x);
-+    // No compensation: the visible top edge is cut by the screen edge itself.
-+    assert.equal(bottom.y, area.y + area.height - EDGE_VISIBLE_PX);
-+    assert.ok(bottom.y + bottom.height > area.y + area.height, 'bottom dock must sit mostly below the reference area');
-+
-+    const left = edgeHiddenBounds(WINDOW, 'left', display, platform);
-+    assert.equal(left.y, WINDOW.y);
-+    assert.equal(left.x + left.width + oh, area.x + EDGE_VISIBLE_PX);
-+    assert.ok(left.x < area.x, 'left dock must sit mostly off the left edge');
-+
-+    const right = edgeHiddenBounds(WINDOW, 'right', display, platform);
-+    assert.equal(right.y, WINDOW.y);
-+    assert.equal(right.x - oh, area.x + area.width - EDGE_VISIBLE_PX);
-+    assert.ok(right.x + right.width > area.x + area.width, 'right dock must sit mostly off the right edge');
-+  }
-+});
-+
-+test('win32 hidden bounds shift by the measured DWM overhang, bottom does not', () => {
-+  // Measured on Win11 26200: Electron {y:-480,h:483} -> Win32 {top:-480,bottom:9}.
-+  assert.equal(EDGE_WIN32_FRAME_OVERHANG_PX, 6);
-+  // Window 340x650 at the origin screen.
-+  const top = edgeHiddenBounds(WINDOW, 'top', displayFor('win32'), 'win32');
-+  assert.equal(top.y, DISPLAY.bounds.y + EDGE_VISIBLE_PX - WINDOW.height - EDGE_WIN32_FRAME_OVERHANG_PX);
-+  const left = edgeHiddenBounds(WINDOW, 'left', displayFor('win32'), 'win32');
-+  assert.equal(left.x, DISPLAY.bounds.x + EDGE_VISIBLE_PX - WINDOW.width - EDGE_WIN32_FRAME_OVERHANG_PX);
-+  const right = edgeHiddenBounds(WINDOW, 'right', displayFor('win32'), 'win32');
-+  assert.equal(right.x, DISPLAY.bounds.x + DISPLAY.bounds.width - EDGE_VISIBLE_PX + EDGE_WIN32_FRAME_OVERHANG_PX);
-+  // Bottom dock is exact on both platforms (no overhang on the top border).
-+  const bottomWin = edgeHiddenBounds(WINDOW, 'bottom', displayFor('win32'), 'win32');
-+  const bottomMac = edgeHiddenBounds(WINDOW, 'bottom', displayFor('darwin'), 'darwin');
-+  assert.equal(bottomWin.y, DISPLAY.bounds.y + DISPLAY.bounds.height - EDGE_VISIBLE_PX);
-+  assert.equal(bottomMac.y, AREA.y + AREA.height - EDGE_VISIBLE_PX);
-+});
-+
-+test('hidden bounds anchor to display.bounds on win32 and workArea elsewhere', () => {
-+  const win32 = edgeHiddenBounds(WINDOW, 'bottom', displayFor('win32'), 'win32');
-+  assert.equal(win32.y, DISPLAY.bounds.y + DISPLAY.bounds.height - EDGE_VISIBLE_PX);
-+  const mac = edgeHiddenBounds(WINDOW, 'bottom', displayFor('darwin'), 'darwin');
-+  assert.equal(mac.y, AREA.y + AREA.height - EDGE_VISIBLE_PX);
-+});
-+
-+test('rejects malformed input instead of producing NaN geometry', () => {
-+  assert.equal(edgeHiddenBounds(null, 'top', DISPLAY, 'darwin'), null);
-+  assert.equal(edgeHiddenBounds(WINDOW, null, DISPLAY, 'darwin'), null);
-+  assert.equal(edgeHiddenBounds(WINDOW, 'top', null, 'darwin'), null);
-+  assert.equal(edgeHiddenBounds(WINDOW, 'diagonal', DISPLAY, 'darwin'), null);
-+  assert.equal(edgeSide(null, DISPLAY, 'darwin'), null);
-+  assert.equal(edgeSide(WINDOW, null, 'darwin'), null);
-+});
-+
-+test('detects which edge the window is docked to', () => {
-+  // Mid-screen window (y=300) so only the axis under test is near an edge.
-+  const away = { x: 200, y: 300, width: WINDOW.width, height: WINDOW.height };
-+  assert.equal(edgeSide({ ...away, x: AREA.x }, DISPLAY, 'darwin'), 'left');
-+  assert.equal(edgeSide({ ...away, x: AREA.x + 8 }, DISPLAY, 'darwin'), 'left');
-+  assert.equal(edgeSide({ ...away, x: AREA.x + EDGE_SNAP_THRESHOLD }, DISPLAY, 'darwin'), 'left');
-+  assert.equal(
-+    edgeSide({ ...away, x: AREA.x + AREA.width - away.width + EDGE_SNAP_THRESHOLD }, DISPLAY, 'darwin'),
-+    'right'
-+  );
-+  assert.equal(edgeSide({ ...away, y: AREA.y + 4 }, DISPLAY, 'darwin'), 'top');
-+  assert.equal(
-+    edgeSide({ ...away, y: AREA.y + AREA.height - away.height }, DISPLAY, 'darwin'),
-+    'bottom'
-+  );
-+});
-+
-+test('does not treat a window parked away from every edge as docked', () => {
-+  assert.equal(edgeSide({ ...WINDOW, x: 200, y: 300 }, DISPLAY, 'darwin'), null);
-+  assert.equal(
-+    edgeSide({ ...WINDOW, x: AREA.x + EDGE_SNAP_THRESHOLD + 1, y: 300 }, DISPLAY, 'darwin'),
-+    null
-+  );
-+});
-+
-+test('corner docks resolve to the closest edge with a stable tie-break', () => {
-+  // Equidistant left+top corner: top wins (priority top > bottom > left > right).
-+  assert.equal(edgeSide({ ...WINDOW, x: AREA.x, y: AREA.y }, DISPLAY, 'darwin'), 'top');
-+  // Equidistant bottom+right corner: bottom outranks right in the tie-break.
-+  const corner = {
-+    x: AREA.x + AREA.width - WINDOW.width,
-+    y: AREA.y + AREA.height - WINDOW.height,
-+    width: WINDOW.width,
-+    height: WINDOW.height
-+  };
-+  assert.equal(edgeSide(corner, DISPLAY, 'darwin'), 'bottom');
-+  // Same corner position but away from the bottom edge: right is unambiguous.
-+  assert.equal(
-+    edgeSide({ ...corner, y: 100 }, DISPLAY, 'darwin'),
-+    'right'
-+  );
-+});
-+
-+test('snap flushes the docked axis and preserves the free axis', () => {
-+  const left = edgeSnapToBounds({ ...WINDOW, x: 7, y: 123 }, 'left', DISPLAY, 'darwin');
-+  assert.equal(left.x, AREA.x);
-+  assert.equal(left.y, 123);
-+  assert.equal(left.width, WINDOW.width);
-+  assert.equal(left.height, WINDOW.height);
-+
-+  const top = edgeSnapToBounds({ ...WINDOW, x: 321, y: -9 }, 'top', DISPLAY, 'darwin');
-+  assert.equal(top.y, AREA.y);
-+  assert.equal(top.x, 321);
-+
-+  const right = edgeSnapToBounds(WINDOW, 'right', DISPLAY, 'darwin');
-+  assert.equal(right.x, AREA.x + AREA.width - WINDOW.width);
-+
-+  const bottom = edgeSnapToBounds(WINDOW, 'bottom', DISPLAY, 'darwin');
-+  assert.equal(bottom.y, AREA.y + AREA.height - WINDOW.height);
-+});
-+
-+test('trigger zone: hovering the strip where the window is docked reveals it', () => {
-+  // Window docked flush left, spanning y=100..750.
-+  const docked = { x: AREA.x, y: 100, width: WINDOW.width, height: WINDOW.height };
-+  const display = displayFor('win32');
-+  assert.equal(edgeTriggerHitTest({ x: 5, y: 400 }, docked, 'left', display, 'win32'), true);
-+  assert.equal(edgeTriggerHitTest({ x: 0, y: 400 }, docked, 'left', display, 'win32'), true);
-+  assert.equal(edgeTriggerHitTest({ x: EDGE_TRIGGER_PERPENDICULAR_TOLERANCE, y: 400 }, docked, 'left', display, 'win32'), true);
-+});
-+
-+test('trigger zone: same screen edge but outside the window span must NOT fire', () => {
-+  // The TokenHub bug: cursor rides the same screen edge far from the window —
-+  // the whole edge must not act as a handle, only the window's own span.
-+  const docked = { x: AREA.x, y: 100, width: WINDOW.width, height: WINDOW.height };
-+  const display = displayFor('win32');
-+  // Below the span (span ends at y=750, minus the 8px along-padding).
-+  assert.equal(edgeTriggerHitTest({ x: 5, y: 900 }, docked, 'left', display, 'win32'), false);
-+  assert.equal(edgeTriggerHitTest({ x: 0, y: 1039 }, docked, 'left', display, 'win32'), false);
-+  // Above the span.
-+  assert.equal(edgeTriggerHitTest({ x: 5, y: 50 }, docked, 'left', display, 'win32'), false);
-+  assert.equal(edgeTriggerHitTest({ x: 5, y: 107 }, docked, 'left', display, 'win32'), false);
-+  // Just inside both padded ends still fires.
-+  assert.equal(edgeTriggerHitTest({ x: 5, y: 108 }, docked, 'left', display, 'win32'), true);
-+  assert.equal(edgeTriggerHitTest({ x: 5, y: 742 }, docked, 'left', display, 'win32'), true);
-+});
-+
-+test('trigger zone: cursor deeper than the perpendicular tolerance does not fire', () => {
-+  const docked = { x: AREA.x, y: 100, width: WINDOW.width, height: WINDOW.height };
-+  const display = displayFor('win32');
-+  assert.equal(edgeTriggerHitTest({ x: 13, y: 400 }, docked, 'left', display, 'win32'), false);
-+  assert.equal(edgeTriggerHitTest({ x: 200, y: 400 }, docked, 'left', display, 'win32'), false);
-+});
-+
-+test('trigger zone: works for all four orientations with along-axis constraints', () => {
-+  const display = displayFor('darwin');
-+  const topDocked = { x: 100, y: AREA.y, width: 340, height: WINDOW.height };
-+  assert.equal(edgeTriggerHitTest({ x: 200, y: 5 }, topDocked, 'top', display, 'darwin'), true);
-+  // Along-axis miss: same edge, x far outside 108..432.
-+  assert.equal(edgeTriggerHitTest({ x: 500, y: 5 }, topDocked, 'top', display, 'darwin'), false);
-+  assert.equal(edgeTriggerHitTest({ x: 90, y: 5 }, topDocked, 'top', display, 'darwin'), false);
-+  // Perpendicular miss.
-+  assert.equal(edgeTriggerHitTest({ x: 200, y: 13 }, topDocked, 'top', display, 'darwin'), false);
-+
-+  const rightDocked = { x: AREA.x + AREA.width - WINDOW.width, y: 100, width: WINDOW.width, height: WINDOW.height };
-+  assert.equal(edgeTriggerHitTest({ x: AREA.x + AREA.width - 4, y: 400 }, rightDocked, 'right', display, 'darwin'), true);
-+  assert.equal(edgeTriggerHitTest({ x: AREA.x + AREA.width - 4, y: 900 }, rightDocked, 'right', display, 'darwin'), false);
-+  assert.equal(edgeTriggerHitTest({ x: AREA.x + AREA.width - 13, y: 400 }, rightDocked, 'right', display, 'darwin'), false);
-+
-+  const bottomDocked = { x: 100, y: AREA.y + AREA.height - WINDOW.height, width: 340, height: WINDOW.height };
-+  assert.equal(edgeTriggerHitTest({ x: 200, y: AREA.y + AREA.height - 4 }, bottomDocked, 'bottom', display, 'darwin'), true);
-+  assert.equal(edgeTriggerHitTest({ x: 500, y: AREA.y + AREA.height - 4 }, bottomDocked, 'bottom', display, 'darwin'), false);
-+  assert.equal(edgeTriggerHitTest({ x: 200, y: AREA.y + AREA.height - 13 }, bottomDocked, 'bottom', display, 'darwin'), false);
-+});
-+
-+test('trigger zone: malformed cursors and bounds never fire', () => {
-+  const docked = { x: AREA.x, y: 100, width: WINDOW.width, height: WINDOW.height };
-+  assert.equal(edgeTriggerHitTest(null, docked, 'left', DISPLAY, 'darwin'), false);
-+  assert.equal(edgeTriggerHitTest({ x: Number.NaN, y: 400 }, docked, 'left', DISPLAY, 'darwin'), false);
-+  assert.equal(edgeTriggerHitTest({ x: 5, y: Number.POSITIVE_INFINITY }, docked, 'left', DISPLAY, 'darwin'), false);
-+  assert.equal(edgeTriggerHitTest({ x: 5, y: 400 }, docked, 'diagonal', DISPLAY, 'darwin'), false);
-+});
-+
-+test('expanded-rect containment guards the collapse-under-cursor case', () => {
-+  const docked = { x: AREA.x, y: 100, width: WINDOW.width, height: WINDOW.height };
-+  assert.equal(edgeCursorInExpandedBounds({ x: 0, y: 100 }, docked), true);
-+  assert.equal(edgeCursorInExpandedBounds({ x: 339, y: 749 }, docked), true);
-+  // Right/bottom edges are exclusive so a cursor just past the window counts as "away".
-+  assert.equal(edgeCursorInExpandedBounds({ x: 340, y: 400 }, docked), false);
-+  assert.equal(edgeCursorInExpandedBounds({ x: 100, y: 750 }, docked), false);
-+  assert.equal(edgeCursorInExpandedBounds(null, docked), false);
-+});
-+
-+test('the interaction margin keeps a cursor on a resize border inside the hold test', () => {
-+  // The resize border sits on the Win32 outer frame, ~6px past the Electron
-+  // rect; a cursor resting there must count as "using the window".
-+  assert.equal(EDGE_INTERACTION_MARGIN_PX, 10);
-+  const docked = { x: AREA.x, y: 100, width: WINDOW.width, height: WINDOW.height };
-+  // 4px past each side: outside the rect, inside the margin.
-+  assert.equal(edgeCursorInExpandedBounds({ x: 344, y: 400 }, docked, EDGE_INTERACTION_MARGIN_PX), true, 'right border');
-+  assert.equal(edgeCursorInExpandedBounds({ x: 170, y: 754 }, docked, EDGE_INTERACTION_MARGIN_PX), true, 'bottom border');
-+  assert.equal(edgeCursorInExpandedBounds({ x: -4, y: 400 }, docked, EDGE_INTERACTION_MARGIN_PX), true, 'left border');
-+  assert.equal(edgeCursorInExpandedBounds({ x: 170, y: 96 }, docked, EDGE_INTERACTION_MARGIN_PX), true, 'top border');
-+  // Beyond the margin counts as away again.
-+  assert.equal(edgeCursorInExpandedBounds({ x: 170, y: 761 }, docked, EDGE_INTERACTION_MARGIN_PX), false);
-+  assert.equal(edgeCursorInExpandedBounds({ x: 351, y: 400 }, docked, EDGE_INTERACTION_MARGIN_PX), false);
-+  // Default (no margin) keeps the exclusive-rect contract.
-+  assert.equal(edgeCursorInExpandedBounds({ x: 344, y: 400 }, docked), false);
-+  // A non-finite margin degrades to 0 instead of widening the rect forever.
-+  assert.equal(edgeCursorInExpandedBounds({ x: 344, y: 400 }, docked, Number.NaN), false);
-+});
-+
-+test('edge mode gates on windowBehavior and stays off in tray mode', () => {
-+  assert.equal(canUseEdgeAutoHide({ windowBehavior: 'edge' }), true);
-+  assert.equal(canUseEdgeAutoHide({ windowBehavior: 'edge', trayMode: true }), false);
-+  assert.equal(canUseEdgeAutoHide({ windowBehavior: 'floating' }), false);
-+  assert.equal(canUseEdgeAutoHide({ windowBehavior: 'normal' }), false);
-+  assert.equal(canUseEdgeAutoHide({ windowBehavior: 'desktop' }), false);
-+  assert.equal(canUseEdgeAutoHide({}), false);
-+});
-+
-+test('floating bubble and edge auto-hide stay mutually exclusive', () => {
-+  const enabled = { floatingBubbleEnabled: true, trayMode: false };
-+  assert.equal(floatingBubble.canUseFloatingBubble({ ...enabled, windowBehavior: 'floating' }), true);
-+  assert.equal(floatingBubble.canUseFloatingBubble({ ...enabled, windowBehavior: 'edge' }), false);
-+});
-+
-+test('reduceMotion routes edge animation through the shared motion gate', () => {
-+  // The decision itself is pure and covered directly:
-+  assert.equal(motionPreference.shouldReduceMotion('on', false), true, 'reduceMotion=on must skip animation');
-+  assert.equal(motionPreference.shouldReduceMotion('off', false), false);
-+  assert.equal(motionPreference.shouldReduceMotion('system', true), true);
-+  assert.equal(motionPreference.shouldReduceMotion('system', false), false);
-+
-+  // main.js wiring (source contract, same style as windowBehavior.test.js):
-+  // the tween must bail to an instant, guard-checked move when the gate fires.
-+  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
-+  assert.match(
-+    mainSource,
-+    /if \(!source \|\| edgeReducedMotion\(\) \|\| effective <= 0\) \{\s*\n\s*setEdgeWindowPosition\(target\.x, target\.y\);/,
-+    'animateWindowPosition must move instantly (no tween) when reduceMotion is on'
-+  );
-+  assert.match(
-+    mainSource,
-+    /function edgeReducedMotion\(\) \{\s*\n\s*return motionPreferenceApi\.shouldReduceMotion\(settings\?\.reduceMotion, nativeTheme\.shouldReduceMotion\);/,
-+    'edgeReducedMotion must reuse motionPreferenceApi.shouldReduceMotion'
-+  );
-+});
-+
-+test('hidden state only repositions the window — main.js never resizes it', () => {
-+  // The animation helper must move via the geometry guard; a setBounds call inside
-+  // it would resize against WINDOW_LIMITS minWidth=240.
-+  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
-+  const animateFn = mainSource.match(/function animateWindowPosition[\s\S]*?\n\}/);
-+  assert.ok(animateFn, 'animateWindowPosition exists in main.js');
-+  assert.doesNotMatch(animateFn[0], /\.setBounds\(/, 'animation must not resize the window');
-+  assert.doesNotMatch(
-+    animateFn[0],
-+    /mainWindow\.setPosition\(/,
-+    'the animation must move through the geometry guard, never setPosition directly'
-+  );
-+  assert.match(animateFn[0], /setEdgeWindowPosition\(/, 'the animation must move via setEdgeWindowPosition');
-+  // edgeHiddenBounds is the only geometry source for the hidden state, and the
-+  // pure tests above pin it to width/height-preserving output.
-+  const collapseFn = mainSource.match(/function collapseEdge[\s\S]*?\n\}/);
-+  assert.ok(collapseFn, 'collapseEdge exists in main.js');
-+  assert.match(collapseFn[0], /edgeAutoHideApi\.edgeHiddenBounds\(/, 'hidden geometry must come from edgeHiddenBounds');
-+});
-+
-+// --- robustness contracts added by the harden-edge-auto-hide change ---------
-+
-+// Source-contract checks must read CODE, never the prose explaining it: several
-+// negative assertions below look for the ABSENCE of a pattern, and the comments
-+// deliberately name the thing they explain the absence of.
-+function stripComments(source) {
-+  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
-+}
-+
-+
-+test('the geometry guard is the only writer and rejects non-finite coordinates', () => {
-+  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
-+  const guardFn = mainSource.match(/function setEdgeWindowPosition\(x, y\)[\s\S]*?\n\}/);
-+  assert.ok(guardFn, 'setEdgeWindowPosition exists in main.js');
-+  assert.match(
-+    guardFn[0],
-+    /if \(!Number\.isFinite\(x\) \|\| !Number\.isFinite\(y\)\) \{/,
-+    'the guard must test both coordinates with Number.isFinite'
-+  );
-+  assert.match(guardFn[0], /mainWindow\.setPosition\(x, y, false\);/, 'the guard is the single native writer');
-+
-+  // A rejected frame must return without touching native geometry at all.
-+  const rejectBranch = guardFn[0].match(/if \(!Number\.isFinite\(x\)[\s\S]*?\n  \}/);
-+  assert.ok(rejectBranch, 'guard has a rejection branch');
-+  assert.doesNotMatch(rejectBranch[0], /setPosition\(/, 'a rejected frame must not reach setPosition');
-+
-+  // Same predicate the guard uses, checked exhaustively at the value level.
-+  const finite = (v) => Number.isFinite(v);
-+  for (const bad of [NaN, undefined, null, Infinity, -Infinity, '12', {}]) {
-+    assert.equal(finite(bad), false, `Number.isFinite must reject ${String(bad)}`);
-+  }
-+  assert.equal(finite(0), true);
-+});
-+
-+test('the in-flight marker expires on its own instead of wedging auto-hide', () => {
-+  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
-+  assert.match(
-+    mainSource,
-+    /function edgeIsAnimating\(\) \{\s*\n\s*return Date\.now\(\) < edgeAutoHideState\.animatingUntil;/,
-+    'in-flight state must be a deadline, not a boolean cleared only on success'
-+  );
-+  assert.doesNotMatch(
-+    mainSource,
-+    /edgeAutoHideState\.animating\s*=/,
-+    'the boolean in-flight flag must not come back: one thrown frame wedged auto-hide permanently'
-+  );
-+  assert.match(mainSource, /edgeAutoHideState\.animatingUntil = 0;/, 'the deadline must be cleared after the last frame');
-+  // The deadline must be strictly in the future while animating, so a leaked
-+  // value can never be "still animating" forever.
-+  const deadline = Date.now() + 280;
-+  assert.equal(Date.now() < deadline, true);
-+  assert.equal(Date.now() < 0, false);
-+});
-+
-+test('a single idempotent reconciler is the only hide/show executor', () => {
-+  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
-+  assert.match(mainSource, /function reconcileEdgeAutoHide\(\)/, 'the reconciler must exist');
-+  assert.match(mainSource, /const desired = edgeAutoHideState\.desired;/, 'the reconciler must be driven by the desired state');
-+
-+  // The cursor poll decides; it must never move the window itself, or a stray
-+  // stopTimer() would again leave nothing responsible for hiding the window.
-+  const pollFn = mainSource.match(/function startEdgeCursorPolling\(\)[\s\S]*?\n\}/);
-+  assert.ok(pollFn, 'startEdgeCursorPolling exists in main.js');
-+  assert.doesNotMatch(pollFn[0], /mainWindow\.setPosition\(/, 'the poll must not write geometry');
-+  assert.doesNotMatch(pollFn[0], /collapseEdge\(/, 'the poll must not collapse directly');
-+  assert.doesNotMatch(pollFn[0], /expandEdge\(\)/, 'the poll must not expand directly');
-+  assert.match(pollFn[0], /reconcileEdgeAutoHide\(\)/, 'the poll must delegate movement to the reconciler');
-+
-+  // The slow keeper must re-arm the poll and reconcile, so a killed fast path
-+  // self-heals instead of stranding the window.
-+  assert.match(
-+    mainSource,
-+    /if \(!edgeAutoHideState\.pollTimer\) startEdgeCursorPolling\(\);\s*\n\s*reconcileEdgeAutoHide\(\);/,
-+    'the keeper must re-arm the poll and then reconcile'
-+  );
-+  assert.match(
-+    mainSource,
-+    /if \(!edgeAutoHideState\.pollTimer\) startEdgeCursorPolling\(\);\s*\n\s*reconcileEdgeAutoHide\(\);\s*\n\s*\}, 1000\);/,
-+    'the keeper must run on a slow interval'
-+  );
-+
-+  // No focus gate may reappear in the collapse decision path (check the code,
-+  // not the comment that explains why the gate is absent).
-+  const pollCode = stripComments(pollFn[0]);
-+  assert.doesNotMatch(pollCode, /isFocused\(\)/, 'focus must not gate the collapse decision');
-+  assert.doesNotMatch(pollCode, /\|\|\s*mainWindow\.isFocused\(\)/, 'no focus gate may survive in the collapsed decision');
-+});
-+
-+test('an uncaught main-process exception is logged instead of raising a modal dialog', () => {
-+  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
-+  assert.match(mainSource, /process\.on\('uncaughtException'/, 'the main process must install an uncaught handler');
-+  const handler = mainSource.match(/process\.on\('uncaughtException',[\s\S]*?\n\}\);/);
-+  assert.ok(handler, 'the handler must be a single block');
-+  assert.match(handler[0], /edgeLog\(/, 'the handler must persist the error');
-+  const handlerCode = stripComments(handler[0]);
-+  assert.doesNotMatch(handlerCode, /\bthrow\b/, 'the handler must not re-throw: Electron would still show the modal');
-+  assert.doesNotMatch(handlerCode, /dialog|showMessageBox/, 'the handler must not open a dialog');
-+  assert.match(handlerCode, /animatingUntil = 0;/, 'the handler must clear the in-flight deadline so the reconciler can recover');
-+});
-+
-+// --- contracts added by the finalize-edge-auto-hide change ------------------
-+
-+test('the dead edgeExpandedBoundsForSide helper is gone', () => {
-+  assert.equal(edgeAutoHide.edgeExpandedBoundsForSide, undefined, 'the export must be removed');
-+  const moduleSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'edgeAutoHide.js'), 'utf8');
-+  assert.doesNotMatch(moduleSource, /edgeExpandedBoundsForSide/, 'no dead code may remain in the module');
-+});
-+
-+test('focus alone must not reveal a hidden docked window', () => {
-+  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
-+  const focusHandler = mainSource.match(/win\.on\('focus', \(\) => \{[\s\S]*?\n  \}\);/);
-+  assert.ok(focusHandler, 'the focus handler exists');
-+  const focusCode = stripComments(focusHandler[0]);
-+  assert.doesNotMatch(focusCode, /expandEdge\(\)/, 'focus must not expand: at startup it popped the restored window out');
-+  assert.match(focusCode, /scheduleEdgeAutoHide\(\)/, 'focus must still re-arm the cursor poll');
-+});
-+
-+test('guarded geometry writes are gated until the window is first shown', () => {
-+  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
-+  const guardFn = mainSource.match(/function setEdgeWindowPosition\(x, y\)[\s\S]*?\n\}/);
-+  assert.ok(guardFn, 'setEdgeWindowPosition exists');
-+  assert.match(
-+    guardFn[0],
-+    /if \(!edgeAutoHideState\.geometryReady\) return false;/,
-+    'the guard must skip writes before the first show'
-+  );
-+  // The early skip sits BEFORE the isFinite branch and must not trip the
-+  // session-wide degrade: guardTripped may only be set by a real rejection.
-+  const gateIndex = guardFn[0].indexOf('if (!edgeAutoHideState.geometryReady) return false;');
-+  const finiteIndex = guardFn[0].indexOf('if (!Number.isFinite(x)');
-+  assert.ok(gateIndex !== -1 && finiteIndex !== -1 && gateIndex < finiteIndex, 'the gate precedes validation');
-+  assert.match(mainSource, /edgeAutoHideState\.geometryReady = true;/, 'something must open the gate');
-+  const showHandler = mainSource.match(/win\.on\('show'[\s\S]*?\n  \}\);/);
-+  assert.ok(showHandler, 'the show handler exists');
-+  assert.match(stripComments(showHandler[0]), /geometryReady = true;/, 'first show opens the gate');
-+  // The reset must sit in the window-creation path, right after the assignment;
-+  // upstream's material-lifecycle test owns the line right after `mainWindow = win;`,
-+  // so only insist the gate reset stays within the same creation neighborhood.
-+  assert.match(mainSource, /mainWindow = win;[\s\S]{0,200}?edgeAutoHideState\.geometryReady = false;/, 'a recreated window must re-earn readiness');
-+});
-+
-+test('startup restore moves the window without imposing the saved size', () => {
-+  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
-+  assert.doesNotMatch(
-+    mainSource,
-+    /setBounds\(saved\.hiddenBounds\)/,
-+    'the restore must not resurrect the saved width/height over the created size'
-+  );
-+  const restoreFn = mainSource.match(/const created = mainWindow\.getBounds\(\);[\s\S]*?\n      \}\);/);
-+  assert.ok(restoreFn, 'the restore merges saved position with created size');
-+  assert.match(restoreFn[0], /width: created\.width/, 'width comes from the created bounds');
-+  assert.match(restoreFn[0], /height: created\.height/, 'height comes from the created bounds');
-+});
-+
-+test('a hidden dock follows resizes via syncEdgeDockGeometry', () => {
-+  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
-+  const syncFn = mainSource.match(/function syncEdgeDockGeometry\(\)[\s\S]*?\n\}/);
-+  assert.ok(syncFn, 'syncEdgeDockGeometry exists');
-+  const syncCode = stripComments(syncFn[0]);
-+  assert.match(syncCode, /!edgeAutoHideState\.hidden/, 'it must only reconcile the hidden state');
-+  assert.match(syncCode, /edgeAutoHideApi\.edgeSnapToBounds\(/, 'expanded geometry is recomputed from the real bounds');
-+  assert.match(syncCode, /edgeAutoHideApi\.edgeHiddenBounds\(/, 'hidden geometry is recomputed from the new size');
-+  assert.match(syncCode, /settings\.edgeAutoHideBounds = \{ side/, 'the persisted dock geometry must be refreshed');
-+  assert.match(syncCode, /setEdgeWindowPosition\(hidden\.x, hidden\.y\)/, 'it moves via the guarded writer, position-only');
-+  assert.doesNotMatch(syncCode, /\.setBounds\(/, 'it must not resize the window');
-+  const resizedHandler = mainSource.match(/win\.on\('resized'[\s\S]*?\n  \}\);/);
-+  assert.ok(resizedHandler, 'the resized handler exists');
-+  assert.match(resizedHandler[0], /syncEdgeDockGeometry\(\)/, 'resized events feed the dock sync');
-+  // 'resized' is silent for programmatic/external resizes on Windows, so the
-+  // continuous 'resize' event must feed the sync too, debounced.
-+  const resizeHandler = mainSource.match(/win\.on\('resize', \(\) => \{[\s\S]*?\n  \}\);/);
-+  assert.ok(resizeHandler, 'the continuous resize handler exists');
-+  const resizeCode = stripComments(resizeHandler[0]);
-+  assert.match(resizeCode, /edgeResizeSyncTimer = setTimeout\(/, 'the resize sync must be debounced');
-+  assert.match(resizeCode, /syncEdgeDockGeometry\(\)/, 'the debounced sync must call syncEdgeDockGeometry');
-+});
-+
-+test('startup restore recomputes the hidden geometry with the current formula', () => {
-+  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
-+  assert.doesNotMatch(
-+    mainSource,
-+    /edgeAutoHideState\.hiddenBounds = saved\.hiddenBounds;/,
-+    'saved hidden coordinates must not be trusted verbatim: a formula change leaves a stale strip'
-+  );
-+  const restoreBlock = mainSource.match(/const recomputed = edgeAutoHideApi\.edgeHiddenBounds\(saved\.expandedBounds[\s\S]*?\n      \}/);
-+  assert.ok(restoreBlock, 'the restore recomputes hidden bounds from the saved expanded bounds');
-+  assert.match(restoreBlock[0], /settings\.edgeAutoHideBounds = /, 'the corrected geometry is persisted back');
-+});
-+
-+test('a transient native rejection degrades only after repeated consecutive failures', () => {
-+  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
-+  const guardFn = mainSource.match(/function setEdgeWindowPosition\(x, y\)[\s\S]*?\n\}/);
-+  assert.ok(guardFn, 'setEdgeWindowPosition exists');
-+  const guardCode = stripComments(guardFn[0]);
-+  assert.match(guardCode, /nativeRejectStreak >= 3/, 'the session degrade needs repeated consecutive failures');
-+  assert.match(guardCode, /nativeRejectStreak = 0;/, 'a successful write must clear the streak');
-+  // Non-finite coordinates remain an immediate degrade: that is a logic bug,
-+  // and later frames from broken geometry cannot be trusted.
-+  const finiteBranch = guardFn[0].match(/if \(!Number\.isFinite\(x\)[\s\S]*?\n  \}/);
-+  assert.ok(finiteBranch, 'the non-finite branch exists');
-+  assert.match(finiteBranch[0], /guardTripped = true;/, 'non-finite coordinates degrade immediately');
-+});
-+
-+test('the tween snaps onto its target instead of playing the asymptotic tail', () => {
-+  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
-+  const animateFn = mainSource.match(/function animateWindowPosition[\s\S]*?\n\}/);
-+  assert.ok(animateFn, 'animateWindowPosition exists');
-+  assert.match(
-+    animateFn[0],
-+    /remaining < 1\)/,
-+    'the last sub-pixel step must jump straight to the target'
-+  );
-+  assert.match(animateFn[0], /setEdgeWindowPosition\(target\.x, target\.y\)/, 'the snap goes through the guard');
-+});
-+
-+test('resizing a docked expanded window must never fold it back up', () => {
-+  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
-+  // The hold test carries the interaction margin (the resize border lives
-+  // outside the Electron rect).
-+  const pollFn = mainSource.match(/function startEdgeCursorPolling\(\)[\s\S]*?\n\}/);
-+  assert.ok(pollFn, 'startEdgeCursorPolling exists');
-+  assert.match(
-+    pollFn[0],
-+    /edgeCursorInExpandedBounds\(cursor, docked, edgeAutoHideApi\.EDGE_INTERACTION_MARGIN_PX\)/,
-+    'the expanded-state hold test must use the interaction margin'
-+  );
-+  // The hidden-state trigger zone must stay narrow: no margin argument there.
-+  assert.match(
-+    pollFn[0],
-+    /edgeTriggerHitTest\(cursor, expanded, side, display, process\.platform\)/,
-+    'the trigger hit test must stay margin-free'
-+  );
-+  // Resize activity refreshes the grace timestamp in BOTH resize events.
-+  const resizeHandler = mainSource.match(/win\.on\('resize', \(\) => \{[\s\S]*?\n  \}\);/);
-+  assert.ok(resizeHandler, 'the resize handler exists');
-+  assert.match(resizeHandler[0], /lastResizeAt = Date\.now\(\);/, 'continuous resize feeds the grace');
-+  const resizedHandler = mainSource.match(/win\.on\('resized'[\s\S]*?\n  \}\);/);
-+  assert.ok(resizedHandler, 'the resized handler exists');
-+  assert.match(resizedHandler[0], /lastResizeAt = Date\.now\(\);/, 'resize end feeds the grace too');
-+  // Grace vetoes both the arming and the firing of a collapse.
-+  assert.match(mainSource, /function edgeResizeGraceActive\(\)/, 'the grace predicate exists');
-+  const pollCode = stripComments(pollFn[0]);
-+  assert.match(pollCode, /if \(edgeResizeGraceActive\(\)\) \{\s*\n\s*clearEdgeCollapseTimer\(\);/, 'grace must not arm a collapse');
-+  const timerBody = pollCode.match(/collapseTimer = setTimeout\(\(\) => \{[\s\S]*?\}, edgeAutoHideApi\.EDGE_COLLAPSE_DELAY_MS\);/);
-+  assert.ok(timerBody, 'the collapse timer exists');
-+  assert.match(
-+    timerBody[0],
-+    /if \(edgeResizeGraceActive\(\)\) return;/,
-+    'a collapse firing into an active resize must be vetoed'
-+  );
-+});
-+
-+test('decision logging is opt-in and never on by default', () => {
-+  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
-+  assert.match(
-+    mainSource,
-+    /return settings\?\.edgeAutoHideDebug === true \|\| process\.env\.TOKEN_MONITOR_EDGE_DEBUG === '1';/,
-+    'the switch is the settings key OR the env var'
-+  );
-+  assert.match(mainSource, /function edgeDebug\(scope, message\)/, 'the debug writer exists');
-+  assert.match(mainSource, /'token-monitor-edge-debug\.log'/, 'debug output goes to its own file');
-+});
-+
-diff --git a/tests/electron/edgeDockController.test.js b/tests/electron/edgeDockController.test.js
-index 4b505387..6d9fb7bc 100644
---- a/tests/electron/edgeDockController.test.js
-+++ b/tests/electron/edgeDockController.test.js
-@@ -193,6 +193,12 @@ function createFixture(options = {}) {
-     isFullScreen: options.isFullScreen,
-     primaryButtonDown: options.primaryButtonDown,
-     installNonActivatingInput: options.installNonActivatingInput,
-+    // The poll's native topmost sweep is a no-op here (no koffi in tests) but
-+    // reports success, so the poll skips its Electron fallback and the
-+    // zOrder assertions below only count the controller's own raise paths.
-+    // Tests that exercise that fallback pass forceTopmostDockWindows: () => 0.
-+    forceTopmostDockWindows: options.forceTopmostDockWindows || (() => 1),
-+    probeDockInput: options.probeDockInput,
-     applyShapeMask: (win) => {
-       maskWindows.push(win);
-       return options.maskAvailable !== false;
-@@ -810,6 +816,28 @@ test('a drag on a larger dock keeps the grab point under the pointer', async (t)
-   assert.equal(fixture.placements.at(-1).offset, expected.offset);
- });
- 
-+test('the poll re-asserts topmost when Windows strips the flag', async (t) => {
-+  // Windows removes WS_EX_TOPMOST from the dock surfaces over a session
-+  // (shell z-order banding when other apps activate); a dock that lost
-+  // topmost still paints but is input-dead under whatever covers the edge.
-+  const fixture = createFixture({ forceTopmostDockWindows: () => 0 });
-+  t.after(() => fixture.controller.stop());
-+  for (const win of FakeBrowserWindow.instances) {
-+    win.isAlwaysOnTop = () => win.topmostRestored === true;
-+    const original = win.setAlwaysOnTop.bind(win);
-+    win.setAlwaysOnTop = (...args) => {
-+      win.topmostRestored = args[0] === true;
-+      return original(...args);
-+    };
-+  }
-+  // One idle poll tick (90ms) is enough to run the guard on every surface.
-+  await new Promise((resolve) => setTimeout(resolve, 150));
-+  assert.ok(
-+    FakeBrowserWindow.instances.every((win) => win.topmostRestored === true),
-+    'the poll restores topmost on every dock surface'
-+  );
-+});
-+
- test('Windows Edge Dock falls back to the shaped renderer when native hosting is unavailable', (t) => {
-   const fixture = createFixture({ nativeGlass: true });
-   t.after(() => fixture.controller.stop());
-diff --git a/tests/electron/edgeDockTopmost.test.js b/tests/electron/edgeDockTopmost.test.js
-new file mode 100644
-index 00000000..be978fcc
---- /dev/null
-+++ b/tests/electron/edgeDockTopmost.test.js
-@@ -0,0 +1,160 @@
-+'use strict';
-+
-+const assert = require('node:assert/strict');
-+const test = require('node:test');
-+
-+const { createApi, dockHwnds, forceTopmost, forceTopmostDockWindows, probeDockInput } = require('../../src/electron/edgeDock/topmost');
-+
-+function fakeWindow(handleValue) {
-+  const buffer = Buffer.alloc(8);
-+  buffer.writeBigUInt64LE(BigInt(handleValue));
-+  return {
-+    getNativeWindowHandle: () => buffer,
-+    isDestroyed: () => false
-+  };
-+}
-+
-+// Fake koffi library: records binding signatures and emulates a small desktop
-+// with dock windows (ours, by title) plus a decoy from another process.
-+function fakeKoffi(state) {
-+  state.calls = state.calls || [];
-+  state.signatures = state.signatures || [];
-+  return {
-+    struct: () => ({}),
-+    load: () => ({
-+      func: (signature) => {
-+        state.signatures.push(signature);
-+        if (signature.startsWith('uintptr_t FindWindowExW')) {
-+          return (parent, after, cls, title) => {
-+            state.calls.push(['find', Number(after), cls, title]);
-+            const pool = state.windows.filter((w) => !after || Number(w.hwnd) > Number(after));
-+            return pool.length ? pool[0].hwnd : 0;
-+          };
-+        }
-+        if (signature.startsWith('uint GetWindowThreadProcessId')) {
-+          return (hwnd, out) => {
-+            const w = state.windows.find((x) => Number(x.hwnd) === Number(hwnd));
-+            out.value = w ? w.pid : 0;
-+            return 4711;
-+          };
-+        }
-+        if (signature.startsWith('uint GetCurrentProcessId')) {
-+          return () => state.pid;
-+        }
-+        if (signature.startsWith('bool IsWindowVisible')) {
-+          return (hwnd) => {
-+            const w = state.windows.find((x) => Number(x.hwnd) === Number(hwnd));
-+            return w ? w.visible : false;
-+          };
-+        }
-+        if (signature.startsWith('bool SetWindowPos') || signature.startsWith('int SetWindowPos')) {
-+          return (hwnd, after) => {
-+            state.calls.push(['setpos', Number(hwnd), Number(after)]);
-+            return 1;
-+          };
-+        }
-+        if (signature.startsWith('intptr_t SendMessageW')) {
-+          return (hwnd, msg, wp, lp) => {
-+            state.calls.push(['sendmsg', Number(hwnd), Number(msg), Number(lp)]);
-+            const w = state.windows.find((x) => Number(x.hwnd) === Number(hwnd));
-+            return w ? w.mouseActivate : 3;
-+          };
-+        }
-+        return () => 0;
-+      }
-+    })
-+  };
-+}
-+
-+test('dockHwnds walks same-titled top-level windows of our process only', () => {
-+  const state = {
-+    pid: 4242,
-+    windows: [
-+      { hwnd: 100, pid: 4242, visible: true },   // dock 1
-+      { hwnd: 101, pid: 4242, visible: true },   // dock 2
-+      { hwnd: 102, pid: 999, visible: true },    // same title, other process
-+      { hwnd: 103, pid: 4242, visible: false }   // hidden dock surface
-+    ]
-+  };
-+  const api = createApi(fakeKoffi(state));
-+  const hwnds = dockHwnds(api, 4242);
-+  assert.deepEqual(hwnds, [100, 101, 102]);
-+  assert.ok(state.calls.some((c) => c[0] === 'find' && c[2] === 'Chrome_WidgetWin_1' && c[3] === 'Token Monitor Dock'));
-+});
-+
-+test('forceTopmostDockWindows raises every live dock window', () => {
-+  const state = {
-+    pid: 4242,
-+    windows: [
-+      { hwnd: 100, pid: 4242, visible: true },
-+      { hwnd: 101, pid: 4242, visible: true },
-+      { hwnd: 500, pid: 777, visible: true }
-+    ]
-+  };
-+  const api = createApi(fakeKoffi(state));
-+  assert.equal(forceTopmostDockWindows({ pid: 4242, api }), 3);
-+  const raised = state.calls.filter((c) => c[0] === 'setpos').map((c) => c[1]);
-+  assert.deepEqual(raised.sort((a, b) => a - b), [100, 101, 500]);
-+});
-+
-+test('forceTopmost drives SetWindowPos with HWND_TOPMOST on the given handle', () => {
-+  const state = { pid: 4242, windows: [{ hwnd: 100, pid: 4242, visible: true }] };
-+  const api = createApi(fakeKoffi(state));
-+  assert.equal(forceTopmost(fakeWindow(133636), { api }), true);
-+  const raised = state.calls.filter((c) => c[0] === 'setpos').map((c) => c[1]);
-+  assert.deepEqual(raised, [133636]);
-+  // The "after" parameter must be intptr_t: uintptr_t zero-extends a JS
-+  // 0xFFFFFFFF into an invalid 64-bit handle and SetWindowPos never lands.
-+  assert.ok(state.signatures.some((s) => s.includes('SetWindowPos(uintptr_t hwnd, intptr_t after')));
-+  assert.ok(state.calls.some((c) => c[0] === 'setpos' && c[2] === -1));
-+});
-+
-+test('probeDockInput reports the eat-clicks state from WM_MOUSEACTIVATE answers', () => {
-+  const state = {
-+    pid: 4242,
-+    windows: [
-+      { hwnd: 100, pid: 4242, visible: true, mouseActivate: 4 },
-+      { hwnd: 101, pid: 4242, visible: true, mouseActivate: 3 },
-+      { hwnd: 102, pid: 4242, visible: false, mouseActivate: 4 } // hidden: not probed
-+    ]
-+  };
-+  const api = createApi(fakeKoffi(state));
-+  const probe = probeDockInput({ api });
-+  assert.equal(probe.broken, true);
-+  assert.deepEqual(probe.hwnds, [100, 101]);
-+  assert.deepEqual(probe.codes, [4, 3]);
-+  assert.ok(state.calls.some((c) => c[0] === 'sendmsg' && c[1] === 100 && c[2] === 0x0021));
-+});
-+
-+test('probeDockInput reports healthy when every visible window answers MA_NOACTIVATE', () => {
-+  const state = {
-+    pid: 4242,
-+    windows: [
-+      { hwnd: 100, pid: 4242, visible: true, mouseActivate: 3 },
-+      { hwnd: 101, pid: 4242, visible: true, mouseActivate: 3 }
-+    ]
-+  };
-+  const api = createApi(fakeKoffi(state));
-+  const probe = probeDockInput({ api });
-+  assert.equal(probe.broken, false);
-+});
-+
-+test('forceTopmostDockWindows reports hwnd set changes for rebuild tracking', () => {
-+  const state = {
-+    pid: 4242,
-+    windows: [
-+      { hwnd: 100, pid: 4242, visible: true },
-+      { hwnd: 101, pid: 4242, visible: true }
-+    ]
-+  };
-+  const changes = [];
-+  const api = createApi(fakeKoffi(state));
-+  forceTopmostDockWindows({ api, onHwndSetChange: (info) => changes.push(info) });
-+  assert.deepEqual(changes, []); // first observation records silently
-+  state.windows[0].visible = false; // hidden surfaces stay in the tracked set: a rebuild swaps every hwnd
-+  state.windows.push({ hwnd: 500, pid: 4242, visible: true });
-+  forceTopmostDockWindows({ api, onHwndSetChange: (info) => changes.push(info) });
-+  assert.equal(changes.length, 1);
-+  assert.deepEqual(changes[0].hwnds, [100, 101, 500]);
-+  assert.equal(changes[0].previous, '100,101');
-+});
-diff --git a/tests/electron/edgePopupGuard.test.js b/tests/electron/edgePopupGuard.test.js
-new file mode 100644
-index 00000000..6a274476
---- /dev/null
-+++ b/tests/electron/edgePopupGuard.test.js
-@@ -0,0 +1,148 @@
-+'use strict';
-+
-+const assert = require('node:assert/strict');
-+const fs = require('node:fs');
-+const path = require('node:path');
-+const test = require('node:test');
-+
-+const guard = require('../../src/electron/edgePopupGuard');
-+
-+const OUR_PID = 4242;
-+const MAIN_HWND = 5;
-+
-+// Fake user32 surface: top-level windows keyed by hwnd, each with a pid, a
-+// rect and (optionally) a GA_ROOT that differs from itself (owned popups).
-+function fakeBindings(spec) {
-+  const windows = spec.windows || {};
-+  return {
-+    windowFromPoint: (pt) => {
-+      for (const [hwnd, w] of Object.entries(windows)) {
-+        const r = w.rect;
-+        if (pt.x >= r.x && pt.x < r.x + r.w && pt.y >= r.y && pt.y < r.y + r.h) return Number(hwnd);
-+      }
-+      return 0;
-+    },
-+    getAncestor: (hwnd, flags) => {
-+      assert.equal(flags, guard.GA_ROOT, 'the guard must resolve roots with GA_ROOT');
-+      return windows[hwnd]?.root ?? hwnd;
-+    },
-+    getWindowThreadProcessId: (hwnd, out) => { out.value = windows[hwnd]?.pid ?? 0; },
-+    getForegroundWindow: () => spec.foreground || 0,
-+    gaRoot: guard.GA_ROOT,
-+    currentPid: OUR_PID
-+  };
-+}
-+
-+const MAIN = { hwnd: MAIN_HWND, pid: OUR_PID, rect: { x: 300, y: 0, w: 300, h: 400 } };
-+const POPUP = { hwnd: 10, pid: OUR_PID, rect: { x: 700, y: 100, w: 200, h: 300 } }; // far outside MAIN
-+const FOREIGN = { hwnd: 20, pid: 9999, rect: { x: 700, y: 100, w: 200, h: 300 } };
-+const DASH = { hwnd: 30, pid: OUR_PID, rect: { x: 0, y: 500, w: 920, h: 620 } }; // persistent dashboard window
-+
-+test('the cursor resting on an owned popup holds the window open', () => {
-+  const bindings = fakeBindings({ windows: { [MAIN.hwnd]: MAIN, [POPUP.hwnd]: POPUP } });
-+  const holds = (cursor) => guard.createPopupGuard(bindings, MAIN_HWND, cursor);
-+  assert.equal(holds({ x: 800, y: 200 }), true, 'cursor inside the popup');
-+  assert.equal(holds({ x: 450, y: 200 }), false, 'cursor inside the main window is the ordinary hold path, not the popup guard');
-+  assert.equal(holds({ x: 50, y: 500 }), false, 'cursor on the desktop must not hold');
-+});
-+
-+test('the main window itself never counts as a popup', () => {
-+  const bindings = fakeBindings({ windows: { [MAIN.hwnd]: MAIN, [POPUP.hwnd]: POPUP } });
-+  const holds = (cursor) => guard.createPopupGuard(bindings, MAIN_HWND, cursor);
-+  // Point at the main window while the popup exists elsewhere.
-+  assert.equal(holds({ x: 400, y: 100 }), false);
-+});
-+
-+test('a foreign application under the cursor must not hold', () => {
-+  const bindings = fakeBindings({ windows: { [FOREIGN.hwnd]: FOREIGN } });
-+  const holds = (cursor) => guard.createPopupGuard(bindings, MAIN_HWND, cursor);
-+  assert.equal(holds({ x: 800, y: 200 }), false);
-+});
-+
-+test('an owned popup holding focus holds the window even when the cursor left it', () => {
-+  const bindings = fakeBindings({
-+    windows: { [MAIN.hwnd]: MAIN, [POPUP.hwnd]: POPUP },
-+    foreground: POPUP.hwnd
-+  });
-+  const holds = (cursor) => guard.createPopupGuard(bindings, MAIN_HWND, cursor);
-+  assert.equal(holds({ x: 100, y: 800 }), true);
-+});
-+
-+test('an owned child resolves to its owner root before the pid check', () => {
-+  // Owned popups are top-level, but defend the GA_ROOT hop anyway: a child
-+  // window of our popup must be attributed to the popup's root.
-+  const child = { hwnd: 11, pid: OUR_PID, rect: POPUP.rect, root: POPUP.hwnd };
-+  const bindings = fakeBindings({ windows: { [MAIN.hwnd]: MAIN, [POPUP.hwnd]: POPUP, [child.hwnd]: child } });
-+  const holds = (cursor) => guard.createPopupGuard(bindings, MAIN_HWND, cursor);
-+  assert.equal(holds({ x: 800, y: 200 }), true);
-+});
-+
-+test('the cursor resting on the dashboard (a persistent second window) must not hold the dock open', () => {
-+  // Reported bug: entering the dashboard froze the home panel spread over it,
-+  // because the guard treated every own-process window as a transient popup.
-+  const bindings = fakeBindings({ windows: { [MAIN.hwnd]: MAIN, [DASH.hwnd]: DASH } });
-+  const holds = (cursor) => guard.createPopupGuard(bindings, MAIN_HWND, cursor, null, [DASH.hwnd]);
-+  assert.equal(holds({ x: 400, y: 800 }), false, 'working in the dashboard must let the dock fold away');
-+});
-+
-+test('the dashboard holding focus must not hold the dock open either', () => {
-+  // The foreground veto was designed for focused popups; the dashboard takes
-+  // focus for the whole working session, so it must be exempt on that path too.
-+  const bindings = fakeBindings({
-+    windows: { [MAIN.hwnd]: MAIN, [DASH.hwnd]: DASH },
-+    foreground: DASH.hwnd
-+  });
-+  const holds = (cursor) => guard.createPopupGuard(bindings, MAIN_HWND, cursor, null, [DASH.hwnd]);
-+  assert.equal(holds({ x: 100, y: 100 }), false);
-+});
-+
-+test('an unknown own-process popup still holds while the dashboard is exempted', () => {
-+  // Exempting the dashboard must not weaken the guard for the popups it was
-+  // built for: the color chooser is not on the persistent list and still holds.
-+  const bindings = fakeBindings({ windows: { [MAIN.hwnd]: MAIN, [POPUP.hwnd]: POPUP, [DASH.hwnd]: DASH } });
-+  const holds = (cursor) => guard.createPopupGuard(bindings, MAIN_HWND, cursor, null, [DASH.hwnd]);
-+  assert.equal(holds({ x: 800, y: 200 }), true);
-+});
-+
-+test('without an exemption list the conservative default holds (backwards compatible)', () => {
-+  // Callers that do not pass persistentHwnds keep the original behavior: every
-+  // own-process window other than main holds the dock open.
-+  const bindings = fakeBindings({ windows: { [MAIN.hwnd]: MAIN, [DASH.hwnd]: DASH } });
-+  const holds = (cursor) => guard.createPopupGuard(bindings, MAIN_HWND, cursor);
-+  assert.equal(holds({ x: 400, y: 800 }), true);
-+});
-+
-+test('missing FFI bindings degrade to false and never throw', () => {
-+  assert.equal(guard.createPopupGuard(null, MAIN_HWND, { x: 800, y: 200 }), false);
-+  const throwing = fakeBindings({ windows: { [POPUP.hwnd]: POPUP } });
-+  throwing.windowFromPoint = () => { throw new Error('native blew up'); };
-+  assert.equal(guard.createPopupGuard(throwing, MAIN_HWND, { x: 800, y: 200 }), false);
-+});
-+
-+test('the packaged entry degrades gracefully when koffi is unavailable', () => {
-+  // In the pure-Node test runs koffi cannot resolve from the checkout, so the
-+  // lazy loader must produce null instead of throwing.
-+  const api = guard.loadApi();
-+  assert.ok(api === null || typeof api === 'object', 'loadApi returns bindings or null');
-+});
-+
-+test('main.js consults the popup guard before arming and before firing a collapse', () => {
-+  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
-+  assert.match(mainSource, /const edgePopupGuardApi = require\('\.\/edgePopupGuard'\);/, 'the guard module is wired in');
-+  const pollFn = mainSource.match(/function startEdgeCursorPolling\(\)[\s\S]*?\n\}/);
-+  assert.ok(pollFn, 'startEdgeCursorPolling exists');
-+  const pollCode = stripComments(pollFn[0]);
-+  assert.match(
-+    pollCode,
-+    /if \(edgeNativePopupHoldsCursor\(cursor\)\) \{/,
-+    'the arm path must ask the popup guard first'
-+  );
-+  const timerBody = pollCode.match(/collapseTimer = setTimeout\(\(\) => \{[\s\S]*?\}, edgeAutoHideApi\.EDGE_COLLAPSE_DELAY_MS\);/);
-+  assert.ok(timerBody, 'the collapse timer exists');
-+  assert.match(timerBody[0], /edgeNativePopupHoldsCursor\(cursorNow\)/, 'an armed collapse must be vetoed when a popup appears');
-+});
-+
-+// Shared with the source-contract assertions above.
-+function stripComments(source) {
-+  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
-+}
-diff --git a/tests/electron/manualRefresh.test.js b/tests/electron/manualRefresh.test.js
-new file mode 100644
-index 00000000..1dfb36f3
---- /dev/null
-+++ b/tests/electron/manualRefresh.test.js
-@@ -0,0 +1,69 @@
-+'use strict';
-+
-+const assert = require('node:assert/strict');
-+const test = require('node:test');
-+
-+const { createManualRefreshController } = require('../../src/electron/renderer/manualRefresh');
-+
-+function deferred() {
-+  let resolve;
-+  const promise = new Promise((res) => { resolve = res; });
-+  return { promise, resolve };
-+}
-+
-+test('run() is a no-op while a refresh is already in flight', async () => {
-+  const gate = deferred();
-+  const events = [];
-+  const controller = createManualRefreshController({
-+    forceRefresh: () => gate.promise,
-+    apply: (on) => events.push(on ? 'on' : 'off'),
-+    pull: () => events.push('pull'),
-+    timeoutMs: 50
-+  });
-+  const first = controller.run();
-+  assert.equal(controller.isBusy(), true);
-+  assert.equal(await controller.run(), false, 're-entrant run must be refused');
-+  gate.resolve(true);
-+  assert.equal(await first, true);
-+  assert.equal(controller.isBusy(), false);
-+  assert.deepEqual(events, ['on', 'pull', 'off']);
-+});
-+
-+test('successful refresh applies busy chrome, forces collect, then pulls', async () => {
-+  const order = [];
-+  const controller = createManualRefreshController({
-+    forceRefresh: async () => { order.push('force'); return { ok: true }; },
-+    apply: (on) => order.push(on ? 'chrome-on' : 'chrome-off'),
-+    pull: async () => { order.push('pull'); },
-+    timeoutMs: 50
-+  });
-+  assert.equal(await controller.run(), true);
-+  assert.equal(controller.isBusy(), false);
-+  assert.deepEqual(order, ['chrome-on', 'force', 'pull', 'chrome-off']);
-+});
-+
-+test('a hanging force-collect still releases the button at the timeout', async () => {
-+  const events = [];
-+  const controller = createManualRefreshController({
-+    forceRefresh: () => new Promise(() => {}),
-+    apply: (on) => events.push(on ? 'on' : 'off'),
-+    pull: () => events.push('pull'),
-+    timeoutMs: 10
-+  });
-+  assert.equal(await controller.run(), true);
-+  assert.equal(controller.isBusy(), false);
-+  assert.deepEqual(events, ['on', 'pull', 'off']);
-+});
-+
-+test('forceRefresh rejection is swallowed and the data pull still runs', async () => {
-+  const events = [];
-+  const controller = createManualRefreshController({
-+    forceRefresh: () => Promise.reject(new Error('ipc gone')),
-+    apply: (on) => events.push(on ? 'on' : 'off'),
-+    pull: () => events.push('pull'),
-+    timeoutMs: 50
-+  });
-+  assert.equal(await controller.run(), true);
-+  assert.equal(controller.isBusy(), false);
-+  assert.deepEqual(events, ['on', 'pull', 'off']);
-+});
-diff --git a/tests/electron/sessionRows.test.js b/tests/electron/sessionRows.test.js
-index d27b3c3b..9aaa3169 100644
---- a/tests/electron/sessionRows.test.js
-+++ b/tests/electron/sessionRows.test.js
-@@ -8,9 +8,11 @@ const test = require('node:test');
- const {
-   applyBreakdownRowSemantics,
-   archivedSessionCount,
-+  compareSessionRows,
-   groupBackgroundReviewRows,
-   groupSessionRows,
-   handleBreakdownRowKeydown,
-+  normalizeSessionSortMode,
-   sessionBreakdownIncomplete,
-   sessionIdLabel,
-   sessionDetailIdLabel,
-@@ -1399,3 +1401,83 @@ test('group sections keep main continuations above children without changing usa
-   assert.deepEqual(content.filter(item => item.row).map(item => item.row), rows, 'review/bot groups keep their order');
-   assert.equal(content.filter(item => item.className === 'session-group-section-heading').length, 0);
- });
-+
-+test('compareSessionRows keeps the legacy recency order by default', () => {
-+  const rows = [
-+    { name: 'small-new', sortTime: 300, value: 50, cost: 0.1 },
-+    { name: 'big-old', sortTime: 100, value: 5000, cost: 2 },
-+    { name: 'mid', sortTime: 200, value: 500, cost: 0.5 }
-+  ];
-+  const recent = [...rows].sort((a, b) => compareSessionRows(a, b, 'recent')).map((r) => r.name);
-+  assert.deepEqual(recent, ['small-new', 'mid', 'big-old']);
-+  const implicit = [...rows].sort((a, b) => compareSessionRows(a, b)).map((r) => r.name);
-+  assert.deepEqual(implicit, recent, 'missing sortMode must behave as recent');
-+});
-+
-+test('compareSessionRows tokens mode sorts by value with recency as tiebreaker', () => {
-+  const rows = [
-+    { name: 'small-new', sortTime: 300, value: 50, cost: 0.1 },
-+    { name: 'big-old', sortTime: 100, value: 5000, cost: 2 },
-+    { name: 'mid', sortTime: 200, value: 500, cost: 0.5 }
-+  ];
-+  const order = [...rows].sort((a, b) => compareSessionRows(a, b, 'tokens')).map((r) => r.name);
-+  assert.deepEqual(order, ['big-old', 'mid', 'small-new']);
-+  const tie = [
-+    { name: 'b', sortTime: 200, value: 100, cost: 0 },
-+    { name: 'a', sortTime: 400, value: 100, cost: 0 }
-+  ];
-+  const tieOrder = [...tie].sort((a, b) => compareSessionRows(a, b, 'tokens')).map((r) => r.name);
-+  assert.deepEqual(tieOrder, ['a', 'b'], 'equal tokens fall back to recency');
-+});
-+
-+test('normalizeSessionSortMode falls back to recent for unknown values', () => {
-+  assert.equal(normalizeSessionSortMode('tokens'), 'tokens');
-+  assert.equal(normalizeSessionSortMode('recent'), 'recent');
-+  assert.equal(normalizeSessionSortMode('garbage'), 'recent');
-+  assert.equal(normalizeSessionSortMode(undefined), 'recent');
-+});
-+
-+test('sessionRowsForPeriod honors the sortMode option', () => {
-+  const period = {
-+    sessions: {
-+      'codex:older-big': {
-+        client: 'codex',
-+        sessionId: 'older-big',
-+        totalTokens: 5000,
-+        costUsd: 2,
-+        models: { 'gpt-5.5': 5000 },
-+        messageCount: 10,
-+        lastUsedAt: localIso(2026, 5, 30, 10, 0)
-+      },
-+      'claude:newer-small': {
-+        client: 'claude',
-+        sessionId: 'newer-small',
-+        totalTokens: 500,
-+        costUsd: 0.5,
-+        models: { 'claude-opus-4-8': 500 },
-+        messageCount: 1,
-+        lastUsedAt: localIso(2026, 5, 30, 12, 0)
-+      }
-+    }
-+  };
-+  const firstValue = (rows) => rows[0].value;
-+  assert.equal(firstValue(sessionRowsForPeriod(JSON.parse(JSON.stringify(period)))), 500, 'default stays recency-first');
-+  assert.equal(
-+    firstValue(sessionRowsForPeriod(JSON.parse(JSON.stringify(period)), { sortMode: 'tokens' })),
-+    5000,
-+    'tokens mode puts the larger session first'
-+  );
-+});
-+
-+test('sort toggle is wired in the renderer sources and localized', () => {
-+  const app = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'renderer', 'app.js'), 'utf8');
-+  assert.match(app, /sessionRowsApi\.compareSessionRows\(a, b, sortMode\)/);
-+  assert.match(app, /function sessionSortMode\(\)/);
-+  assert.match(app, /sessionSortMode: next/);
-+  const html = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'renderer', 'index.html'), 'utf8');
-+  assert.match(html, /id="sessionSortToggle"/);
-+  const i18n = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'renderer', 'i18n.js'), 'utf8');
-+  assert.equal((i18n.match(/'home\.sessionSort\.recent'/g) || []).length, 6, 'every bundled locale carries the key');
-+  assert.equal((i18n.match(/'home\.sessionSort\.tokens'/g) || []).length, 6);
-+
-+});
-diff --git a/tests/electron/tray.test.js b/tests/electron/tray.test.js
-index 5d78e762..5e830795 100644
---- a/tests/electron/tray.test.js
-+++ b/tests/electron/tray.test.js
-@@ -468,14 +468,14 @@ test('Linux tray re-exports the checked window presentation after a menu action'
- 
-   const presentationItems = calls.contextMenus[0].template
-     .find((item) => item.label === 'Window Presentation').submenu;
--  assert.deepEqual(presentationItems.map((item) => item.checked), [false, true, false, false]);
-+  assert.deepEqual(presentationItems.map((item) => item.checked), [false, true, false, false, false]);
- 
-   presentationItems.find((item) => item.label === 'Normal Window').click();
- 
-   assert.equal(calls.contextMenus.length, 2);
-   const refreshedItems = calls.contextMenus[1].template
-     .find((item) => item.label === 'Window Presentation').submenu;
--  assert.deepEqual(refreshedItems.map((item) => item.checked), [false, false, true, false]);
-+  assert.deepEqual(refreshedItems.map((item) => item.checked), [false, false, true, false, false]);
- });
- 
- test('tray menu actions publish both in-flight transitions', async () => {
-@@ -604,7 +604,8 @@ test('tray context menu uses the selected locale for every visible level', () =>
-     '自訂'
-   ]);
-   assert.equal(template[4].submenu[0].label, '托盤彈出視窗');
--  assert.equal(template[4].submenu.at(-1).label, '固定於桌面');
-+  assert.equal(template[4].submenu.at(-2).label, '固定於桌面');
-+  assert.equal(template[4].submenu.at(-1).label, '貼邊自動隱藏');
- });
- 
- test('tray context menu shows the macOS Quit shortcut on macOS only', () => {
-diff --git a/tests/electron/trayPopoverToggle.test.js b/tests/electron/trayPopoverToggle.test.js
-index 163cc522..e095ac64 100644
---- a/tests/electron/trayPopoverToggle.test.js
-+++ b/tests/electron/trayPopoverToggle.test.js
-@@ -61,6 +61,7 @@ function fixture({ visible = true, focused = visible, platform = 'darwin', histo
-     popoverBounds: () => ({}), setTimeout: (fn) => timers.push(fn),
-     applyMacActivationPolicy() {}, applyMacSpaceBehavior() {}, applyWindowSettings() {},
-     nudgeTaskbarZOrder() {}, scheduleFloatingBubbleAutoCollapse() {}, expandFloatingBubble() {},
-+    scheduleEdgeAutoHide() {},
-     focusExistingWindow: () => win.show()
-   });
-   vm.runInContext([
-diff --git a/tests/electron/usageCharts.test.js b/tests/electron/usageCharts.test.js
-index b38c64c2..154d4998 100644
---- a/tests/electron/usageCharts.test.js
-+++ b/tests/electron/usageCharts.test.js
-@@ -313,6 +313,30 @@ test('sparklinePreview keeps zero values at true zero height', () => {
-   ]);
- });
- 
-+test('sparklinePreview padLeft reserves a gutter and shifts bars without rescaling', () => {
-+  const plain = sparklinePreview([{ tokens: 10 }, { tokens: 20 }], { width: 30, height: 10, gap: 0, metric: 'tokens' });
-+  const padded = sparklinePreview([{ tokens: 10 }, { tokens: 20 }], { width: 30, height: 10, gap: 0, metric: 'tokens', padLeft: 6 });
-+
-+  assert.equal(padded.padLeft, 6);
-+  assert.equal(padded.maxVal, plain.maxVal);
-+  // Bars live inside the narrowed plot (24 wide): same heights, shifted x.
-+  assert.deepEqual(padded.bars.map((b) => b.x), [6, 18]);
-+  assert.deepEqual(padded.bars.map((b) => b.width), [12, 12]);
-+  assert.deepEqual(padded.bars.map((b) => b.height), plain.bars.map((b) => b.height));
-+});
-+
-+test('sparklineSvg yTicks draws one grid line per tick edge, none by default', () => {
-+  const model = sparklinePreview([{ tokens: 10 }, { tokens: 20 }], { width: 30, height: 10, gap: 0, metric: 'tokens', padLeft: 6 });
-+
-+  const withAxis = sparklineSvg(model, { yTicks: 4 });
-+  assert.equal(withAxis.split('class="grid-line"').length - 1, 5, 'ticks+1 grid lines');
-+  assert.equal(withAxis.split('vector-effect="non-scaling-stroke"').length - 1, 5);
-+  assert.match(withAxis, /x1="6"/, 'lines start at the gutter edge');
-+
-+  const plain = sparklineSvg(model, {});
-+  assert.equal(plain.split('class="grid-line"').length - 1, 0, 'default keeps the sparkline axis-free');
-+});
-+
- test('sparklinePreview tolerates empty input', () => {
-   const s = sparklinePreview([], {});
-   assert.deepEqual(s.bars, []);
-diff --git a/tests/electron/windowBehavior.test.js b/tests/electron/windowBehavior.test.js
-index 3bdcbf11..13f29f2d 100644
---- a/tests/electron/windowBehavior.test.js
-+++ b/tests/electron/windowBehavior.test.js
-@@ -17,6 +17,8 @@ test('normalizes supported window behavior modes', () => {
-   assert.equal(normalizeWindowBehavior('floating'), 'floating');
-   assert.equal(normalizeWindowBehavior('NORMAL'), 'normal');
-   assert.equal(normalizeWindowBehavior(' desktop '), 'desktop');
-+  assert.equal(normalizeWindowBehavior('edge'), 'edge');
-+  assert.equal(normalizeWindowBehavior('EDGE'), 'edge');
-   assert.equal(normalizeWindowBehavior('unknown', 'normal'), 'normal');
- });
- 
-@@ -54,6 +56,17 @@ test('maps window behavior modes to window flags', () => {
-     requiresTrayControl: false,
-     cssClass: 'desktop-mode'
-   });
-+  assert.deepEqual(describeWindowBehavior({ windowBehavior: 'edge' }), {
-+    mode: 'edge',
-+    alwaysOnTop: true,
-+    draggable: true,
-+    resizable: true,
-+    focusable: true,
-+    mousePassthrough: false,
-+    showInactive: false,
-+    requiresTrayControl: false,
-+    cssClass: 'edge-auto-hide'
-+  });
- });
- 
- test('migrates legacy alwaysOnTop settings when no behavior is saved', () => {
-diff --git a/tests/shared/zaiLimits.test.js b/tests/shared/zaiLimits.test.js
-index 55c3a28f..04b456c2 100644
---- a/tests/shared/zaiLimits.test.js
-+++ b/tests/shared/zaiLimits.test.js
-@@ -13,6 +13,7 @@ const {
-   zaiQuotaUrl,
-   zaiSubscriptionUrl,
-   parseZaiUsage,
-+  dedupeZaiWindows,
-   fetchZaiLimits
- } = require('../../src/shared/providers/zai/limits');
- 
-@@ -157,13 +158,23 @@ const noZcode = {
- };
- 
- // Console-key lane responder: quota, finance report, subscription list.
--function keyLaneResponses({ balance, subscription }) {
-+function keyLaneResponses({ balance, subscription, totalSpend }) {
-   return async (url) => {
-     if (String(url).includes('/quota/limit')) {
-       return { ok: true, status: 200, json: async () => ({ data: { limits: [{ type: 'TOKENS_LIMIT', unit: 3, number: 5, percentage: 10 }] } }) };
-     }
-     if (String(url).includes('query-customer-account-report')) {
--      return { ok: true, status: 200, json: async () => ({ code: 200, data: { availableBalance: balance } }) };
-+      return {
-+        ok: true,
-+        status: 200,
-+        json: async () => ({
-+          code: 200,
-+          data: {
-+            availableBalance: balance,
-+            ...(totalSpend !== undefined ? { totalSpendAmount: totalSpend } : {})
-+          }
-+        })
-+      };
-     }
-     return { ok: true, status: 200, json: async () => ({ data: [{ product_name: subscription }] }) };
-   };
-@@ -254,7 +265,7 @@ test('fetchZaiLimits queries quota and balance, then enriches usable quota', asy
-       fetch: async (url, init) => {
-         urls.push(String(url));
-         auth.push(init.headers.Authorization);
--        return keyLaneResponses({ balance: '0E-9', subscription: 'GLM Coding' })(url, init);
-+        return keyLaneResponses({ balance: '5.25', subscription: 'GLM Coding' })(url, init);
-       }
-     }
-   );
-@@ -263,7 +274,7 @@ test('fetchZaiLimits queries quota and balance, then enriches usable quota', asy
-   assert.equal(provider.accountLabel, 'GLM Coding');
-   assert.equal(provider.windows.length, 2);
-   const balance = provider.windows.find((window) => window.metric === 'credits');
--  assert.equal(balance.remaining, 0);
-+  assert.equal(balance.remaining, 5.25);
-   assert.equal(balance.currency, 'USD');
-   assert.deepEqual(urls, [
-     'https://api.z.ai/api/monitor/usage/quota/limit',
-@@ -273,6 +284,87 @@ test('fetchZaiLimits queries quota and balance, then enriches usable quota', asy
-   assert.deepEqual(auth, ['Bearer zai-token', 'Bearer zai-token', 'Bearer zai-token']);
- });
- 
-+test('the idle cash row hides behind an active coding plan', async () => {
-+  // Subscribers never touch the wallet: an all-zero Balance/Spend row beside
-+  // live plan windows is permanent noise and must not render at all.
-+  const provider = await fetchZaiLimits(
-+    { zaiApiKey: 'zai-token' },
-+    {
-+      env: {},
-+      now: () => Date.parse('2026-07-06T00:00:00Z'),
-+      ...noZcode,
-+      fetch: keyLaneResponses({ balance: '0E-9', subscription: 'GLM Coding' })
-+    }
-+  );
-+  assert.equal(provider.status, 'ok');
-+  assert.ok(provider.windows.length >= 1, 'plan windows still render');
-+  assert.equal(provider.windows.find((window) => window.metric === 'credits'), undefined);
-+  assert.equal(provider.balance, null);
-+});
-+
-+test('the cash row returns once the wallet holds money', async () => {
-+  const provider = await fetchZaiLimits(
-+    { zaiApiKey: 'zai-token' },
-+    {
-+      env: {},
-+      now: () => Date.parse('2026-07-06T00:00:00Z'),
-+      ...noZcode,
-+      fetch: keyLaneResponses({ balance: '12.5', subscription: 'GLM Coding' })
-+    }
-+  );
-+  const balance = provider.windows.find((window) => window.metric === 'credits');
-+  assert.equal(balance.remaining, 12.5);
-+  assert.equal(provider.balance.amount, 12.5);
-+});
-+
-+test('a wallet that starts spending brings the row back on its own', async () => {
-+  const storePath = path.join(os.tmpdir(), `zai-spend-store-${Date.now()}-${process.pid}.json`);
-+  const deps = (totalSpend) => ({
-+    env: {},
-+    now: () => Date.parse('2026-07-06T00:00:00Z'),
-+    ...noZcode,
-+    zaiBalanceStorePath: storePath,
-+    fetch: keyLaneResponses({ balance: '0E-9', subscription: 'GLM Coding', totalSpend })
-+  });
-+  const first = await fetchZaiLimits({ zaiApiKey: 'zai-token' }, deps(3.2));
-+  assert.equal(
-+    first.windows.find((window) => window.metric === 'credits'),
-+    undefined,
-+    'the first sighting only baselines the cumulative total'
-+  );
-+  const second = await fetchZaiLimits({ zaiApiKey: 'zai-token' }, deps(4.7));
-+  const row = second.windows.find((window) => window.metric === 'credits');
-+  assert.ok(row, 'real cash spend must surface the row again');
-+  assert.equal(second.balance.monthSpend, 1.5);
-+});
-+
-+test('a cash-only account keeps the balance row even at zero', async () => {
-+  // No plan windows at all (cash-only user, or the quota fetch found nothing):
-+  // the balance is the only information left and must not be hidden.
-+  const provider = await fetchZaiLimits(
-+    { zaiApiKey: 'zai-token' },
-+    {
-+      env: {},
-+      now: () => Date.parse('2026-07-06T00:00:00Z'),
-+      ...noZcode,
-+      fetch: async (url) => {
-+        if (String(url).includes('/quota/limit')) {
-+          return { ok: true, status: 200, json: async () => ({ data: { limits: [] } }) };
-+        }
-+        if (String(url).includes('query-customer-account-report')) {
-+          return { ok: true, status: 200, json: async () => ({ code: 200, data: { availableBalance: '0E-9' } }) };
-+        }
-+        return { ok: true, status: 200, json: async () => ({ data: [{ product_name: 'GLM Coding' }] }) };
-+      }
-+    }
-+  );
-+  assert.equal(provider.status, 'ok');
-+  const balance = provider.windows.find((window) => window.metric === 'credits');
-+  assert.ok(balance, 'without plan windows the balance row is the only information');
-+  assert.equal(balance.remaining, 0);
-+  assert.equal(provider.balance.amount, 0);
-+});
-+
- test('fetchZaiLimits requests the selected BigModel CN region', async () => {
-   const urls = [];
-   const provider = await fetchZaiLimits(
-@@ -347,6 +439,55 @@ test('fetchZaiLimits serves Coding Plan quota from the ZCode mirror key', async
-   assert.equal(provider.windows[0].source, undefined);
- });
- 
-+test('fetchZaiLimits collapses identical windows answered by both lanes', async () => {
-+  // Regression: the console-key lane and the ZCode mirror lane can both answer
-+  // quota for the same plan. When BigModel only returns the 5-hour bucket to
-+  // each of them, the merged row used to read "Session 9% / Session 9%".
-+  const consoleKey = ['zai', 'token'].join('-'); // fixture value, not a credential
-+  const quota = {
-+    ok: true,
-+    status: 200,
-+    json: async () => ({ data: { limits: [{ type: 'CREDIT_LIMIT', unit: 3, number: 5, percentage: 10 }] } })
-+  };
-+  const provider = await fetchZaiLimits(
-+    { zaiApiKey: consoleKey },
-+    {
-+      env: {},
-+      now: () => Date.parse('2026-09-05T12:00:00Z'),
-+      ...zcodeLaneDeps(async (url) => {
-+        if (!String(url).includes('/quota/limit')) throw new Error('unexpected url ' + url);
-+        return quota;
-+      }, 'coding-plan')
-+    }
-+  );
-+  assert.equal(provider.status, 'ok');
-+  assert.deepEqual(
-+    provider.windows.map((window) => [window.kind, window.usedPercent]),
-+    [['session', 10]],
-+    'the same window answered twice must render once'
-+  );
-+});
-+
-+test('dedupeZaiWindows keeps distinct buckets while collapsing identical ones', () => {
-+  const session = { kind: 'session', label: '5-hour', resetsAt: '2026-09-05T18:00:00Z', usedPercent: 9 };
-+  const sessionCopy = { kind: 'session', label: '5-hour', resetsAt: '2026-09-05T18:00:00Z', usedPercent: 9 };
-+  const weekly = { kind: 'weekly', label: 'Weekly', resetsAt: '2026-09-25T05:38:00Z', usedPercent: 53 };
-+  const bucket = { kind: 'billing', label: 'Start Plan', resetsAt: '2026-09-05T18:00:00Z', usedPercent: 9 };
-+
-+  assert.deepEqual(
-+    dedupeZaiWindows([session, sessionCopy, weekly]).map((w) => w.kind),
-+    ['session', 'weekly'],
-+    'an identical duplicate collapses, distinct kinds survive'
-+  );
-+  // Same reset instant and usage but a different bucket identity stays distinct.
-+  assert.deepEqual(
-+    dedupeZaiWindows([session, bucket]).map((w) => w.label),
-+    ['5-hour', 'Start Plan']
-+  );
-+  assert.equal(dedupeZaiWindows([]).length, 0);
-+  assert.equal(dedupeZaiWindows(null).length, 0);
-+});
-+
- test('fetchZaiLimits keeps ZCode plan windows when the console key quota fails', async () => {
-   // The lane merge used to throw a TDZ ReferenceError on this path.
-   const provider = await fetchZaiLimits(
-diff --git a/tests/shared/zcodeSessionDetail.test.js b/tests/shared/zcodeSessionDetail.test.js
-new file mode 100644
-index 00000000..8d57df1c
---- /dev/null
-+++ b/tests/shared/zcodeSessionDetail.test.js
-@@ -0,0 +1,121 @@
-+'use strict';
-+
-+const assert = require('node:assert/strict');
-+const fs = require('node:fs');
-+const os = require('node:os');
-+const path = require('node:path');
-+const test = require('node:test');
-+const { DatabaseSync } = require('node:sqlite');
-+const nodeSqlite = require('node:sqlite');
-+
-+const { readSessionDetail } = require('../../src/shared/sessionDetail');
-+
-+const tmpDirs = [];
-+test.after(() => {
-+  for (const dir of tmpDirs) fs.rmSync(dir, { recursive: true, force: true });
-+});
-+
-+const T0 = Date.UTC(2026, 8, 16, 14, 0, 0);
-+const T1 = Date.UTC(2026, 8, 16, 14, 0, 6);
-+const T2 = Date.UTC(2026, 8, 16, 14, 1, 0);
-+const T3 = Date.UTC(2026, 8, 16, 14, 1, 8);
-+const END = T3 + 1000;
-+
-+function makeFixture() {
-+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'token-monitor-zcode-detail-'));
-+  tmpDirs.push(dir);
-+  const file = path.join(dir, 'db.sqlite');
-+  const db = new DatabaseSync(file);
-+  db.exec('CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT, sequence INTEGER)');
-+  db.exec('CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT, sequence INTEGER)');
-+  const insM = db.prepare('INSERT INTO message (id, session_id, time_created, time_updated, data, sequence) VALUES (?,?,?,?,?,?)');
-+  const asst = (tokens) => JSON.stringify({ role: 'assistant', cost: 0, tokens, time: { created: null } });
-+  insM.run('m0', 's1', T0, T0, JSON.stringify({ role: 'user', time: { created: T0 } }), 1);
-+  insM.run('m1', 's1', T1, T1, asst({ total: 300, input: 200, output: 100, reasoning: 20, cache: { read: 0, write: 0 } }), 2);
-+  insM.run('m2', 's1', T2, T2, JSON.stringify({ role: 'user', time: { created: T2 } }), 3);
-+  insM.run('m3', 's1', T3, T3, asst({ total: 100, input: 60, output: 30, reasoning: 0, cache: { read: 10, write: 0 } }), 4);
-+  const insP = db.prepare('INSERT INTO part (id, message_id, session_id, time_created, time_updated, data, sequence) VALUES (?,?,?,?,?,?,?)');
-+  insP.run('p0', 'm0', 's1', T0, T0, JSON.stringify({ type: 'text', text: '帮我查一下配置' }));
-+  insP.run('p1', 'm1', 's1', T1, T1, JSON.stringify({ type: 'tool', tool: 'Bash' }));
-+  insP.run('p2', 'm2', 's1', T2, T2, JSON.stringify({ type: 'text', text: '再看一遍日志' }));
-+  db.close();
-+  return file;
-+}
-+
-+test('readSessionDetail(zcode) groups exchanges with prompt previews and tools', (t) => {
-+  const file = makeFixture();
-+  const detail = readSessionDetail({
-+    client: 'zcode', sessionId: 's1', period: 'total', sessionCost: 1,
-+    home: os.tmpdir(), deps: { zcodeDeps: { dbPath: file, sqlite: nodeSqlite }, now: () => END }
-+  });
-+  assert.equal(detail.found, true);
-+  assert.equal(detail.exchanges.length, 2);
-+
-+  const [ex1, ex2] = detail.exchanges;
-+  assert.equal(ex1.promptPreview, '帮我查一下配置');
-+  assert.equal(ex1.turnCount, 1);
-+  assert.equal(ex1.tokens.total, 300);
-+  assert.deepEqual(ex1.turns[0].tools, ['Bash']);
-+
-+  assert.equal(ex2.promptPreview, '再看一遍日志');
-+  assert.equal(ex2.turnCount, 1);
-+  assert.equal(ex2.tokens.total, 100);
-+});
-+
-+test('readSessionDetail(zcode) distributes the estimated session cost across turns', (t) => {
-+  const file = makeFixture();
-+  const detail = readSessionDetail({
-+    client: 'zcode', sessionId: 's1', period: 'total', sessionCost: 1,
-+    home: os.tmpdir(), deps: { zcodeDeps: { dbPath: file, sqlite: nodeSqlite }, now: () => END }
-+  });
-+  assert.equal(detail.totals.costUsd, 1);
-+  const costSum = detail.exchanges.reduce((acc, ex) => acc + ex.costEstimate, 0);
-+  assert.ok(Math.abs(costSum - 1) < 1e-9, 'distributed costs must sum to the session estimate');
-+  // 300:100 token split -> 0.75 / 0.25
-+  assert.ok(Math.abs(detail.exchanges[0].costEstimate - 0.75) < 1e-9);
-+  assert.ok(Math.abs(detail.exchanges[1].costEstimate - 0.25) < 1e-9);
-+});
-+
-+test('readSessionDetail(zcode) reports found:false for an unknown session', (t) => {
-+  const file = makeFixture();
-+  const detail = readSessionDetail({
-+    client: 'zcode', sessionId: 'sess_nope', period: 'total',
-+    home: os.tmpdir(), deps: { zcodeDeps: { dbPath: file, sqlite: nodeSqlite }, now: () => END }
-+  });
-+  assert.equal(detail.found, false);
-+  assert.equal(detail.exchanges.length, 0);
-+});
-+
-+test('readSessionDetail(zcode) degrades when the database is missing or corrupt', (t) => {
-+  const missing = readSessionDetail({
-+    client: 'zcode', sessionId: 's1', period: 'total',
-+    home: os.tmpdir(), deps: { zcodeDeps: { dbPath: path.join(os.tmpdir(), 'nope', 'db.sqlite'), sqlite: nodeSqlite } }
-+  });
-+  assert.equal(missing.found, false);
-+
-+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'token-monitor-zcode-detail-bad-'));
-+  tmpDirs.push(dir);
-+  const bad = path.join(dir, 'db.sqlite');
-+  fs.writeFileSync(bad, 'not a database');
-+  const corrupt = readSessionDetail({
-+    client: 'zcode', sessionId: 's1', period: 'total',
-+    home: os.tmpdir(), deps: { zcodeDeps: { dbPath: bad, sqlite: nodeSqlite } }
-+  });
-+  assert.equal(corrupt.found, false);
-+});
-+
-+test('the renderer whitelists zcode in both detail gates', () => {
-+  // v0.69 moved the client whitelist behind sessionRows.sessionRowDetailAvailable;
-+  // app.js gates on that helper and the keydown handler still names zcode directly.
-+  const app = fs.readFileSync(
-+    path.join(__dirname, '..', '..', 'src', 'electron', 'renderer', 'app.js'),
-+    'utf8'
-+  );
-+  assert.match(app, /sessionRowsApi\.sessionRowDetailAvailable\(\{ client, sessionDetailAvailable \}\)/);
-+  assert.match(app, /client !== 'zcode'\) return;/);
-+  const sessionRows = fs.readFileSync(
-+    path.join(__dirname, '..', '..', 'src', 'electron', 'renderer', 'sessionRows.js'),
-+    'utf8'
-+  );
-+  assert.match(sessionRows, /\['claude',[^\]]*'zcode'\]\.includes\(row\?\.client\)/);
-+});

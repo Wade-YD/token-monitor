@@ -896,3 +896,59 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
      优化决策：KPI 瓦片与 Hero 日/全量档数值重复=保留（参照条设计）；
      ui.mjs 不拆分（单文件加载器契约）；README 已刷新（仪表盘/切换器/
      标题/1MB Trust 措辞）。
+
+【升级记录（2026-11-11，v0.87.0 → v0.90.0）】
+  1) 三版本跨度：59 上游提交、300 文件（src 136 文件 +9885/−1247，历史第三大）。
+     主战场 app.js +559、main.js +229、styles.css +101；src 新增 27 文件（cardCanvas/
+     launch.js/linuxDisplayServer、plugins credentials+limits 族、hark/mistral/
+     minimax/prime-agent provider 等）。**Electron 45.2.1 不变、无新 npm 依赖**
+     （undici 7.30.2）；⚠️ package.json main 从 src/electron/main.js 改为
+     **src/electron/launch.js**（Wayland 启动分流器，Windows 直通 main.js）——
+     rebase 后保留，断言脚本新增 launch entry 检查。
+  2) 网络：github.com 443 直连整轮断流（git fetch 6 连败、curl CDN 不可用）——
+     **安装包走 gh api octet-stream 通道**（asset 数字 id 从 latest jq 取，
+     `gh api -H "Accept: application/octet-stream" repos/…/releases/assets/<id>`，
+     别拿 digest 串当 id）；fetch 第 7 次重试成功拿到真标签。安装包 135,083,504 B
+     SHA 44d7bab4…80b7 = API digest MATCH（一次成功）。**npx 缓存 asar 工具链被
+     Temp 清理** → 改用 worktree 自带 node_modules/@electron/asar（extractAll 是
+     同步 API）。锚点：v0870 移存 Temp\opencode\v0870-anchors\ → /S 安装 →
+     重建 app.asar.v0900-official.bak+.unpacked（23,303,748 B；v0900 官方 asar
+     无 unpacked 内容，twin 从解包树恢复为空目录）。
+  3) rebase 37 提交（35 重放 + 2 fallout 修复）**7 处冲突**：
+     - index.html windowBehavior select：上游给 desktop option 加
+       data-select-description + 我方 edge option → 共存。
+     - main.js bounds-listener 块 ×5（同族反复）：上游 onBoundsChange 四事件
+       循环 vs 我方 pre-refactor edge 监听——**解法=取上游侧**，edge 逻辑早已
+       下沉 edgeAutoHideController.attachWindow（6d88ad8e），Python 块替换解算
+       器（resolve_main_bounds.js，字面量路径）一轮打尽。
+     - trayPopoverToggle.test.js sourceBetween 端点、6d88ad8e 空冲突各一。
+  4) fallout 3 个（新测试暴露，逐一定性修复）：
+     - linuxDisplayServer.test vm 切片缺 edgeAutoHide → persistBoundsSoon
+       （main.js:2583）引用控制器，注入 stub（与既有 vm 测试同模式）。
+     - **上游 v0.90.0 新增 es/en 严格 parity 测试**，暴露我方四键
+       （home.sessionSort.×2/settings.windowBehavior.edge/
+       trayMenu.presentation.edge）历史上只加进 **pt-BR 词典**（es 段真末尾
+       L14746，pt-BR L14747 起；2 空格缩进的词典头正则扫不到引号名）——
+       es 补西语翻译 4 键（2449=2449 对齐）。
+     - sessionRows.test 键计数断言 6→7（pt-BR+es）。
+  5) 测试：10190 用例 10130 过，**11 红 = 纯上游 v0.90.0 基线逐一相同**
+     （symlink EPERM ×5 + Windows 环境差异 ×6，跑纯上游对照确认），零回归。
+     受影响单测全绿（linuxDisplayServer 16/16、i18n 32/32、sessionRows 78/78、
+     collectorHistory 29/29——后者的 EPERM/Timed out 是全量并发 Temp 竞态）。
+  6) 打包换装：git archive HEAD src 灌入 asar-extracted-v0900（diff 与工作树
+     逐字节一致）→ pack 55,932,722 B → 换装 → 双向断言 **29/29 ALL PASS**
+     （我方 15 + 上游 14，新增 v090 标记 launch entry/cardCanvas/
+     windowBehaviorNote/edge option 保留）。
+  7) 真机：插件 pi-bridge 跨升级存活（ok/2 watchers/25 链接/零冲突）、edge
+     几何保留（新吸附 x∈[1121,1361]）、面板壳完整、设置/anchor 数据全
+     （allTime 7.125e9/month 2.19e9）。**"CDP 看主窗 stats=0" 疑云经 Oracle
+     会诊定性=贴边隐藏态渲染门控（statsRenderScheduler isHidden 只置
+     renderPending 不渲染；Windows occlusion tracker 判滑出屏顶窗口
+     occluded）**——sendPush 对隐藏窗零过滤、publish 链与可见性解耦、push/
+     publish/插件三链对 v0.90.0 diff 为零。**新铁律：CDP 排查贴边隐藏态一律
+     读内存 `await window.tokenMonitor.getStats()`（stats:get IPC 无可见性
+     门槛），DOM 是不可信观测点**；用户实机截图数据完整，展开窗口即 flush
+     出数（手测项：pi-bridge hero 若仍 0 点一次「立即同步」）。
+  8) 交付：edge-auto-hide.patch 129,689 B / commits.txt 37 行（v0.90.0 基），
+     提交 bcdfae57。遗留手测归用户：贴边隐藏/悬停展开/拖拽换边冒烟（重构后
+     第二轮换装，同 v0.87 清单）。
