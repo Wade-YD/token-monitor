@@ -1011,3 +1011,33 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
   下一步候选（视本次反应再定）：edgeDock topmost 原生族（koffi FindWindowExW/
   HWND_TOPMOST intptr_t/WS_EX_TRANSPARENT 卡死）整理成一个干净 Windows 修复 PR；
   edge 贴边模式先开 feature request issue 探口风，不直接 PR。
+
+【升级工具链（2026-11-11，省 token 用）】
+  位置：`7-工具箱\token-monitor-tooling\token-monitor-patch\upgrade\`（非 git 仓，
+  随工具目录本地维护）。目的：把升级的机械步骤从"模型读文件+试错"里拿出来，
+  每轮只需 4 条命令 + 3 个探针 + 1 张截图目检。
+  四步：`01-fetch-install.sh vX.Y.Z`（gh OCTET-STREAM 下载+sha256 对 digest+
+  锚点移出+/S 安装+**断言 app.asar.unpacked 存在**+官方 asar 解包+unpacked
+  合并回解包树）→ `02-rebase.sh vX.Y.Z`（fetch 重试环+rebase+冲突文件清单+
+  首个 hunk+main.js bounds 块自动解算）→ `03-verify.sh --baseline vX.Y.Z`
+  （全量测试**只跑一次**落盘+失败名与基线做集合差+**NEW 自动单跑复验判
+  flaky**+装后断言+探针）→ `04-pack-install.sh --debug-port`（git archive 灌
+  src+**createPackageWithOptions({unpack:'**/*.{node,exe,dll,so,dylib}'})** 重打
+  +换装+重启+断言）。
+  探针：`probes/health.mjs`（tokscale supported+二进制存在+getStats 内存 today>0
+  +anchor 年龄+DOM 对照，单行 JSON，problems 为空 exit 0）、`probes/panel.mjs`
+  （Pi 面板结构：面板数/KPI/柱数/徽章/切换器/会话行）、`probes/shot.mjs <png>
+  [--panel]`（显形+截图；**坐标从 settings.edgeAutoHideBounds 动态取，不再写死
+  300/1240**）。
+  基线：`baseline/tests-baseline-v0.90.0.json`（纯上游本机 11 红清单）。上游测试
+  大改时按 README 的刷新命令重建。
+  本轮实测：干跑 repack = 24.4MB asar + unpacked 含 koffi.node(1,048,064B)/
+  tokscale.exe(30,459,392B)，且 asar 内不重复——**P0 事故的根因已被脚本封死**；
+  03 全量 10190 用例约 1 分钟、断言 16/16、探针 health/panel 均 ok。
+  仍未自动化（刻意保留人工）：非 main.js bounds 的冲突判断、Oracle 审查、发版
+  说明与手册记录、最终人眼显形验证。**首次真跑 01/04 时盯一遍输出**（这两步
+  只在真实升级时才被执行，本轮仅验证了其组件逻辑：资产 jq、digest 比对、解包
+  合并、unpack 打包、换装断言）。
+  省 token 要点（已实践）：长会话每轮重放历史的成本远大于内容本身——升级类
+  固化流程应**新开会话**跑（历史 ≤100K），机械步骤交给脚本，子代理每次只喂
+  `git diff`+3 个文件路径（禁止全仓浏览），一轮最多 1 次 Oracle。
