@@ -113,6 +113,9 @@ test('native Wayland resizes preserve saved coordinates in the actual persistenc
       shouldPersistWindowBounds: () => true, stopPersistBoundsTimer: () => {},
       setTimeout: (fn) => { pending = fn; }, persistBoundsTimer: null,
       canPositionWindow: () => positionable, floatingBubbleState: { collapsed: false },
+      // persistBoundsSoon consults the edge controller before saving; the vm
+      // slice never attaches a window, so a never-docked stub is enough.
+      edgeAutoHide: { isHiddenWithExpandedBounds: () => false },
       saveSettings: () => { saves++; }
     };
     vm.runInNewContext(source + '\npersistBoundsSoon();', context);
