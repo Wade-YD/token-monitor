@@ -952,3 +952,37 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
   8) 交付：edge-auto-hide.patch 129,689 B / commits.txt 37 行（v0.90.0 基），
      提交 bcdfae57。遗留手测归用户：贴边隐藏/悬停展开/拖拽换边冒烟（重构后
      第二轮换装，同 v0.87 清单）。
+
+【P0 事故修复（2026-11-11，v0.90.0 换装漏还原 app.asar.unpacked）】
+  症状：升级后主窗 TOTAL=0、额度卡「正在获取实时额度数据…」、模型/活动/会话
+  全空、pi-bridge hero=0；collector-anchor.json 停在 16:50 不再更新（约 2h20m）。
+  根因：换装时把官方 app.asar.unpacked 一并改名为
+  app.asar.v0900-official.bak.unpacked 作锚点，**只还原了 app.asar，忘了还原
+  app.asar.unpacked**。原生二进制（tokscale.exe、koffi.node，共 81 文件）不在
+  位 → src/shared/collector.js:103 的 toUnpackedPath(require.resolve(
+  'tokscale/bin.js')) 指向不存在的路径 → collector 无法 spawn tokscale →
+  采集全停（不报错到底层 UI，只表现为全 0）。
+  ⚠️ 包装链的连带坑：**@electron/asar 的 extractAll 不导出 unpacked 内容**
+  （unpacked 文件在 asar 里是空条目且不会被写出），所以「解包→翻补丁→
+  createPackage 重新打包」这条链**天然丢二进制**；本轮打包用默认 createPackage
+  也没有 unpack 语义，导致新 asar 内不含这些文件、且 unpacked 目录被移走。
+  修复：cp -r app.asar.v0900-official.bak.unpacked → app.asar.unpacked
+  （81 文件；依赖版本与官方一致，二进制完全匹配）。重启后：
+  getTokscaleStatus()={supported:true, current.source:'bundled', version:'4.21.0',
+  path:…resources\app.asar.unpacked\…\tokscale.exe}；getStats()=today
+  147,615,019 / month 2,303,061,466 / allTime 8,313,678,428；anchor 恢复落盘；
+  主窗 TOTAL=147,615,019、¥29.83、7 行明细、Pi 行 1。
+  铁律（写进下轮必查）：
+  1) 换装前后 `ls resources/` 必须同时看到 **app.asar 与 app.asar.unpacked**；
+     NSIS 安装器会重建 unpacked，我们自打包时不会。
+  2) 打包必须保留 unpacked 语义：要么在解包树里补齐官方 unpacked 内容后用
+     createPackageWithOptions({unpack:'**/*.{exe,node,dll,so,dylib}'}) 重打，
+     要么直接复用官方 app.asar 只替换 src/（推荐：把补丁 src 覆盖进官方解包
+     树后，仅对 src 做增量重打包不可行，因此**以官方 asar 为基准、只替换
+     src 目录**仍会丢 unpacked——故最稳=自打包后**手工还原官方 unpacked**）。
+  3) 采集健康自检三连（30 秒）：getTokscaleStatus().supported &&
+     current.path 存在 → getStats().periods.today.totalTokens > 0 →
+     collector-anchor.json mtime 在 5 分钟内。
+  4) **全 0 + 额度加载中 = 先查 app.asar.unpacked，而不是查渲染门控**（本轮
+     Oracle 先前把"CDP 看 0"归因为渲染门控，对隐藏态成立，但对"用户可见态
+     全 0"不成立——判别标准：用户可见时仍 0 且 anchor mtime 停摆 = 采集死）。
