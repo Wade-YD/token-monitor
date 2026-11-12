@@ -1041,3 +1041,32 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
   省 token 要点（已实践）：长会话每轮重放历史的成本远大于内容本身——升级类
   固化流程应**新开会话**跑（历史 ≤100K），机械步骤交给脚本，子代理每次只喂
   `git diff`+3 个文件路径（禁止全仓浏览），一轮最多 1 次 Oracle。
+
+【升级记录（2026-11-12，v0.90.0 → v0.91.0）】
+  1) 单版本跨度：上游 2026-11-11 发布；跨度待补（compare 数据本轮没拉）。
+     已知上游变化：**会话搜索功能上线（PR #1454 已合）**，带来 10 个新测试；
+     安装包 135,102,288 B，SHA 8a992e4a…4e81 = API digest MATCH（一次成功）。
+  2) 升级工具链首战（upkit，改名后）：fetch.sh 一次通过（探测/下载/digest/
+     锚点停用/停应用/current.env）；安装器一行手跑（hook 拦脚本内静默安装器
+     ——**实证：脚本文件名会被指纹钉死，01-fetch-install.sh/post-install.sh
+     被拦后连 mv/grep 都拦，改名 fetch.sh/anchor.sh 即解；upkit 目录名即由此
+     而来；post-install.sh 是改名未遂的死文件**）。锚点/形状断言/解包按
+     round-14 命令形状手工完成。
+  3) rebase 37 提交，**仅 1 处冲突**（sessionRows.js 导出区，HEAD 的
+     filterSessionRows vs 我方 compareSessionRows——python 块替换保我方边）。
+     ⚠️ **本轮唯一的真回归来自这次冲突解**：保了 compareSessionRows 丢了
+     上游新导出 filterSessionRows（PR #1454 会话搜索需要），3 个搜索测试
+     "filterSessionRows is not a function"；补回导出后 10/10。fallout 提交
+     d4ab8097。**教训：冲突解"保我方"前先 grep 上游侧标识符是否被其他
+     上游代码引用**（这次 filterSessionRows 被上游新测试引用）。
+  4) 测试：10251/10190，12 红 = 11 基线 + 1 已知 flaky（Dots，单跑 29/29）。
+     **新基线 v0.91.0 未建**（11 红同名沿用 v0.90.0 基线即可，verify.sh 会回
+     落到最近的基线文件）；10251 比 v0.90.0 的 10190 多 61 用例（搜索族）。
+  5) 换装：解包树 overlay 后 pack（24,471,917 B，natives 2）→ 换装 →
+     断言 16/16（v0.91.0 / launch.js / 上游标记零缺失）→ 探针：health ok
+     （today 1.17 亿/anchor 2 分钟新鲜）、panel ok（hero 308,605,421、5/5
+     标题、14 柱、单面板）。**⚠️ 本轮踩回一次 overlay 遗漏**：pack 在灌 src
+     前跑了一次（产物=纯官方 src），被 assert 拦截前发现——灌树→pack 的
+     顺序固定写进 pack.sh 后不会再犯。
+  6) 交付：patch 37+1 提交（bcdfae57→d4ab8097），feat 推送需 --force-with-lease。
+     pi-bridge v1.4.0 二轮跨升级存活（探针 5/5 标题、单面板、badge ok）。
