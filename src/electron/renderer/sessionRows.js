@@ -1010,6 +1010,7 @@
     archivedSessionCount,
     compactSessionTime,
     compareSessionRows,
+    filterSessionRows,
     groupBackgroundReviewRows,
     groupSessionRows,
     groupSubagentRows,
