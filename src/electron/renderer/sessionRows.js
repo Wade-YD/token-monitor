@@ -1047,6 +1047,7 @@
     archivedSessionCount,
     compactSessionTime,
     compareSessionRows,
+    filterSessionRows,
     groupBackgroundReviewRows,
     groupSessionRows,
     sessionListRows,
