@@ -1070,3 +1070,40 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
      顺序固定写进 pack.sh 后不会再犯。
   6) 交付：patch 37+1 提交（bcdfae57→d4ab8097），feat 推送需 --force-with-lease。
      pi-bridge v1.4.0 二轮跨升级存活（探针 5/5 标题、单面板、badge ok）。
+
+【升级记录（2026-11-16，v0.91.0 → v0.93.0，round 16）】
+  1) 跨两版本（31 commits，~160 文件）。上游新增：plugin 系统（managed/runtime/
+     updates 三族）、domReconcile 就地调和（data-key 身份链）、railNumberRoll/
+     resetAnimator 动效、edgeDock 扩展、@tokscale/cli vendoring 升 4.22.0
+     （koffi 平台包换成 @koromix/koffi-win32-x64 预编译形态）。安装包
+     135,223,464 B，SHA 3eb1ea0a… MATCH 一次成功，锚点/形状断言/解包全过。
+  2) upkit 两轮制实战：round.sh v0.93.0（fetch 一次过）→ 手跑安装器 →
+     --continue。38 补丁提交重放，**唯一冲突 app.js spark-bar 区域**（未命中
+     两个自动解算模式，人工判定）。
+  3) 冲突解（459da961）：并集适配上游新骨架——CSSOM 标签定位改对离屏 next
+     操作（旧写法查 els.trendsPanel 会拿到上一帧节点）；保留上游 dataset.key
+     （domReconcile.js:32 身份链首选）+ dataset.motionKey（app.js:2294 动效
+     快照）双键；删我方预调和 bindTrendTooltip（尾段已有 post-reconcile 绑定）。
+  4) Oracle 审查（agent_4795e822）：**通过 0 P0/0 P1/2 P2**。P2-1 注释理由
+     不准（样式存活靠 domReconcile.js:70-75 声明级 diff 就地传输，非
+     re-parent）→ 已修 46123be5；P2-2 自定义属性枚举依赖 Chromium 行为，
+     上游主题变量同机制，记录不修。
+  5) 测试 10458 用例（+207 vs v0.91.0）：**11 红 = 全基线同名红，0 NEW**。
+     第一轮 verify 曾出 1 NEW 红（verifyVendoredTokscaleRelease：optionalDep
+     4.21.0 vs manifest baseVersion 4.22.0）——根因 **node_modules 陈旧**（round
+     15 时代装的 @tokscale/cli 4.21.0，lock 已是 4.22.0），npm install 后
+     12/12 绿。**教训：升级重放后先 npm install 对齐 lock 再 verify**（可让
+     round.sh 在 rebase 后自动跑，下轮工具链任务）。
+  6) 换装：asar 24,622,253 B + 2 原生件（koffi.node=@koromix 平台包路径 +
+     tokscale.exe 4.22.0）→ 断言 ours 16/16、upstreamMissing=[] → health 数据
+     层健康（today 34,365,081、anchor 0 分钟、tokscale 4.22.0 supported）。
+  7) ⚠️ **探针显形失败（vis hidden ×8）**：v0.93.0 上游 edgeDock 重构后光标
+     停靠显形不再触发（cdp.mjs 的 SetCursorPos 方案失效）；CDP 目标列表出现
+     3 个 'Token Monitor Dock'（retainedWindow 新家族）。用户实机手动显形验证
+     通过（pi-bridge 面板 hero 308,605,421 与 round 15 记录逐位一致、同步正常
+     徽章、14 柱全在）。**下轮工具链任务：probe reveal 适配新 edgeDock 触发
+     机制**。
+  8) 交付：39 补丁提交（8ce58de2 冲突 fallout + 46123be5 注释修正），patch
+     4284 行 / commits 39 行再生，feat --force-with-lease 推 fork，master
+     docs 提交推 fork。本 commit 前 Mimosa 曾报 scanner_enobufs 兼容放行
+     （本轮代码改动仅注释级，未宣称已全量审计）。
