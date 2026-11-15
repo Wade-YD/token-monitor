@@ -1107,3 +1107,35 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
      4284 行 / commits 39 行再生，feat --force-with-lease 推 fork，master
      docs 提交推 fork。本 commit 前 Mimosa 曾报 scanner_enobufs 兼容放行
      （本轮代码改动仅注释级，未宣称已全量审计）。
+
+【工具链更新（2026-11-16，round 16 夜间自主优化，用户授权「有问题咨询 Oracle」）】
+  1) 探针显形修复（probes/cdp.mjs）：round 16 显形失败的根因不是触发链断——
+     debug 日志证实 SetCursorPos(1250,1) 命中并 expand 正常发生（16:38:39
+     [poll] hidden hit + [expand]），真因=冷启动后 document.visibilityState
+     滞后物理展开数分钟（Chromium occlusion tracking 对节流渲染器的行为）。
+     修复=判据改「物理展开优先」（窗口 bounds 离开 settings 的
+     edgeAutoHideBounds.hiddenBounds >4px 即视为已显形），Page.bringToFront
+     强推渲染器翻转；触发机制不变（SetCursorPos + poll 独占 show/hide）。
+     冷启动实测 panel 探针 verdict ok（1 面板/hero 308,605,421/5/5 标题）。
+     触发点按停靠方向泛化（left/right/bottom 用 renderer screen.availWidth/
+     Height）；缺 hiddenBounds 时 stderr 告警。
+  2) assert.mjs 降噪+加固：官方 asar（pack 未跑）→ 干净 skip exit 0（原裸抛
+     堆栈像回归）；已打补丁但缺文件 → FAIL；文件在但缺
+     createEdgeAutoHideController 工厂标记 → 失败不静默 skip；汇总分子改
+     实际通过数（原恒 15/15，失败时自相矛盾）。
+  3) round.sh：phase 3.5 rebase 后自动 npm install（非致命；装后检查
+     package-lock.json，npm 若改写则 git checkout -- 恢复 committed 版并
+     warn——Oracle 抓到的组合陷阱：lock 脏 → 下一轮 rebase 拒跑 →
+     rebase.sh 2>/dev/null 把它误报成「conflicts detected」空清单）；
+     BASELINE 默认改跟随 TARGET（verify.sh 对缺失基线回落最新文件）。
+  4) rebase.sh：脏树预检 die（替代假 conflicts detected）。
+  5) verify.sh：基线回落改 sort -V（防 v0.100 < v0.93 字典序陷阱）+ 回落 warn。
+  6) 基线 v0.93.0 新建：纯上游临时 worktree（$TEMP，已清理）+ npm install +
+     全量 10384 用例 11 红，与 v0.91.0 基线逐一相同（0 增 0 减，Dots flaky
+     未现）。口径演进：v0.91.0 及更早=patched-build 采样、v0.93.0 起=
+     pristine 口径。JSON 补 node=24.19.0 字段（awk 依赖 reporter 输出形状）。
+  验证：三探针端到端全绿（health ok/panel ok/shot 67,787 B 目检正常）；
+  assert 双路径过（官方锚 skip / 已装 16/16）；全脚本 bash -n / node --check 过。
+  Oracle 审查（agent_8d082d0c）：0 P0 / 2 P1 / P2 全修。P1=lock 脏树组合陷阱
+  + assert 分子；P2=hiddenBounds 告警、bottom 停靠触发点、sort -V、patched
+  判定加工厂标记、基线口径记录。
