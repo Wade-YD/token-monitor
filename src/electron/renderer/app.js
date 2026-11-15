@@ -6386,9 +6386,11 @@ function renderTrends() {
     + `<div class="trends-stats">${statsHtml}</div>`;
   // CSP forbids inline style attributes, so label positions go through CSSOM:
   // each span lands on its grid line's height fraction, inside the gutter.
-  // Operates on `next` (detached): reconcile re-parents these nodes as-is,
-  // and CSSOM styles survive the move. data-key feeds domReconcile identity
-  // matching; data-motion-key feeds the trend-bar motion snapshot below.
+  // Runs on `next` (detached) before reconcile: slot-matched nodes are patched
+  // in place, and domReconcile transfers the detached node's inline
+  // declarations onto them (domReconcile.js:70-75), so CSSOM values land on
+  // the live DOM either way. data-key feeds domReconcile identity matching;
+  // data-motion-key feeds the trend-bar motion snapshot below.
   const yLabelWrap = next.querySelector('.spark-y-labels');
   if (yLabelWrap) {
     yLabelWrap.style.setProperty('--spark-gutter', (100 * model.padLeft / model.width).toFixed(3) + '%');
