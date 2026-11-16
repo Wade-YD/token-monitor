@@ -1139,3 +1139,26 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
   Oracle 审查（agent_8d082d0c）：0 P0 / 2 P1 / P2 全修。P1=lock 脏树组合陷阱
   + assert 分子；P2=hiddenBounds 告警、bottom 停靠触发点、sort -V、patched
   判定加工厂标记、基线口径记录。
+
+【升级记录（2026-11-16，v0.93.0 → v0.93.1，round 17，工具链新机制首战）】
+  1) 上游 7 commits（muse web 修复、tokscale vendor 升 4.23.0、git worktree
+     项目归组、New API token 语义、JSDoc typecheck、动画保留、release）。
+     安装包 135,320,352 B，SHA 4a4ee584… MATCH 一次下载成功。
+  2) **一把过**：rebase 39 提交重放零冲突 → phase 3.5 自动 npm install
+     （**tokscale 4.22.0→4.23.0 自动跟上**，lock 未被改写=还原守卫未触发）
+     → verify 回落 warn 基线 v0.93.0（**sort -V 机制首战**）→ 测试 10477
+     用例 11 红=全基线 0 NEW → assert pre-pack 干净 skip（**降噪首战**）/
+     post-pack 16/16 → pack 24,642,979 B + 2 natives → CDP try 1。
+  3) ⚠️ **visibilityState 滞后在 v0.93.1 上加剧**：探针又报 hidden，取证=
+     debug 日志 expand 正常 + panel 结构全绿挂载 + 几分钟后 geom/shot 实测
+     vis 已翻转——即 occlusion tracker 翻转滞后分钟级且方差大（v0.93.0 昨晚
+     冷启动 2s 内翻转）。上游 main.js 无可见性改动，纯 Chromium 行为漂移。
+     **修法（探针去竞态化）**：cdp.mjs reveal 物理展开成立即返回 'expanded'
+     （新语义），panel.mjs 接受 expanded 不算 problem——判据从「等 Chromium
+     翻转」改为「物理展开+结构检查」，与 tracker 方差解耦。修后 panel/health
+     双探针 verdict ok。
+  4) health 的 dom.total=0 为重启后 stats 区等下次显形渲染的已知行为
+     （statsRenderScheduler），数据层健康：today 60,765,438、anchor 4 分钟、
+     tokscale 4.23.0。
+  5) 交付：patch 4284 行 / commits 39 行再生，feat --force-with-lease 推
+     fork，master docs 提交推 fork。pi-bridge v1.4.0 四轮跨升级存活。

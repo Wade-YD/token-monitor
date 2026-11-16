@@ -1500,7 +1500,7 @@ index 77571fa1..f9315e9e 100644
  
  function floatingBubbleNativeGlassEnabled(settings = {}) {
 diff --git a/src/electron/main.js b/src/electron/main.js
-index a7fd41b1..b0c0da61 100644
+index 4967626d..a14dac72 100644
 --- a/src/electron/main.js
 +++ b/src/electron/main.js
 @@ -36,6 +36,7 @@ const fontSettingsApi = require('../shared/fontSettings');
@@ -1605,7 +1605,7 @@ index a7fd41b1..b0c0da61 100644
  }
  
  function nativeBlurEnabled(source = settings) {
-@@ -6475,6 +6499,11 @@ function ensureEdgeDockController() {
+@@ -6481,6 +6505,11 @@ function ensureEdgeDockController() {
      rendererDir: path.join(__dirname, 'renderer'),
      preloadPath: path.join(__dirname, 'edgeDock', 'preload.js'),
      getSettings: () => settings,
@@ -1617,7 +1617,7 @@ index a7fd41b1..b0c0da61 100644
      nativeGlass: () => nativeBlurEnabled(),
      // The dock follows the widget's glass style unless it has its own; the
      // controller decides whether there is material at all. Reduce Transparency
-@@ -6716,6 +6745,8 @@ function setWindowPresentationFromMenu(value) {
+@@ -6722,6 +6751,8 @@ function setWindowPresentationFromMenu(value) {
    saveSettings();
    if (previousTrayMode) exitTrayMode();
    else {
@@ -1626,7 +1626,7 @@ index a7fd41b1..b0c0da61 100644
      applyWindowSettings();
      focusExistingWindow();
    }
-@@ -7892,6 +7923,7 @@ function createWindow(boundsOverride, options = {}) {
+@@ -7898,6 +7929,7 @@ function createWindow(boundsOverride, options = {}) {
      })
      : new BrowserWindow(windowOptions);
    mainWindow = win;
@@ -1634,7 +1634,7 @@ index a7fd41b1..b0c0da61 100644
    mainWindowChrome = { collapsedFloatingBubble };
    applyMacSpaceBehavior();
    applyWindowsChrome(win, { round: true });
-@@ -7939,13 +7971,14 @@ function createWindow(boundsOverride, options = {}) {
+@@ -7945,13 +7977,14 @@ function createWindow(boundsOverride, options = {}) {
          if (point && tray?.isPointerOverIcon?.(point)) recentPopoverBlur = { at: performance.now(), point };
        }
      }
@@ -1652,7 +1652,7 @@ index a7fd41b1..b0c0da61 100644
    win.on('minimize', stopTaskbarZOrderKeeper);
    win.on('close', (event) => {
      if (quitRequested) return;
-@@ -8214,6 +8247,20 @@ async function cursorStatusValue({ discover = false } = {}) {
+@@ -8220,6 +8253,20 @@ async function cursorStatusValue({ discover = false } = {}) {
  // accepts before 'ready'.
  registerPluginScheme(protocol);
  
@@ -1673,7 +1673,7 @@ index a7fd41b1..b0c0da61 100644
  app.whenReady().then(() => {
    if (process.platform === 'darwin' && app.dock) app.dock.setIcon(APP_ICON_PATH);
    ensureSettingsLoaded();
-@@ -8546,6 +8593,7 @@ app.whenReady().then(() => {
+@@ -8552,6 +8599,7 @@ app.whenReady().then(() => {
          patch.displayFontFamily ?? settings.displayFontFamily
        ),
        tokenRateMode: normalizeTokenRateMode(patch.tokenRateMode ?? settings.tokenRateMode),
@@ -1681,7 +1681,7 @@ index a7fd41b1..b0c0da61 100644
        floatingBubbleEnabled: parseBoolean(patch.floatingBubbleEnabled ?? settings.floatingBubbleEnabled, false),
        notchEnabled: parseBoolean(patch.notchEnabled ?? settings.notchEnabled, false),
        notchStyle: normalizeNotchStyle(patch.notchStyle ?? settings.notchStyle),
-@@ -8750,6 +8798,7 @@ app.whenReady().then(() => {
+@@ -8756,6 +8804,7 @@ app.whenReady().then(() => {
      applyWindowSettings();
      syncFloatingBubbleAvailability();
      syncDockSurfaces();
@@ -1689,7 +1689,7 @@ index a7fd41b1..b0c0da61 100644
      applyNativeMaterial();
      const runtimeChange = classifySettingsChange(previousRuntimeSettings, settings);
      const widgetHistorySourceChanged = previousRuntimeSettings.historyEnabled !== settings.historyEnabled;
-@@ -8872,6 +8921,17 @@ app.whenReady().then(() => {
+@@ -8878,6 +8927,17 @@ app.whenReady().then(() => {
    });
    ipcMain.handle('floatingBubble:expand', () => expandFloatingBubble());
    ipcMain.handle('floatingBubble:peek', () => expandFloatingBubble({ focus: false }));
@@ -1707,7 +1707,7 @@ index a7fd41b1..b0c0da61 100644
    ipcMain.handle('floatingBubble:collapseIfIdle', () => {
      if (!mainWindow || mainWindow.isDestroyed()) return false;
      if (floatingBubbleState.collapsed || !canUseFloatingBubble(settings)) return false;
-@@ -10126,6 +10186,20 @@ app.whenReady().then(() => {
+@@ -10142,6 +10202,20 @@ app.whenReady().then(() => {
    });
    ipcMain.handle('dashboard:open', () => { createDashboardWindow(); return true; });
    ipcMain.handle('dashboard:getHistory', (_event, options) => getDashboardHistory(options));
@@ -1741,10 +1741,10 @@ index 1737501c..d74f09ba 100644
      const listener = () => { try { callback(); } catch (_) {} };
      ipcRenderer.on('dashboard:historyChanged', listener);
 diff --git a/src/electron/renderer/app.js b/src/electron/renderer/app.js
-index 75adf1e0..cf8ec008 100644
+index 6d066c14..f59fe183 100644
 --- a/src/electron/renderer/app.js
 +++ b/src/electron/renderer/app.js
-@@ -211,8 +211,8 @@ const projectRowsApi = window.TokenMonitorProjectRows;
+@@ -214,8 +214,8 @@ const projectRowsApi = window.TokenMonitorProjectRows;
  const sessionDetailApi = window.TokenMonitorSessionDetail;
  const windowShortcutApi = window.TokenMonitorWindowShortcut;
  const LIMIT_REFRESH_OPTIONS = [60000, 120000, 300000, 900000, 1800000];
@@ -1755,7 +1755,7 @@ index 75adf1e0..cf8ec008 100644
  const LIMIT_CAPABILITY_TAG_KEYS = {
    Auto: 'settings.limits.capability.auto',
    'OAuth/CLI': 'settings.limits.capability.oauthCli',
-@@ -433,6 +433,8 @@ Object.assign(els, {
+@@ -436,6 +436,8 @@ Object.assign(els, {
    projectBreakdownFooter: document.getElementById('projectBreakdownFooter'),
    projectBreakdownFooterTools: document.getElementById('projectBreakdownFooterTools'),
    projectBreakdownFooterModels: document.getElementById('projectBreakdownFooterModels'),
@@ -1764,7 +1764,7 @@ index 75adf1e0..cf8ec008 100644
    monthPeriodMenu: document.getElementById('monthPeriodMenu'),
    monthPeriodTab: document.getElementById('monthPeriodTab'),
    periodMonthModeInput: document.getElementById('periodMonthModeInput'),
-@@ -717,6 +719,14 @@ els.toolDetailFooterModels.addEventListener('click', () => setActiveToolDetailMo
+@@ -720,6 +722,14 @@ els.toolDetailFooterModels.addEventListener('click', () => setActiveToolDetailMo
  els.projectBreakdownFooterTools.addEventListener('click', () => { void saveSettings({ projectBreakdownMode: 'tool' }).catch(() => {}); });
  els.projectBreakdownFooterModels.addEventListener('click', () => { void saveSettings({ projectBreakdownMode: 'model' }).catch(() => {}); });
  
@@ -1779,7 +1779,7 @@ index 75adf1e0..cf8ec008 100644
  document.addEventListener('pointerdown', (event) => {
    if (state.viewSwitcherOpen && !event.target.closest('#viewSwitcher')) {
      setViewSwitcherOpen(false);
-@@ -1143,6 +1153,7 @@ function scheduleDisplayLiveTokenRateExpiry() {
+@@ -1146,6 +1156,7 @@ function scheduleDisplayLiveTokenRateExpiry() {
      void maybeUpdateBarsIcon({ refreshComposers: false });
      renderFloatingBubbleContent();
      if (isSettingsSurfaceVisible()) refreshTrayComposers();
@@ -1787,7 +1787,7 @@ index 75adf1e0..cf8ec008 100644
      scheduleDisplayLiveTokenRateExpiry();
    }, Math.max(0, Math.min(...expiries) - Date.now()) + 10);
  }
-@@ -3492,6 +3503,21 @@ function modelRowsForPeriod(period, rankingMetric = state.settings?.modelRanking
+@@ -3495,6 +3506,21 @@ function modelRowsForPeriod(period, rankingMetric = state.settings?.modelRanking
    return toolRowsForPeriod(period);
  }
  
@@ -1809,7 +1809,7 @@ index 75adf1e0..cf8ec008 100644
  function sessionPresentationOptions() {
    const localDevice = state.stats?.devices?.find(device => device.deviceId === state.settings?.deviceId);
    return {
-@@ -3509,6 +3535,10 @@ function sessionPresentationOptions() {
+@@ -3512,6 +3538,10 @@ function sessionPresentationOptions() {
      nativeSessions: state.stats?.nativeSessions?.[state.period] || {},
      localSourceDevice: localDevice ? { deviceId: localDevice.deviceId,
        name: deviceBreakdownApi.deviceLabel(localDevice), platform: localDevice.platform || '', deviceKind: localDevice.deviceKind || 'computer' } : undefined,
@@ -1820,7 +1820,7 @@ index 75adf1e0..cf8ec008 100644
      subagents: {
        countLabel: (count) => t('sessions.subagentCount', { count }),
        latestModelLabel: t('session.latestModel'),
-@@ -3538,7 +3568,8 @@ function rawSessionRowsForPeriod(period) {
+@@ -3541,7 +3571,8 @@ function rawSessionRowsForPeriod(period) {
  function sessionRowsForPeriod(period) {
    const rows = rawSessionRowsForPeriod(period);
    if (rows.length > 0) {
@@ -1830,7 +1830,7 @@ index 75adf1e0..cf8ec008 100644
      return sessionRowsApi.groupSessionRows(rows, sessionPresentationOptions());
    }
    if (Number(period?.totalTokens || 0) === 0) return [];
-@@ -6065,9 +6096,16 @@ function renderTrends() {
+@@ -6068,9 +6099,16 @@ function renderTrends() {
      return;
    }
  
@@ -1849,7 +1849,7 @@ index 75adf1e0..cf8ec008 100644
  
    const summary = homeOverviewApi.activityStatsForPeriod({
      period: state.period,
-@@ -6094,9 +6132,23 @@ function renderTrends() {
+@@ -6097,9 +6135,23 @@ function renderTrends() {
    const next = document.createElement('div');
    next.innerHTML =
      `<div class="trends-cap"><span>${rangeLabel}</span><span class="trends-open-hint" aria-label="${t('trends.open')}">↗</span></div>`
@@ -1874,7 +1874,7 @@ index 75adf1e0..cf8ec008 100644
    Array.from(next.querySelectorAll('.spark-bar')).forEach((bar, index) => {
      bar.dataset.key = String(finalPoints[index]?.[labelKey] || index);
      bar.dataset.motionKey = String(finalPoints[index]?.[labelKey] || index);
-@@ -14037,7 +14089,7 @@ els.breakdown.addEventListener('click', (event) => {
+@@ -14040,7 +14092,7 @@ els.breakdown.addEventListener('click', (event) => {
    }
    const key = rowEl.dataset.key || '';            // "session:<client>:<sessionId>"
    const client = rowEl.dataset.client || '';
@@ -1940,7 +1940,7 @@ index 59961f43..2a2c8396 100644
  els.closeBtn.addEventListener('click', () => window.tokenMonitor.dashboard.close());
  
 diff --git a/src/electron/renderer/edgeDock/dock.js b/src/electron/renderer/edgeDock/dock.js
-index c93dac25..1d9609f1 100644
+index 76bcc3b9..b0bddc3e 100644
 --- a/src/electron/renderer/edgeDock/dock.js
 +++ b/src/electron/renderer/edgeDock/dock.js
 @@ -5,6 +5,12 @@
@@ -1957,7 +1957,7 @@ index c93dac25..1d9609f1 100644
  // The running reading is derived from the projected rows at paint time rather than
  // frozen into the cell, so the rail and the card answer at the same clock (see
 diff --git a/src/electron/renderer/i18n.js b/src/electron/renderer/i18n.js
-index 81898916..b821e69c 100644
+index a7729b92..63fccac9 100644
 --- a/src/electron/renderer/i18n.js
 +++ b/src/electron/renderer/i18n.js
 @@ -956,6 +956,8 @@
@@ -1969,7 +1969,7 @@ index 81898916..b821e69c 100644
        'home.less': 'Less',
        'home.more': 'More',
        'home.used': 'used',
-@@ -1903,6 +1905,7 @@
+@@ -1906,6 +1908,7 @@
        'settings.windowBehavior.floating': 'Floating above apps',
        'settings.windowBehavior.normal': 'Normal window',
        'settings.windowBehavior.desktop': 'Desktop pinned',
@@ -1977,7 +1977,7 @@ index 81898916..b821e69c 100644
        'settings.windowBehavior.buttonTitle': '{current}; click for {next}',
        'settings.display.floatingBubble': 'Floating Bubble',
        'settings.display.floatingBubbleNote': 'Collapse the widget into a slim draggable mini-window; click it to reopen.',
-@@ -2267,6 +2270,7 @@
+@@ -2270,6 +2273,7 @@
        'trayMenu.presentation.floating': 'Floating Above Apps',
        'trayMenu.presentation.normal': 'Normal Window',
        'trayMenu.presentation.desktop': 'Desktop Pinned',
@@ -1985,7 +1985,7 @@ index 81898916..b821e69c 100644
        'settings.startup.title': 'Startup',
        'settings.startup.startAtLogin': 'Start at login',
        "settings.startup.available": "Available in packaged builds.",
-@@ -3464,6 +3468,8 @@
+@@ -3467,6 +3471,8 @@
        'home.liveTokenRate.burnTitle': '即時 Token 消耗（{scope}）：{value}。點擊切換至即時 tok/s。',
        'home.liveTokenRate.speedIdleTitle': '最近一次生成速度（{scope}）：{value}。點擊切換至 TPM。',
        'home.liveTokenRate.burnIdleTitle': '最近一次 Token 消耗（{scope}）：{value}。點擊切換至 tok/s。',
@@ -1994,7 +1994,7 @@ index 81898916..b821e69c 100644
        'home.less': '較少',
        'home.more': '較多',
        'home.used': '已用',
-@@ -4411,6 +4417,7 @@
+@@ -4417,6 +4423,7 @@
        'settings.windowBehavior.floating': '浮在其他 app 上方',
        'settings.windowBehavior.normal': '一般視窗',
        'settings.windowBehavior.desktop': '固定在桌面',
@@ -2002,7 +2002,7 @@ index 81898916..b821e69c 100644
        'settings.windowBehavior.buttonTitle': '目前：{current}；點擊切換為 {next}',
        'settings.display.floatingBubble': '懸浮小窗',
        'settings.display.floatingBubbleNote': '將 widget 收成可拖曳的窄長小窗，點擊即可重新展開。',
-@@ -4775,6 +4782,7 @@
+@@ -4781,6 +4788,7 @@
        'trayMenu.presentation.floating': '浮動於其他 App 上方',
        'trayMenu.presentation.normal': '一般視窗',
        'trayMenu.presentation.desktop': '固定於桌面',
@@ -2010,7 +2010,7 @@ index 81898916..b821e69c 100644
        'settings.startup.title': '啟動',
        'settings.startup.startAtLogin': '登入時啟動',
        "settings.startup.available": "僅在打包後的版本可用。",
-@@ -5972,6 +5980,8 @@
+@@ -5978,6 +5986,8 @@
        'home.liveTokenRate.burnTitle': '实时 Token 消耗（{scope}）：{value}。点击切换至实时 tok/s。',
        'home.liveTokenRate.speedIdleTitle': '最近一次生成速度（{scope}）：{value}。点击切换至 TPM。',
        'home.liveTokenRate.burnIdleTitle': '最近一次 Token 消耗（{scope}）：{value}。点击切换至 tok/s。',
@@ -2019,7 +2019,7 @@ index 81898916..b821e69c 100644
        'home.less': '较少',
        'home.more': '较多',
        'home.used': '已用',
-@@ -6919,6 +6929,7 @@
+@@ -6928,6 +6938,7 @@
        'settings.windowBehavior.floating': '浮在其他 app 上方',
        'settings.windowBehavior.normal': '普通窗口',
        'settings.windowBehavior.desktop': '固定在桌面',
@@ -2027,7 +2027,7 @@ index 81898916..b821e69c 100644
        'settings.windowBehavior.buttonTitle': '当前：{current}；点击切换为 {next}',
        'settings.display.floatingBubble': '悬浮小窗',
        'settings.display.floatingBubbleNote': '将组件收成可拖动的窄长小窗，点击即可重新展开。',
-@@ -7283,6 +7294,7 @@
+@@ -7292,6 +7303,7 @@
        'trayMenu.presentation.floating': '浮动于其他 App 上方',
        'trayMenu.presentation.normal': '普通窗口',
        'trayMenu.presentation.desktop': '固定到桌面',
@@ -2035,7 +2035,7 @@ index 81898916..b821e69c 100644
        'settings.startup.title': '启动',
        'settings.startup.startAtLogin': '登录时启动',
        "settings.startup.available": "仅在打包后的版本可用。",
-@@ -8040,6 +8052,8 @@
+@@ -8049,6 +8061,8 @@
        'home.liveTokenRate.burnTitle': '실시간 토큰 소모량({scope}): {value}. 클릭하여 실시간 tok/s로 전환합니다.',
        'home.liveTokenRate.speedIdleTitle': '마지막으로 관찰된 생성 속도({scope}): {value}. 클릭하여 TPM으로 전환합니다.',
        'home.liveTokenRate.burnIdleTitle': '마지막으로 관찰된 토큰 소모량({scope}): {value}. 클릭하여 tok/s로 전환합니다.',
@@ -2044,7 +2044,7 @@ index 81898916..b821e69c 100644
        'home.reset': '{value} 초기화',
        'home.staleDevice': '오프라인',
        'home.tools': '도구',
-@@ -9986,6 +10000,7 @@
+@@ -9998,6 +10012,7 @@
        'trayMenu.presentation.floating': '다른 앱 위에 띄우기',
        'trayMenu.presentation.normal': '일반 창',
        'trayMenu.presentation.desktop': '데스크톱에 고정',
@@ -2052,7 +2052,7 @@ index 81898916..b821e69c 100644
        'settings.views.configureHome': '{name} 설정',
        'settings.views.configureLimits': '{name} 설정',
        'settings.views.configureTrend': '{name} 설정',
-@@ -10010,6 +10025,7 @@
+@@ -10022,6 +10037,7 @@
        'settings.views.trendIntervalMinutes': '{n}분',
        'settings.windowBehavior.buttonTitle': '{current}; {next}로 전환하려면 클릭',
        'settings.windowBehavior.desktop': '데스크톱 고정',
@@ -2060,7 +2060,7 @@ index 81898916..b821e69c 100644
        'settings.windowBehavior.floating': '앱 위에 플로팅',
        'settings.windowBehavior.normal': '일반 창',
        'sortMostTokens': '↕ 토큰 많은 순',
-@@ -10548,6 +10564,8 @@
+@@ -10560,6 +10576,8 @@
        'home.liveTokenRate.burnTitle': 'ライブ Token 消費（{scope}）：{value}。クリックするとライブ tok/s に切り替わります。',
        'home.liveTokenRate.speedIdleTitle': '直近の生成速度（{scope}）：{value}。クリックすると TPM に切り替わります。',
        'home.liveTokenRate.burnIdleTitle': '直近の Token 消費（{scope}）：{value}。クリックすると tok/s に切り替わります。',
@@ -2069,7 +2069,7 @@ index 81898916..b821e69c 100644
        'home.reset': '{value}をリセット',
        'home.staleDevice': 'オフライン',
        'home.tools': 'ツール',
-@@ -12494,6 +12512,7 @@
+@@ -12509,6 +12527,7 @@
        'trayMenu.presentation.floating': '他のアプリの前面に表示',
        'trayMenu.presentation.normal': '通常ウィンドウ',
        'trayMenu.presentation.desktop': 'デスクトップに固定',
@@ -2077,7 +2077,7 @@ index 81898916..b821e69c 100644
        'settings.views.configureHome': '{name}を設定',
        'settings.views.configureLimits': '{name}を設定',
        'settings.views.configureTrend': '{name}を設定',
-@@ -12518,6 +12537,7 @@
+@@ -12533,6 +12552,7 @@
        'settings.views.trendIntervalMinutes': '{n}分',
        'settings.windowBehavior.buttonTitle': '{current}; {next}に切り替えるにはクリック',
        'settings.windowBehavior.desktop': 'デスクトップに固定',
@@ -2085,7 +2085,7 @@ index 81898916..b821e69c 100644
        'settings.windowBehavior.floating': 'アプリの上にフローティング',
        'settings.windowBehavior.normal': '通常ウィンドウ',
        'sortMostTokens': '↕ トークン数順',
-@@ -13592,6 +13612,8 @@
+@@ -13607,6 +13627,8 @@
        "home.liveTokenRate.burnTitle": "Consumo de tokens en tiempo real ({scope}): {value}. Haz clic para mostrar los tok/s en tiempo real.",
        "home.liveTokenRate.speedIdleTitle": "Última velocidad de generación observada ({scope}): {value}. Haz clic para mostrar los TPM.",
        "home.liveTokenRate.burnIdleTitle": "Último consumo de tokens observado ({scope}): {value}. Haz clic para mostrar los tok/s.",
@@ -2094,7 +2094,7 @@ index 81898916..b821e69c 100644
        "home.less": "Menos",
        "home.more": "Más",
        "home.used": "usado",
-@@ -14471,6 +14493,7 @@
+@@ -14489,6 +14511,7 @@
        "settings.windowBehavior.floating": "Flotante sobre las aplicaciones",
        "settings.windowBehavior.normal": "Ventana normal",
        "settings.windowBehavior.desktop": "Anclado al escritorio",
@@ -2102,7 +2102,7 @@ index 81898916..b821e69c 100644
        "settings.windowBehavior.buttonTitle": "{current}; haz clic para {next}",
        "settings.display.floatingBubble": "Burbuja flotante",
        "settings.display.floatingBubbleNote": "Contrae el widget en una miniventana estrecha que puedes arrastrar; haz clic para volver a abrirlo.",
-@@ -14826,6 +14849,7 @@
+@@ -14844,6 +14867,7 @@
        "trayMenu.presentation.floating": "Flotante sobre las aplicaciones",
        "trayMenu.presentation.normal": "Ventana normal",
        "trayMenu.presentation.desktop": "Anclado al escritorio",
@@ -2110,7 +2110,7 @@ index 81898916..b821e69c 100644
        "settings.startup.title": "Inicio",
        "settings.startup.startAtLogin": "Iniciar al iniciar sesión",
        "settings.startup.available": "Disponible en versiones empaquetadas.",
-@@ -15970,6 +15994,8 @@
+@@ -15988,6 +16012,8 @@
        'home.limit.session': 'Sessão',
        'home.limit.daily': 'Diária',
        'home.limit.weekly': 'Semanal',
@@ -2119,7 +2119,7 @@ index 81898916..b821e69c 100644
        'home.limit.billing': 'Cobrança',
        'home.limit.monthly': 'Mensal',
        'home.reset': 'Redefinir {value}',
-@@ -16947,6 +16973,7 @@
+@@ -16968,6 +16994,7 @@
        'settings.windowBehavior.normal': 'Janela normal',
        'settings.windowBehavior.desktop': 'Fixado na área de trabalho',
        'settings.windowBehavior.buttonTitle': '{current}; clique para {next}',
@@ -2127,7 +2127,7 @@ index 81898916..b821e69c 100644
        'settings.display.floatingBubble': 'Bolha flutuante',
        'settings.display.floatingBubbleNote': 'Reduz o widget a uma mini-janela slim e arrastável; clique nela para reabrir.',
        'edgeDock.period.today': 'Hoje',
-@@ -17310,6 +17337,7 @@
+@@ -17331,6 +17358,7 @@
        'trayMenu.presentation.floating': 'Flutuante sobre os aplicativos',
        'trayMenu.presentation.normal': 'Janela normal',
        'trayMenu.presentation.desktop': 'Fixado na área de trabalho',
@@ -2136,7 +2136,7 @@ index 81898916..b821e69c 100644
        'settings.startup.startAtLogin': 'Iniciar ao entrar no sistema',
        "settings.startup.available": "Disponível nas versões empacotadas.",
 diff --git a/src/electron/renderer/index.html b/src/electron/renderer/index.html
-index ad09c73d..05048eac 100644
+index cee1f8bc..122fd9a5 100644
 --- a/src/electron/renderer/index.html
 +++ b/src/electron/renderer/index.html
 @@ -262,6 +262,7 @@
@@ -2266,10 +2266,10 @@ index da544987..51bb4330 100644
      sessionCacheHitPercent,
      cacheHitLabel,
 diff --git a/src/electron/renderer/styles.css b/src/electron/renderer/styles.css
-index 039f745f..45dc7159 100644
+index 2ee828ba..ebd0c2c5 100644
 --- a/src/electron/renderer/styles.css
 +++ b/src/electron/renderer/styles.css
-@@ -7275,6 +7275,7 @@ html.native-liquid-glass .view-switcher-menu-item { border-radius: 9px; }
+@@ -7278,6 +7278,7 @@ html.native-liquid-glass .view-switcher-menu-item { border-radius: 9px; }
  .detail-session-id-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: text; }
  .detail-session-id-copy { flex-shrink: 0; padding: 0 2px; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; opacity: 0.72; }
  .detail-session-id-copy:hover, .detail-session-id-copy:focus-visible { color: var(--text); opacity: 1; }
@@ -2277,7 +2277,7 @@ index 039f745f..45dc7159 100644
  .view-preference-row.has-subgroup {
    grid-template-columns: minmax(0, 1fr) repeat(3, 22px);
  }
-@@ -7469,9 +7470,20 @@ html.native-liquid-glass .view-switcher-menu-item { border-radius: 9px; }
+@@ -7472,9 +7473,20 @@ html.native-liquid-glass .view-switcher-menu-item { border-radius: 9px; }
  .trends-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; padding-right: 2px; overflow: hidden; }
  .trends-cap { flex: none; display: flex; align-items: center; justify-content: space-between; font-size: 0.6875rem; letter-spacing: 0.04em; text-transform: uppercase; opacity: 0.6; }
  .trends-open-hint { opacity: 0.75; cursor: pointer; font-size: 0.8125rem; }
