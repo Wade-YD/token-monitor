@@ -28,7 +28,7 @@ function createEdgeAutoHideController(deps) {
     windowChrome
   } = deps;
 
-  const edgeAutoHideState = { hidden: false, side: null, expandedBounds: null, hiddenBounds: null, animatingUntil: 0, desired: null, guardTripped: false, geometryReady: false, nativeRejectStreak: 0, lastResizeAt: 0, collapseTimer: null, pollTimer: null };
+  const edgeAutoHideState = { hidden: false, side: null, expandedBounds: null, hiddenBounds: null, animatingUntil: 0, desired: null, guardTripped: false, geometryReady: false, nativeRejectStreak: 0, lastResizeAt: 0, lastDesyncHealAt: 0, collapseTimer: null, pollTimer: null };
 
   function stopEdgeAutoHideTimers() {
     if (edgeAutoHideState.collapseTimer) { clearTimeout(edgeAutoHideState.collapseTimer); edgeAutoHideState.collapseTimer = null; }
@@ -47,6 +47,28 @@ function createEdgeAutoHideController(deps) {
 
   function edgeResizeGraceActive() {
     return Date.now() - edgeAutoHideState.lastResizeAt < EDGE_RESIZE_GRACE_MS;
+  }
+
+  const EDGE_DESYNC_TOLERANCE_PX = 6;
+
+  // Physical verification: the flags claim one state while the window sits at
+  // the OTHER state's bounds. Exactly one producer: a transition whose tween
+  // frames were all natively rejected (state flips in JS, geometry never moves)
+  // - observed live on 2026-11-18: expand logged, hidden=false, window stayed
+  // at the hidden position, and the poll's expanded branch then saw the cursor
+  // inside the stale bounds forever. Narrow on purpose - both bounds must
+  // exist, so the dragged-away path (which clears both) is outside the
+  // detection domain.
+  function edgeStatePositionDesynced() {
+    if (edgeIsAnimating() || edgeResizeGraceActive()) return false;
+    if (!getWindow() || getWindow().isDestroyed() || !getWindow().isVisible()) return false;
+    const hb = edgeAutoHideState.hiddenBounds;
+    const eb = edgeAutoHideState.expandedBounds;
+    if (!hb || !eb) return false;
+    const b = getWindow().getBounds();
+    const near = (t) => Math.abs(b.x - t.x) <= EDGE_DESYNC_TOLERANCE_PX
+      && Math.abs(b.y - t.y) <= EDGE_DESYNC_TOLERANCE_PX;
+    return edgeAutoHideState.hidden ? near(eb) : near(hb);
   }
 
   // The dashboard is a persistent second window of ours — a workspace the user
@@ -330,10 +352,28 @@ function createEdgeAutoHideController(deps) {
   // it compares the desired state against the real window geometry and only moves
   // when the two disagree. A lost timer or a killed poll therefore cannot strand the
   // window -- the next reconcile simply re-discovers the drift and corrects it.
+  // Since the 2026-11-18 wedge it also verifies the state FLAGS against the
+  // physical position on both axes: a transition whose tween frames were all
+  // natively rejected flips the flags without moving the window, and this is
+  // the one place that can detect and re-apply it (1Hz via the keeper).
   function reconcileEdgeAutoHide() {
     if (!canUseEdgeAutoHide(getSettings())) return false;
     if (!getWindow() || getWindow().isDestroyed() || !getWindow().isVisible()) return false;
     if (edgeIsAnimating()) return false;
+    if (edgeStatePositionDesynced() && Date.now() - edgeAutoHideState.lastDesyncHealAt >= 1000) {
+      edgeAutoHideState.lastDesyncHealAt = Date.now();
+      edgeLog('reconcile', 'state/position desync: hidden=' + edgeAutoHideState.hidden
+        + ' bounds=' + JSON.stringify(getWindow().getBounds())
+        + ' -- re-applying ' + (edgeAutoHideState.hidden ? 'collapse' : 'expand'));
+      if (edgeAutoHideState.hidden) {
+        if (!edgeAutoHideState.side) return false;
+        return collapseEdge(edgeAutoHideState.expandedBounds, edgeAutoHideState.side);
+      }
+      // expandEdge() refuses while hidden===false; the desync IS the proof the
+      // previous expand never landed, so re-arm the flag before re-applying.
+      edgeAutoHideState.hidden = true;
+      return expandEdge();
+    }
     const desired = edgeAutoHideState.desired;
     if (desired === 'hidden') {
       if (edgeAutoHideState.hidden) return false;
@@ -520,6 +560,11 @@ function createEdgeAutoHideController(deps) {
       windowChrome.syncTaskbarZOrder();
       // Programmatic animation frames land here also; only react to real drags.
       if (edgeIsAnimating() || !getWindow() || getWindow().isDestroyed()) return;
+      // A real drag counts as a hand on the window (Oracle round 17 review D):
+      // it arms the resize grace so the desync heal never yanks the dock out
+      // from under a drag that passes near the hidden position. Tween frames
+      // never get here (the guard above), so heal tween frames don't re-arm it.
+      edgeAutoHideState.lastResizeAt = Date.now();
       if (!canUseEdgeAutoHide(getSettings())) return;
       if (edgeAutoHideState.hidden) {
         // Hidden-strip drag (Oracle round 17 review P1): the user slid the 3px
