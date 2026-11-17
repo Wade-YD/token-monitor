@@ -1346,7 +1346,9 @@ function createEdgeDockController(deps) {
         win.setIgnoreMouseEvents(false);
         cleared = true;
       }
-      if (cleared && surface === 'rail') {
+      // 'clean' means the style was already fine - logging on it made a healthy
+      // rail emit "input restored" every poll tick (round 17 review P1).
+      if (cleared === true && surface === 'rail') {
         logger(`[edge-dock] rail was shown with mouse events ignored - input restored`);
       }
     }

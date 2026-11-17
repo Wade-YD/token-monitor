@@ -131,7 +131,10 @@ function clearMouseTransparent(win, deps = {}) {
   const handle = buffer.length >= 8 ? Number(buffer.readBigUInt64LE()) : buffer.readUInt32LE();
   try {
     const style = a.getWindowLongPtrW(handle, GWL_EXSTYLE);
-    if (!(style & WS_EX_TRANSPARENT)) return true;
+    // Distinguish "already clean" from "just cleared" (round 17 review P1):
+    // callers log input restoration only when something was actually cleared,
+    // otherwise a healthy rail spams the diagnostics log every poll tick.
+    if (!(style & WS_EX_TRANSPARENT)) return 'clean';
     return Boolean(a.setWindowLongPtrW(handle, GWL_EXSTYLE, style & ~WS_EX_TRANSPARENT));
   } catch (_) {
     return false;
