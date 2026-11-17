@@ -8127,8 +8127,6 @@ app.whenReady().then(() => {
   // without depending on the fast paths cooperating. It is deliberately slow so
   // that an idle widget costs nothing.
   setInterval(() => edgeAutoHide.keeperTick(), 1000);
-  ipcMain.handle('edgeAutoHide:expand', () => edgeAutoHide.expand());
-  ipcMain.handle('edgeAutoHide:collapse', () => edgeAutoHide.collapse());
   ipcMain.handle('floatingBubble:collapseIfIdle', () => {
     if (!mainWindow || mainWindow.isDestroyed()) return false;
     if (floatingBubbleState.collapsed || !canUseFloatingBubble(settings)) return false;
