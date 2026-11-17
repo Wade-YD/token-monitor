@@ -1162,3 +1162,37 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
      tokscale 4.23.0。
   5) 交付：patch 4284 行 / commits 39 行再生，feat --force-with-lease 推
      fork，master docs 提交推 fork。pi-bridge v1.4.0 四轮跨升级存活。
+
+【验收夜（2026-11-18 00:30-01:30，用户授权：双 Oracle 全扫+有问题立马改+决策咨询 Oracle）】
+  一、双 Oracle 结论（agent_6372478a 扫 upkit 17 文件 / agent_2f786eb4 扫补丁线 40 文件 diff）：
+     两域均 0 P0。工具链总评「能继续托付」，补丁线总评「不是屎山、能继续健康 rebase」。
+  二、补丁线 3 P1 + 2 P2 已修（3 提交，全量 10477 用例 11 红全基线 0 NEW）：
+     ① 6fbe30a1：排序按钮空闲态不可达（唯一触发点=live rate 过期定时器，无 tracker 时永不排程
+        → 移入 renderToolDetailFooter，拔掉脆弱锚点）；隐藏态拖动漂移（moved 在 hidden 时早退
+        → 触发区/恢复位脱同步 → 补 syncEdgeDockGeometry 重同步）；健康 rail 每 40ms 刷假
+        "input restored" 日志（clearMouseTransparent 区分 'clean' 与真清除，日志只对真清除）。
+     ② 47bc7353：删死 IPC edgeAutoHide:expand/collapse（全仓无调用方且绕过 animating 闸，缩小
+        rebase 面）；animateWindowPosition 无有限目标时不再调 setEdgeWindowPosition(undefined,
+        undefined)（那会误触 non-finite 守卫整个会话禁动画）。
+     ③ 4b1cdcff：**楔死自愈器**（Oracle 裁决后落码）——2026-11-18 00:26 实测楔死：expand 日志
+        打出但 tween 帧全被原生拒绝，hidden=false 而窗口躺在隐藏位，poll 认为一切正常永久空转
+        （这也解释了 round 16 的「vis 卡死数分钟」）。修法=reconcileEdgeAutoHide（1Hz keeper 驱动
+        的唯一执行器）增加状态标志 vs 物理位置双轴校验：失同步时 edgeLog 记录并重放（expand 象限
+        先重臂 hidden=true；镜像 collapse 象限同兜），1Hz 限速，真实拖动武装宽限期防拽手。我原
+        提议放 poll，Oracle 驳回（架构违约+10Hz 风暴+只堵一象限+cursor 无关），改落执行器。
+  三、工具链 5 组 P1 + 6 项 P2 已修（直改 upkit，负向实测过）：
+     ① 探针/assert 裁决进退出码：round.sh 探针失败 exit 3（新增码）；pack.sh CDP 起不来 die
+        （附回滚指引）、post-pack 断言失败 die；②health/shot 跟上 'expanded' 语义（panel 新增
+        「限期 45s 等挂载，超时 verdict=deferred exit 0 不阻塞闸门，vis=visible 时空结构才是
+        真失败」——挂载延迟=渲染器可见性门控等 Chromium 翻转，非功能损坏）；③verify.sh flaky
+        判定加 --include='*.test.js' + 单跑输出须含该名字（堵静默错判通道）；④anchor.sh 身份
+        守卫：version!==V die + 已打补丁 die（负向实测拦截成功）+rm -rf 防嵌套拷贝；⑤pack.sh
+        EXTRACT 兜底 sort -V+不匹配 warn。P2：fetch.sh 死指针→--continue、env.sh 死行×2、
+        verify.sh 注释退码纠正+日志轮转（留 20 份）、rebase.sh 无冲突失败独立 die+剩余冲突读
+        实时集、panel 结构求值 undefined 显式问题、assert 双计收敛。
+  四、验证证据：全脚本 bash -n/node --check 过；assert 双路径过；anchor 守卫负向拦截成功；
+     edge 族 326/326；全量 10477 用例 11 红=全基线 0 NEW；换装后 assert 16/16、health ok
+     （vis=expanded 语义首次实战生效）、panel ok（hero 325,764,091）或 deferred（诚实降级）。
+  五、挂账（README.md Known debt 节）：治愈器 vm 回归测试（现测试=源码正则断言）、resolve-exports
+     悬空导出并集、resolve-main-bounds 旧形状回写、current.env 引号、SetCursorPos DPI 换算、
+     panel 期望值硬编码。
