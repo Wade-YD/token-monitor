@@ -1166,7 +1166,6 @@ function scheduleDisplayLiveTokenRateExpiry() {
     void maybeUpdateBarsIcon({ refreshComposers: false });
     renderFloatingBubbleContent();
     if (isSettingsSurfaceVisible()) refreshTrayComposers();
-    updateSessionSortToggle();
     scheduleDisplayLiveTokenRateExpiry();
   }, Math.max(0, Math.min(...expiries) - Date.now()) + 10);
 }
@@ -2844,6 +2843,12 @@ function renderToolDetailFooter() {
   const active = activeToolDetail();
   els.toolDetailFooter.classList.toggle('hidden', !active);
   syncLiveTokenRateFooterState();
+  // The sort toggle only shows for the session breakdown. This footer render
+  // is the hook that runs on every render of the surface hosting the button;
+  // its only other trigger was the live-token-rate expiry timer, which never
+  // schedules when no tracker exists - the button (and with it the whole sort
+  // feature) stayed unreachable on idle starts (Oracle round 17 review P1).
+  updateSessionSortToggle();
   if (!active) return;
   const mode = state.toolDetailMode;
   els.toolDetailFooter.setAttribute('aria-label', active.detail.name);
