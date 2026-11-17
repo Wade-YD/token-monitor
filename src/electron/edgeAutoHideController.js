@@ -179,7 +179,10 @@ function createEdgeAutoHideController(deps) {
     const target = to && Number.isFinite(to.x) && Number.isFinite(to.y) ? to : null;
     const source = from && Number.isFinite(from.x) && Number.isFinite(from.y) ? from : null;
     if (!target) {
-      setEdgeWindowPosition(to ? to.x : undefined, to ? to.y : undefined);
+      // No finite target: nothing to animate or place. Calling
+      // setEdgeWindowPosition(undefined, undefined) here used to trip the
+      // "non-finite position" guard and session-wide ban animations for an
+      // unrelated pathology (Oracle round 17 review P2).
       if (onComplete) onComplete();
       return;
     }
@@ -515,9 +518,18 @@ function createEdgeAutoHideController(deps) {
     win.on('moved', () => {
       persistBoundsSoon();
       windowChrome.syncTaskbarZOrder();
-      // Programmatic animation frames land here too; only react to real drags.
+      // Programmatic animation frames land here also; only react to real drags.
       if (edgeIsAnimating() || !getWindow() || getWindow().isDestroyed()) return;
-      if (!canUseEdgeAutoHide(getSettings()) || edgeAutoHideState.hidden) return;
+      if (!canUseEdgeAutoHide(getSettings())) return;
+      if (edgeAutoHideState.hidden) {
+        // Hidden-strip drag (Oracle round 17 review P1): the user slid the 3px
+        // strip along the edge. Resync the remembered dock geometry or the
+        // poll keeps matching the OLD trigger zone and the next expand/restore
+        // lands at the stale position. syncEdgeDockGeometry is deliberately
+        // hidden-state only and already re-snaps, persists, and repositions.
+        syncEdgeDockGeometry();
+        return;
+      }
       const bounds = getWindow().getBounds();
       const display = displayForBounds(bounds);
       if (!display) return;
@@ -686,19 +698,6 @@ function createEdgeAutoHideController(deps) {
     reconcileEdgeAutoHide();
   }
 
-  // Body of the 'edgeAutoHide:expand' IPC handler in main.js.
-  function expand() {
-    return expandEdge();
-  }
-
-  // Body of the 'edgeAutoHide:collapse' IPC handler in main.js.
-  function collapse() {
-    if (!getWindow() || getWindow().isDestroyed() || !canUseEdgeAutoHide(getSettings())) return false;
-    if (edgeAutoHideState.hidden) return true;
-    const bounds = getWindow().getBounds();
-    return maybeCollapseEdge(bounds);
-  }
-
   // Predicate for main.js persistBoundsSoon(): the dock is hidden and its
   // expanded bounds are tracked, so hidden geometry must not reach windowBounds.
   function isHiddenWithExpandedBounds() {
@@ -716,8 +715,6 @@ function createEdgeAutoHideController(deps) {
     attachWindow,
     handleUncaught,
     keeperTick,
-    expand,
-    collapse,
     isHiddenWithExpandedBounds
   };
 }
