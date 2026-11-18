@@ -1196,3 +1196,16 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
   五、挂账（README.md Known debt 节）：治愈器 vm 回归测试（现测试=源码正则断言）、resolve-exports
      悬空导出并集、resolve-main-bounds 旧形状回写、current.env 引号、SetCursorPos DPI 换算、
      panel 期望值硬编码。
+
+【排序修复（2026-11-18，用户报告：开关显示 Token 但列表按最近序）】
+  根因（双层）：①主窗路径=groupSessionRows 的最终顶层排序**硬编码 recent 比较器**（上游
+  3e98bff8 #987 引入），把平铺层刚排好的 token 序整个吃掉——排序开关 v0.64 恢复时只接了
+  平铺层、分组层从未接；②测试洞=平铺排序有断言（sessionRowsForPeriod sortMode 测试）、
+  **分组后输出顺序从未断言**。修法（2750d73b）：groupSessionRows 最终排序改用
+  compareSessionRows(a, b, options.sortMode)——无 sortMode 的调用方（edgeDock 条状卡路径）
+  归一化回 recent，行为零变化（那些条状卡本就设计为 recent 语义，未穿线）；补双向回归测试
+  （tokens 序存活 + 缺省 recent 不回退）。全量 10478 用例 11 红全基线 0 NEW，已换装。
+  排查副产物：settings.json 里 sessionSortMode='tokens' 持久化正确、main.js:2901 归一化保真
+  ——曾疑「重启丢设置」，实为 footer 从未渲染时读到 index.html 静态默认文案 'Recent' 的假象。
+  实机 DOM 验证被 visibilityState 滞后挡死（throttled 渲染器不挂载视图内容，真 OS 点击也不
+  翻转），以三层单元断言+换装 assert 16/16 收口。
