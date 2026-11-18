@@ -1208,4 +1208,4 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
   排查副产物：settings.json 里 sessionSortMode='tokens' 持久化正确、main.js:2901 归一化保真
   ——曾疑「重启丢设置」，实为 footer 从未渲染时读到 index.html 静态默认文案 'Recent' 的假象。
   实机 DOM 验证被 visibilityState 滞后挡死（throttled 渲染器不挂载视图内容，真 OS 点击也不
-  翻转），以三层单元断言+换装 assert 16/16 收口。
+  翻转），以三层单元断言+换装 assert 16/16 收口。**用户实机验收通过（2026-11-18）：排序正常。**
