@@ -1209,3 +1209,18 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
   ——曾疑「重启丢设置」，实为 footer 从未渲染时读到 index.html 静态默认文案 'Recent' 的假象。
   实机 DOM 验证被 visibilityState 滞后挡死（throttled 渲染器不挂载视图内容，真 OS 点击也不
   翻转），以三层单元断言+换装 assert 16/16 收口。**用户实机验收通过（2026-11-18）：排序正常。**
+
+【补丁面瘦身审计（2026-11-19，用户问：我方改造是否已被上游覆盖、可否减配）】
+  上游状态：release 仍 v0.93.1，**main 领先 15 提交**（limits 账户聚合层 #1512/#1513/#1518/
+  #1519、collector 修复 #1515/#1517、codex 自定义路径标题 #1473、alibaba Bailian #1509、
+  趋势图日用量 #1540、quota 历史等；本地 upstream/main 取到 cb7a4fae，gh api 补齐清单）。
+  结论（我预审 A-E + Oracle 终裁 agent_4d1ec5f4 F-G）：**8 特性族全部保留，0 可裁**——
+  A edge auto-hide（上游把 edge 归一化掉，无等价）/ B 输入韧性+topmost（上游无 HWND_TOPMOST
+  强制与自愈）/ C zcode detail（上游白名单 sessionRowDetailAvailable 仍无 zcode）/ D 排序开关
+  （上游无）/ E trends y 刻度（上游无；#1540 是相邻改动非等价，下轮 rebase 预计撞）/ F1 手动
+  刷新（上游 trayMenu.refreshNow 只覆盖托盘面，dashboard 按钮缺陷 upstream/main 逐行原样）/
+  F2 列序（dashboard.js:435 上游未动）/ G1 zai 去重（聚合层轴不同=多设备行合并 vs 我方单
+  fetch 内双 lane 窗口合并；zai 无 accountSlots/portableAccountKey，zai/limits.js 上游零改动）
+  / G2 idle cash 隐藏（上游 :402 明示「零余额合法中间态」=**有意分歧**，非待跟进）。
+  副产物：4 项待裁补丁与 upstream/main 15 提交 **hunk 零重叠**；下轮升级真正的冲突面在
+  A-E 族地盘（collector.js、shared/limits/*）。**无需任何减配实施。**
