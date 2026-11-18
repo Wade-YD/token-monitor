@@ -1450,6 +1450,23 @@ test('sessionRowsForPeriod honors the sortMode option', () => {
   );
 });
 
+test('groupSessionRows honors the sort mode for the final top-level ordering', () => {
+  // The group-stage sort used to hardcode recency, silently discarding the
+  // token sort the flat list had just been given (2026-11-18 user report: the
+  // toggle read "tokens" while every grouped list rendered recency-first).
+  const rows = [
+    { key: 's:new-small', kind: 'session', name: 'new-small', sortTime: 300, value: 50, cost: 0.1 },
+    { key: 's:old-big', kind: 'session', name: 'old-big', sortTime: 100, value: 5000, cost: 2 },
+    { key: 's:mid', kind: 'session', name: 'mid', sortTime: 200, value: 500, cost: 0.5 }
+  ];
+  const tokenOrder = groupSessionRows(rows, { sortMode: 'tokens' }).map((r) => r.name);
+  assert.deepEqual(tokenOrder, ['old-big', 'mid', 'new-small'],
+    'tokens mode must survive the grouping stage');
+  const recentOrder = groupSessionRows(rows).map((r) => r.name);
+  assert.deepEqual(recentOrder, ['new-small', 'mid', 'old-big'],
+    'missing sortMode keeps the legacy recency order');
+});
+
 test('sort toggle is wired in the renderer sources and localized', () => {
   const app = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'renderer', 'app.js'), 'utf8');
   assert.match(app, /sessionRowsApi\.compareSessionRows\(a, b, sortMode\)/);

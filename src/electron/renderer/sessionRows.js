@@ -974,9 +974,13 @@
       ...options.grokBot, id: 'cursor-grok-bot', client: 'cursor',
       label: options.grokBot?.label || 'Grok Bot'
     }));
-    return grouped.sort((a, b) => finiteNumber(b.sortTime) - finiteNumber(a.sortTime)
-      || finiteNumber(b.value) - finiteNumber(a.value) || finiteNumber(b.cost) - finiteNumber(a.cost)
-      || a.name.localeCompare(b.name));
+    // Honor the caller's sort mode for the final top-level ordering. This used
+    // to be a hardcoded recency sort, which silently discarded the token sort
+    // the flat row list had just been given: the toggle showed "tokens" while
+    // every grouped list rendered recency-first (2026-11-18 user report).
+    // Without options.sortMode this normalizes to 'recent' - identical to the
+    // old behavior for every caller that does not pass one.
+    return grouped.sort((a, b) => compareSessionRows(a, b, options.sortMode));
   }
 
   function sessionBreakdownIncomplete(stats, periodName) {
