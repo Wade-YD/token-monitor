@@ -1224,3 +1224,27 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
   / G2 idle cash 隐藏（上游 :402 明示「零余额合法中间态」=**有意分歧**，非待跟进）。
   副产物：4 项待裁补丁与 upstream/main 15 提交 **hunk 零重叠**；下轮升级真正的冲突面在
   A-E 族地盘（collector.js、shared/limits/*）。**无需任何减配实施。**
+
+【运存瘦身（2026-11-19，用户令：砍不需要的功能降运存）】
+  基线（私有内存，多采样稳态）：**~655MB**（Electron main 245+渲染器 143+GPU 78+
+  watcherWorker 72+utility 30+12；"+10MB/min" 经 Oracle 双采样纠偏=冷启动预热非泄漏，稳态平坦）。
+  settings 审计：已很瘦（hub/notch 关、limitsProvider 仅 zai、magpie-routes 已禁用），
+  **唯一大项=上游 edgeDock 右缘 3 窗**（64×308 主条+280×80 气泡+10×88 把手，autoHide，
+  配 5 个 dock items 含一个引用已禁用 magpie 插件的死条目；retainedWindow 只管主窗——
+  3 dock 窗共享单渲染器 process-per-site）。Oracle 终裁（agent_5b55a544）：
+  **关闭安全可逆零隐藏依赖**——我方 edge 主窗零耦合（edgeAutoHideController 只 import
+  edgeAutoHide+edgePopupGuard）、topmost sweep 空 hwnd 安全短路返回 0、input ack 有
+  surfaceFor 防重入、pi-bridge 的 NodeService utility 与 dock 无关、托盘/设置页两处
+  一键热切回（ensureEdgeDockController 完整重建路径）。
+  实施：停应用（异步落盘等 4s）→ node 脚本改 settings（**备份
+  $TEMP/opencode/settings.json.bak-slim-20261119**；edgeDockEnabled=false + 删死
+  magpie 条目，保留 zai/sessions/today/last7 四项）→ 重启验证：**CDP 恰 1 page target
+  （3 Dock 窗全消失）、TokenMonitor.DockBackdrop.exe 进程消失（-22MB 确定项）、
+  health/panel 双探针 verdict ok**（主窗贴边显形正常、hero 332,933,823、5/5 标题、
+  DOM 与内存逐位一致）。
+  **战果：稳态私有 655→607MB（-48MB/-7%，正落 Oracle 预估 35-60 区间）**。
+  ⚠ 排查注记：重启后 100s 时曾测得 467MB 低谷（collector 全量扫描未完），3 分钟后
+  爬至 631 再收敛到 607 平台——**前后对比必须用同窗稳态**，启动中段读数不作数。
+  用户可见变化：右缘三面消失（peek 把手/rail/气泡卡）；若其实需要，设置页 Edge Dock
+  复选框或托盘菜单一键开回（热切换无需重启）。floatingBubble 不受影响（本来
+  floatingBubbleEnabled=false；custom 布局仅 app-icon 一项无 magpie 引用）。
