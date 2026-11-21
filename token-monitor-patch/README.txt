@@ -1248,3 +1248,30 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
   用户可见变化：右缘三面消失（peek 把手/rail/气泡卡）；若其实需要，设置页 Edge Dock
   复选框或托盘菜单一键开回（热切换无需重启）。floatingBubble 不受影响（本来
   floatingBubbleEnabled=false；custom 布局仅 app-icon 一项无 magpie 引用）。
+
+【升级记录（2026-11-21，v0.93.1 → v0.95.0，round 18，跨两版本 46 上游提交）】
+  1) 安装包 135,496,704 B，SHA 55cc5837… MATCH；**身份守卫首战拦截位生效**（official
+     v0.95.0 校验过）。gh api 通道间歇断流期间改走 git fetch 取 tags（ls-remote 试通）。
+  2) rebase 43 补丁提交重放，**8 处冲突全解**（i18n×3 词典插入 union、styles.css×1 union、
+     sessionRows.js×1 双函数并集（上游新增 sessionRowLabels 缓存函数与我方排序函数同点插入，
+     大括号配平）、app.js×3（sessionRowsForPeriod 上游缓存形状+我方排序合并、sortMode 中间态
+     →内联终态、孤儿标记））。**审计预警的 collector.js/shared/limits/* 冲突面完全没炸**——
+     上游聚合层 hunk 与我方补丁错开。
+  3) verify 拦截 2 NEW：①locale parity（ko/ja startup.title + en/es configure* 等 **8+8 行
+     在重放中被静默吞掉**——上游重塑 startup/views 区锚点，两轮 node 脚本按 v0.93.1 词典逐
+     locale 对账补回，parity 38/38 绿，fallout 提交 4dc6f24c）；②migration refuses symlink
+     store（**上游新测试自身在无管理员/开发者模式的 Windows 上建不出 symlink 夹具**=环境限制
+     非回归，pristine v0.95.0 worktree 同红坐实）。**v0.95.0 pristine 基线新建**（11420 用例
+     12 红=11 旧名+新 symlink 红；提取注记：node reporter 的 `✖ failing tests:` 汇总头行会被
+     naive 过滤收进名单，awk 有 f=1;next 防护）。套件 10477→11495（+1017）。
+  4) 换装 assert 16/16 upstreamMissing=[]。探针 exit 3（闸门拦截）：显形失败诊断=**楔死复发
+     且自愈器本轮未触发**（expand 日志打了、poll 死、keeper 静默、0 条 reconcile 行——与 11-18
+     不同的是 heal 在 11-19 已实战立功一次 [reconcile] desync re-applying collapse，本轮失效
+     原因未定）→ 重启清实例状态后双探针 ok（vis visible、hero 332,933,823、DOM 与内存逐位
+     一致）。**挂案：楔死复发+heal 失效的组合需 vm 测试追因**（Known debt 首项的紧迫性升级）。
+     Win32 侧查询（FindWindowExW/IsIconic）经 .ps1 文件仍枚举不到 Chrome_WidgetWin_1 窗口
+     ——P/Invoke 路径存疑，未采信。
+  5) settings 瘦身存活：edgeDockEnabled=false + 4 items 过升级无损。内存：v0.95.0 稳态
+     **~650MB**（瘦身省的 48MB 被上游新功能吃回还倒贴——不开 dock 约 698；626→657→650 三
+     采样定平台）。交付物再生：patch 4423 行 / commits 44 行（含 i18n fallout 提交）。
+  6) 推送：feat --force-with-lease（rebase 重写）、master docs 提交。

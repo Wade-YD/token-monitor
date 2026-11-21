@@ -234,10 +234,10 @@ index 00000000..20381e1f
 +};
 diff --git a/src/electron/edgeAutoHideController.js b/src/electron/edgeAutoHideController.js
 new file mode 100644
-index 00000000..2fc31ec6
+index 00000000..8ff5b6b7
 --- /dev/null
 +++ b/src/electron/edgeAutoHideController.js
-@@ -0,0 +1,725 @@
+@@ -0,0 +1,767 @@
 +'use strict';
 +
 +// Edge auto-hide controller: the docked-edge hide/show state machine that used
@@ -268,7 +268,7 @@ index 00000000..2fc31ec6
 +    windowChrome
 +  } = deps;
 +
-+  const edgeAutoHideState = { hidden: false, side: null, expandedBounds: null, hiddenBounds: null, animatingUntil: 0, desired: null, guardTripped: false, geometryReady: false, nativeRejectStreak: 0, lastResizeAt: 0, collapseTimer: null, pollTimer: null };
++  const edgeAutoHideState = { hidden: false, side: null, expandedBounds: null, hiddenBounds: null, animatingUntil: 0, desired: null, guardTripped: false, geometryReady: false, nativeRejectStreak: 0, lastResizeAt: 0, lastDesyncHealAt: 0, collapseTimer: null, pollTimer: null };
 +
 +  function stopEdgeAutoHideTimers() {
 +    if (edgeAutoHideState.collapseTimer) { clearTimeout(edgeAutoHideState.collapseTimer); edgeAutoHideState.collapseTimer = null; }
@@ -287,6 +287,28 @@ index 00000000..2fc31ec6
 +
 +  function edgeResizeGraceActive() {
 +    return Date.now() - edgeAutoHideState.lastResizeAt < EDGE_RESIZE_GRACE_MS;
++  }
++
++  const EDGE_DESYNC_TOLERANCE_PX = 6;
++
++  // Physical verification: the flags claim one state while the window sits at
++  // the OTHER state's bounds. Exactly one producer: a transition whose tween
++  // frames were all natively rejected (state flips in JS, geometry never moves)
++  // - observed live on 2026-11-18: expand logged, hidden=false, window stayed
++  // at the hidden position, and the poll's expanded branch then saw the cursor
++  // inside the stale bounds forever. Narrow on purpose - both bounds must
++  // exist, so the dragged-away path (which clears both) is outside the
++  // detection domain.
++  function edgeStatePositionDesynced() {
++    if (edgeIsAnimating() || edgeResizeGraceActive()) return false;
++    if (!getWindow() || getWindow().isDestroyed() || !getWindow().isVisible()) return false;
++    const hb = edgeAutoHideState.hiddenBounds;
++    const eb = edgeAutoHideState.expandedBounds;
++    if (!hb || !eb) return false;
++    const b = getWindow().getBounds();
++    const near = (t) => Math.abs(b.x - t.x) <= EDGE_DESYNC_TOLERANCE_PX
++      && Math.abs(b.y - t.y) <= EDGE_DESYNC_TOLERANCE_PX;
++    return edgeAutoHideState.hidden ? near(eb) : near(hb);
 +  }
 +
 +  // The dashboard is a persistent second window of ours — a workspace the user
@@ -419,7 +441,10 @@ index 00000000..2fc31ec6
 +    const target = to && Number.isFinite(to.x) && Number.isFinite(to.y) ? to : null;
 +    const source = from && Number.isFinite(from.x) && Number.isFinite(from.y) ? from : null;
 +    if (!target) {
-+      setEdgeWindowPosition(to ? to.x : undefined, to ? to.y : undefined);
++      // No finite target: nothing to animate or place. Calling
++      // setEdgeWindowPosition(undefined, undefined) here used to trip the
++      // "non-finite position" guard and session-wide ban animations for an
++      // unrelated pathology (Oracle round 17 review P2).
 +      if (onComplete) onComplete();
 +      return;
 +    }
@@ -567,10 +592,28 @@ index 00000000..2fc31ec6
 +  // it compares the desired state against the real window geometry and only moves
 +  // when the two disagree. A lost timer or a killed poll therefore cannot strand the
 +  // window -- the next reconcile simply re-discovers the drift and corrects it.
++  // Since the 2026-11-18 wedge it also verifies the state FLAGS against the
++  // physical position on both axes: a transition whose tween frames were all
++  // natively rejected flips the flags without moving the window, and this is
++  // the one place that can detect and re-apply it (1Hz via the keeper).
 +  function reconcileEdgeAutoHide() {
 +    if (!canUseEdgeAutoHide(getSettings())) return false;
 +    if (!getWindow() || getWindow().isDestroyed() || !getWindow().isVisible()) return false;
 +    if (edgeIsAnimating()) return false;
++    if (edgeStatePositionDesynced() && Date.now() - edgeAutoHideState.lastDesyncHealAt >= 1000) {
++      edgeAutoHideState.lastDesyncHealAt = Date.now();
++      edgeLog('reconcile', 'state/position desync: hidden=' + edgeAutoHideState.hidden
++        + ' bounds=' + JSON.stringify(getWindow().getBounds())
++        + ' -- re-applying ' + (edgeAutoHideState.hidden ? 'collapse' : 'expand'));
++      if (edgeAutoHideState.hidden) {
++        if (!edgeAutoHideState.side) return false;
++        return collapseEdge(edgeAutoHideState.expandedBounds, edgeAutoHideState.side);
++      }
++      // expandEdge() refuses while hidden===false; the desync IS the proof the
++      // previous expand never landed, so re-arm the flag before re-applying.
++      edgeAutoHideState.hidden = true;
++      return expandEdge();
++    }
 +    const desired = edgeAutoHideState.desired;
 +    if (desired === 'hidden') {
 +      if (edgeAutoHideState.hidden) return false;
@@ -755,9 +798,23 @@ index 00000000..2fc31ec6
 +    win.on('moved', () => {
 +      persistBoundsSoon();
 +      windowChrome.syncTaskbarZOrder();
-+      // Programmatic animation frames land here too; only react to real drags.
++      // Programmatic animation frames land here also; only react to real drags.
 +      if (edgeIsAnimating() || !getWindow() || getWindow().isDestroyed()) return;
-+      if (!canUseEdgeAutoHide(getSettings()) || edgeAutoHideState.hidden) return;
++      // A real drag counts as a hand on the window (Oracle round 17 review D):
++      // it arms the resize grace so the desync heal never yanks the dock out
++      // from under a drag that passes near the hidden position. Tween frames
++      // never get here (the guard above), so heal tween frames don't re-arm it.
++      edgeAutoHideState.lastResizeAt = Date.now();
++      if (!canUseEdgeAutoHide(getSettings())) return;
++      if (edgeAutoHideState.hidden) {
++        // Hidden-strip drag (Oracle round 17 review P1): the user slid the 3px
++        // strip along the edge. Resync the remembered dock geometry or the
++        // poll keeps matching the OLD trigger zone and the next expand/restore
++        // lands at the stale position. syncEdgeDockGeometry is deliberately
++        // hidden-state only and already re-snaps, persists, and repositions.
++        syncEdgeDockGeometry();
++        return;
++      }
 +      const bounds = getWindow().getBounds();
 +      const display = displayForBounds(bounds);
 +      if (!display) return;
@@ -926,19 +983,6 @@ index 00000000..2fc31ec6
 +    reconcileEdgeAutoHide();
 +  }
 +
-+  // Body of the 'edgeAutoHide:expand' IPC handler in main.js.
-+  function expand() {
-+    return expandEdge();
-+  }
-+
-+  // Body of the 'edgeAutoHide:collapse' IPC handler in main.js.
-+  function collapse() {
-+    if (!getWindow() || getWindow().isDestroyed() || !canUseEdgeAutoHide(getSettings())) return false;
-+    if (edgeAutoHideState.hidden) return true;
-+    const bounds = getWindow().getBounds();
-+    return maybeCollapseEdge(bounds);
-+  }
-+
 +  // Predicate for main.js persistBoundsSoon(): the dock is hidden and its
 +  // expanded bounds are tracked, so hidden geometry must not reach windowBounds.
 +  function isHiddenWithExpandedBounds() {
@@ -956,15 +1000,13 @@ index 00000000..2fc31ec6
 +    attachWindow,
 +    handleUncaught,
 +    keeperTick,
-+    expand,
-+    collapse,
 +    isHiddenWithExpandedBounds
 +  };
 +}
 +
 +module.exports = { createEdgeAutoHideController };
 diff --git a/src/electron/edgeDock/controller.js b/src/electron/edgeDock/controller.js
-index 5cd7380e..dfaa5721 100644
+index 5cd7380e..3e708685 100644
 --- a/src/electron/edgeDock/controller.js
 +++ b/src/electron/edgeDock/controller.js
 @@ -176,6 +176,17 @@ function createEdgeDockController(deps) {
@@ -1003,7 +1045,7 @@ index 5cd7380e..dfaa5721 100644
        if (drag) {
          tickDrag(point, current);
        } else if (current) {
-@@ -1293,6 +1306,163 @@ function createEdgeDockController(deps) {
+@@ -1293,6 +1306,165 @@ function createEdgeDockController(deps) {
      }
    }
  
@@ -1040,7 +1082,9 @@ index 5cd7380e..dfaa5721 100644
 +        win.setIgnoreMouseEvents(false);
 +        cleared = true;
 +      }
-+      if (cleared && surface === 'rail') {
++      // 'clean' means the style was already fine - logging on it made a healthy
++      // rail emit "input restored" every poll tick (round 17 review P1).
++      if (cleared === true && surface === 'rail') {
 +        logger(`[edge-dock] rail was shown with mouse events ignored - input restored`);
 +      }
 +    }
@@ -1167,7 +1211,7 @@ index 5cd7380e..dfaa5721 100644
    function followDrag(point, current) {
      let targetDisplay;
      try { targetDisplay = screen.getDisplayNearestPoint?.(point) || display(); } catch (_) { targetDisplay = display(); }
-@@ -1442,6 +1612,15 @@ function createEdgeDockController(deps) {
+@@ -1442,6 +1614,15 @@ function createEdgeDockController(deps) {
      ipcMain.on('edgeDock:cardFrame', (event, payload) => {
        if (surfaceFor(event.sender) === 'bubble') cardFrameDriver.frame(payload?.motionId);
      });
@@ -1216,10 +1260,10 @@ index 0b6a45a6..98c788bf 100644
    dragEnd: () => ipcRenderer.send('edgeDock:dragEnd'),
 diff --git a/src/electron/edgeDock/topmost.js b/src/electron/edgeDock/topmost.js
 new file mode 100644
-index 00000000..517c150c
+index 00000000..56c70dbc
 --- /dev/null
 +++ b/src/electron/edgeDock/topmost.js
-@@ -0,0 +1,147 @@
+@@ -0,0 +1,150 @@
 +'use strict';
 +
 +// Electron's setAlwaysOnTop stops landing on the dock's transparent frameless
@@ -1353,7 +1397,10 @@ index 00000000..517c150c
 +  const handle = buffer.length >= 8 ? Number(buffer.readBigUInt64LE()) : buffer.readUInt32LE();
 +  try {
 +    const style = a.getWindowLongPtrW(handle, GWL_EXSTYLE);
-+    if (!(style & WS_EX_TRANSPARENT)) return true;
++    // Distinguish "already clean" from "just cleared" (round 17 review P1):
++    // callers log input restoration only when something was actually cleared,
++    // otherwise a healthy rail spams the diagnostics log every poll tick.
++    if (!(style & WS_EX_TRANSPARENT)) return 'clean';
 +    return Boolean(a.setWindowLongPtrW(handle, GWL_EXSTYLE, style & ~WS_EX_TRANSPARENT));
 +  } catch (_) {
 +    return false;
@@ -1500,18 +1547,18 @@ index 77571fa1..f9315e9e 100644
  
  function floatingBubbleNativeGlassEnabled(settings = {}) {
 diff --git a/src/electron/main.js b/src/electron/main.js
-index 4967626d..a14dac72 100644
+index 56bcdf98..5ee9c7ae 100644
 --- a/src/electron/main.js
 +++ b/src/electron/main.js
-@@ -36,6 +36,7 @@ const fontSettingsApi = require('../shared/fontSettings');
- const motionPreferenceApi = require('./motionPreference');
+@@ -29,6 +29,7 @@ const motionPreferenceApi = require('./motionPreference');
  const tokenNumberAnimationApi = require('./tokenNumberAnimation');
+ const { createRepositoryStars } = require('./repositoryStars');
  const { clearBackgroundImage, getBackgroundImage, importBackgroundImage } = require('./backgroundImage');
 +const { createEdgeAutoHideController } = require('./edgeAutoHideController');
  const { createClientSourceIpcHandlers } = require('./clientSourceIpc');
  const { createClaudeWebFetch } = require('./providers/claude/webFetch');
  const { createMimoExchangeFetch } = require('./providers/mimo/exchangeFetch');
-@@ -488,6 +489,7 @@ const { NOTCH_PANEL_STAT_ITEMS, notchLimitItems, notchPanelItems, notchWeek } =
+@@ -434,6 +435,7 @@ const { NOTCH_PANEL_STAT_ITEMS, notchLimitItems, notchPanelItems, notchWeek } =
  const { createNotchHistory } = require('./notch/history');
  const trayLayoutApi = require('../shared/trayLayout');
  const { createFullScreenProbe } = require('./edgeDock/fullScreenProbe');
@@ -1519,7 +1566,7 @@ index 4967626d..a14dac72 100644
  const {
    normalizeEdgeDockCustomScale,
    normalizeEdgeDockDisplayId,
-@@ -676,6 +678,7 @@ function defaultSettings() {
+@@ -624,6 +626,7 @@ function defaultSettings() {
      liveTokenRateScope: 'all',
      compactTokenUnits: 'western',
      tokenRateMode: 'speed',
@@ -1527,7 +1574,7 @@ index 4967626d..a14dac72 100644
      heatmapMetric: 'cost',
      modelRankingMetric: 'tokens',
      homeActiveDaysWindow: 'all',
-@@ -863,6 +866,10 @@ function normalizeTokenRateMode(value) {
+@@ -813,6 +816,10 @@ function normalizeTokenRateMode(value) {
    return value === 'burn' ? 'burn' : 'speed';
  }
  
@@ -1538,7 +1585,7 @@ index 4967626d..a14dac72 100644
  function normalizeLiveTokenRateScope(value) {
    return value === 'device' ? 'device' : 'all';
  }
-@@ -2320,6 +2327,28 @@ function restoredBounds() {
+@@ -1464,6 +1471,28 @@ function restoredBounds() {
  let persistBoundsTimer = null;
  let floatingBubbleAutoCollapseTimer = null;
  const floatingBubbleState = { collapsed: false, side: null, collapsedBounds: null, expandedBounds: null, suppressNextCollapse: false, contentSize: null };
@@ -1567,7 +1614,7 @@ index 4967626d..a14dac72 100644
  let mainWindowChrome = { collapsedFloatingBubble: false };
  let mainWindowReplacementEpoch = 0;
  let mainWindowReplacementTask = Promise.resolve();
-@@ -2592,6 +2621,10 @@ function persistBoundsSoon() {
+@@ -1736,6 +1765,10 @@ function persistBoundsSoon() {
        // Popover x/y is anchored to the tray icon each open; only the size carries over.
        if (prev.width === next.width && prev.height === next.height) return;
        settings.windowBounds = { ...prev, width: next.width, height: next.height };
@@ -1578,7 +1625,7 @@ index 4967626d..a14dac72 100644
      } else if (floatingBubbleState.collapsed && floatingBubbleState.expandedBounds) {
        floatingBubbleState.collapsedBounds = next;
        const display = displayForBounds(next);
-@@ -2865,6 +2898,7 @@ function readSettings() {
+@@ -2009,6 +2042,7 @@ function readSettings() {
      merged.interfaceFontFamily = fontSettingsApi.normalizeFontFamily(merged.interfaceFontFamily);
      merged.displayFontFamily = fontSettingsApi.normalizeFontFamily(merged.displayFontFamily);
      merged.tokenRateMode = normalizeTokenRateMode(merged.tokenRateMode);
@@ -1586,7 +1633,7 @@ index 4967626d..a14dac72 100644
      if (saved.serviceProviderDisplayOrder !== undefined) {
        merged.serviceProviderDisplayOrder = String(saved.serviceProviderDisplayOrder || '');
      }
-@@ -3210,17 +3244,7 @@ function applyWindowSettings() {
+@@ -2369,17 +2403,7 @@ function applyWindowSettings() {
      applyCollapsedFloatingBubbleLimits(mainWindow.getBounds());
      return;
    }
@@ -1605,7 +1652,7 @@ index 4967626d..a14dac72 100644
  }
  
  function nativeBlurEnabled(source = settings) {
-@@ -6481,6 +6505,11 @@ function ensureEdgeDockController() {
+@@ -5621,6 +5645,11 @@ function ensureEdgeDockController() {
      rendererDir: path.join(__dirname, 'renderer'),
      preloadPath: path.join(__dirname, 'edgeDock', 'preload.js'),
      getSettings: () => settings,
@@ -1617,7 +1664,7 @@ index 4967626d..a14dac72 100644
      nativeGlass: () => nativeBlurEnabled(),
      // The dock follows the widget's glass style unless it has its own; the
      // controller decides whether there is material at all. Reduce Transparency
-@@ -6722,6 +6751,8 @@ function setWindowPresentationFromMenu(value) {
+@@ -5862,6 +5891,8 @@ function setWindowPresentationFromMenu(value) {
    saveSettings();
    if (previousTrayMode) exitTrayMode();
    else {
@@ -1626,7 +1673,7 @@ index 4967626d..a14dac72 100644
      applyWindowSettings();
      focusExistingWindow();
    }
-@@ -7898,6 +7929,7 @@ function createWindow(boundsOverride, options = {}) {
+@@ -7040,6 +7071,7 @@ function createWindow(boundsOverride, options = {}) {
      })
      : new BrowserWindow(windowOptions);
    mainWindow = win;
@@ -1634,7 +1681,7 @@ index 4967626d..a14dac72 100644
    mainWindowChrome = { collapsedFloatingBubble };
    applyMacSpaceBehavior();
    applyWindowsChrome(win, { round: true });
-@@ -7945,13 +7977,14 @@ function createWindow(boundsOverride, options = {}) {
+@@ -7088,13 +7120,14 @@ function createWindow(boundsOverride, options = {}) {
          if (point && tray?.isPointerOverIcon?.(point)) recentPopoverBlur = { at: performance.now(), point };
        }
      }
@@ -1652,7 +1699,7 @@ index 4967626d..a14dac72 100644
    win.on('minimize', stopTaskbarZOrderKeeper);
    win.on('close', (event) => {
      if (quitRequested) return;
-@@ -8220,6 +8253,20 @@ async function cursorStatusValue({ discover = false } = {}) {
+@@ -7315,6 +7348,20 @@ async function getDashboardHistory(options = {}) {
  // accepts before 'ready'.
  registerPluginScheme(protocol);
  
@@ -1673,7 +1720,7 @@ index 4967626d..a14dac72 100644
  app.whenReady().then(() => {
    if (process.platform === 'darwin' && app.dock) app.dock.setIcon(APP_ICON_PATH);
    ensureSettingsLoaded();
-@@ -8552,6 +8599,7 @@ app.whenReady().then(() => {
+@@ -7742,6 +7789,7 @@ app.whenReady().then(() => {
          patch.displayFontFamily ?? settings.displayFontFamily
        ),
        tokenRateMode: normalizeTokenRateMode(patch.tokenRateMode ?? settings.tokenRateMode),
@@ -1681,7 +1728,7 @@ index 4967626d..a14dac72 100644
        floatingBubbleEnabled: parseBoolean(patch.floatingBubbleEnabled ?? settings.floatingBubbleEnabled, false),
        notchEnabled: parseBoolean(patch.notchEnabled ?? settings.notchEnabled, false),
        notchStyle: normalizeNotchStyle(patch.notchStyle ?? settings.notchStyle),
-@@ -8756,6 +8804,7 @@ app.whenReady().then(() => {
+@@ -7947,6 +7995,7 @@ app.whenReady().then(() => {
      applyWindowSettings();
      syncFloatingBubbleAvailability();
      syncDockSurfaces();
@@ -1689,7 +1736,7 @@ index 4967626d..a14dac72 100644
      applyNativeMaterial();
      const runtimeChange = classifySettingsChange(previousRuntimeSettings, settings);
      const widgetHistorySourceChanged = previousRuntimeSettings.historyEnabled !== settings.historyEnabled;
-@@ -8878,6 +8927,17 @@ app.whenReady().then(() => {
+@@ -8069,6 +8118,15 @@ app.whenReady().then(() => {
    });
    ipcMain.handle('floatingBubble:expand', () => expandFloatingBubble());
    ipcMain.handle('floatingBubble:peek', () => expandFloatingBubble({ focus: false }));
@@ -1702,12 +1749,10 @@ index 4967626d..a14dac72 100644
 +  // without depending on the fast paths cooperating. It is deliberately slow so
 +  // that an idle widget costs nothing.
 +  setInterval(() => edgeAutoHide.keeperTick(), 1000);
-+  ipcMain.handle('edgeAutoHide:expand', () => edgeAutoHide.expand());
-+  ipcMain.handle('edgeAutoHide:collapse', () => edgeAutoHide.collapse());
    ipcMain.handle('floatingBubble:collapseIfIdle', () => {
      if (!mainWindow || mainWindow.isDestroyed()) return false;
      if (floatingBubbleState.collapsed || !canUseFloatingBubble(settings)) return false;
-@@ -10142,6 +10202,20 @@ app.whenReady().then(() => {
+@@ -8532,6 +8590,20 @@ app.whenReady().then(() => {
    });
    ipcMain.handle('dashboard:open', () => { createDashboardWindow(); return true; });
    ipcMain.handle('dashboard:getHistory', (_event, options) => getDashboardHistory(options));
@@ -1729,10 +1774,10 @@ index 4967626d..a14dac72 100644
      const win = BrowserWindow.fromWebContents(event.sender);
      if (!win || win !== dashboardWindow || win.isDestroyed()) return;
 diff --git a/src/electron/preload.js b/src/electron/preload.js
-index 1737501c..d74f09ba 100644
+index cf9dacf0..d1eb5860 100644
 --- a/src/electron/preload.js
 +++ b/src/electron/preload.js
-@@ -47,6 +47,7 @@ contextBridge.exposeInMainWorld('tokenMonitor', {
+@@ -48,6 +48,7 @@ contextBridge.exposeInMainWorld('tokenMonitor', {
    getCodexResetForecast: (options) => ipcRenderer.invoke('codexResetForecast:get', options),
    openDashboard: () => ipcRenderer.invoke('dashboard:open'),
    getDashboardHistory: (options) => ipcRenderer.invoke('dashboard:getHistory', options),
@@ -1741,10 +1786,10 @@ index 1737501c..d74f09ba 100644
      const listener = () => { try { callback(); } catch (_) {} };
      ipcRenderer.on('dashboard:historyChanged', listener);
 diff --git a/src/electron/renderer/app.js b/src/electron/renderer/app.js
-index 6d066c14..f59fe183 100644
+index 9c515042..4994e512 100644
 --- a/src/electron/renderer/app.js
 +++ b/src/electron/renderer/app.js
-@@ -214,8 +214,8 @@ const projectRowsApi = window.TokenMonitorProjectRows;
+@@ -200,8 +200,8 @@ const projectRowsApi = window.TokenMonitorProjectRows;
  const sessionDetailApi = window.TokenMonitorSessionDetail;
  const windowShortcutApi = window.TokenMonitorWindowShortcut;
  const LIMIT_REFRESH_OPTIONS = [60000, 120000, 300000, 900000, 1800000];
@@ -1753,9 +1798,9 @@ index 6d066c14..f59fe183 100644
 +const WINDOW_BEHAVIOR_VALUES = ['floating', 'normal', 'desktop', 'edge'];
 +const WINDOW_BEHAVIOR_ICONS = { floating: '⇧', normal: '○', desktop: '⇩', edge: '⫰' };
  const LIMIT_CAPABILITY_TAG_KEYS = {
-   Auto: 'settings.limits.capability.auto',
-   'OAuth/CLI': 'settings.limits.capability.oauthCli',
-@@ -436,6 +436,8 @@ Object.assign(els, {
+   CLI: 'settings.limits.sources.cli',
+   OAuth: 'settings.limits.sources.oauth',
+@@ -427,6 +427,8 @@ Object.assign(els, {
    projectBreakdownFooter: document.getElementById('projectBreakdownFooter'),
    projectBreakdownFooterTools: document.getElementById('projectBreakdownFooterTools'),
    projectBreakdownFooterModels: document.getElementById('projectBreakdownFooterModels'),
@@ -1763,8 +1808,8 @@ index 6d066c14..f59fe183 100644
 +  sessionSortToggleLabel: document.getElementById('sessionSortToggleLabel'),
    monthPeriodMenu: document.getElementById('monthPeriodMenu'),
    monthPeriodTab: document.getElementById('monthPeriodTab'),
-   periodMonthModeInput: document.getElementById('periodMonthModeInput'),
-@@ -720,6 +722,14 @@ els.toolDetailFooterModels.addEventListener('click', () => setActiveToolDetailMo
+   periodMonthModeInput: document.getElementById('periodMonthModeInput')
+@@ -717,6 +719,14 @@ els.toolDetailFooterModels.addEventListener('click', () => setActiveToolDetailMo
  els.projectBreakdownFooterTools.addEventListener('click', () => { void saveSettings({ projectBreakdownMode: 'tool' }).catch(() => {}); });
  els.projectBreakdownFooterModels.addEventListener('click', () => { void saveSettings({ projectBreakdownMode: 'model' }).catch(() => {}); });
  
@@ -1779,15 +1824,20 @@ index 6d066c14..f59fe183 100644
  document.addEventListener('pointerdown', (event) => {
    if (state.viewSwitcherOpen && !event.target.closest('#viewSwitcher')) {
      setViewSwitcherOpen(false);
-@@ -1146,6 +1156,7 @@ function scheduleDisplayLiveTokenRateExpiry() {
-     void maybeUpdateBarsIcon({ refreshComposers: false });
-     renderFloatingBubbleContent();
-     if (isSettingsSurfaceVisible()) refreshTrayComposers();
-+    updateSessionSortToggle();
-     scheduleDisplayLiveTokenRateExpiry();
-   }, Math.max(0, Math.min(...expiries) - Date.now()) + 10);
- }
-@@ -3495,6 +3506,21 @@ function modelRowsForPeriod(period, rankingMetric = state.settings?.modelRanking
+@@ -2833,6 +2843,12 @@ function renderToolDetailFooter() {
+   const active = activeToolDetail();
+   els.toolDetailFooter.classList.toggle('hidden', !active);
+   syncLiveTokenRateFooterState();
++  // The sort toggle only shows for the session breakdown. This footer render
++  // is the hook that runs on every render of the surface hosting the button;
++  // its only other trigger was the live-token-rate expiry timer, which never
++  // schedules when no tracker exists - the button (and with it the whole sort
++  // feature) stayed unreachable on idle starts (Oracle round 17 review P1).
++  updateSessionSortToggle();
+   if (!active) return;
+   const mode = state.toolDetailMode;
+   els.toolDetailFooter.setAttribute('aria-label', active.detail.name);
+@@ -3648,6 +3664,21 @@ function modelRowsForPeriod(period, rankingMetric = state.settings?.modelRanking
    return toolRowsForPeriod(period);
  }
  
@@ -1809,7 +1859,7 @@ index 6d066c14..f59fe183 100644
  function sessionPresentationOptions() {
    const localDevice = state.stats?.devices?.find(device => device.deviceId === state.settings?.deviceId);
    return {
-@@ -3512,6 +3538,10 @@ function sessionPresentationOptions() {
+@@ -3665,6 +3696,10 @@ function sessionPresentationOptions() {
      nativeSessions: state.stats?.nativeSessions?.[state.period] || {},
      localSourceDevice: localDevice ? { deviceId: localDevice.deviceId,
        name: deviceBreakdownApi.deviceLabel(localDevice), platform: localDevice.platform || '', deviceKind: localDevice.deviceKind || 'computer' } : undefined,
@@ -1820,17 +1870,20 @@ index 6d066c14..f59fe183 100644
      subagents: {
        countLabel: (count) => t('sessions.subagentCount', { count }),
        latestModelLabel: t('session.latestModel'),
-@@ -3541,7 +3571,8 @@ function rawSessionRowsForPeriod(period) {
- function sessionRowsForPeriod(period) {
-   const rows = rawSessionRowsForPeriod(period);
-   if (rows.length > 0) {
--    rows.sort((a, b) => b.sortTime - a.sortTime || b.value - a.value || b.cost - a.cost || a.name.localeCompare(b.name));
+@@ -3697,7 +3732,11 @@ function sessionRowsForPeriod(period) {
+   const options = sessionPresentationOptions();
+   if (state.breakdown === 'session') options.rowLabelCache = sessionRowLabelCache;
+   const rows = rawSessionRowsForPeriod(period, options);
+-  if (rows.length > 0) return sessionRowsApi.groupSessionRows(rows, options);
++  if (rows.length > 0) {
 +    const sortMode = sessionSortMode();
 +    rows.sort((a, b) => sessionRowsApi.compareSessionRows(a, b, sortMode));
-     return sessionRowsApi.groupSessionRows(rows, sessionPresentationOptions());
-   }
++    return sessionRowsApi.groupSessionRows(rows, options);
++  }
    if (Number(period?.totalTokens || 0) === 0) return [];
-@@ -6068,9 +6099,16 @@ function renderTrends() {
+   return modelRowsForPeriod(period);
+ }
+@@ -6311,9 +6350,16 @@ function renderTrends() {
      return;
    }
  
@@ -1849,7 +1902,7 @@ index 6d066c14..f59fe183 100644
  
    const summary = homeOverviewApi.activityStatsForPeriod({
      period: state.period,
-@@ -6097,9 +6135,23 @@ function renderTrends() {
+@@ -6340,9 +6386,23 @@ function renderTrends() {
    const next = document.createElement('div');
    next.innerHTML =
      `<div class="trends-cap"><span>${rangeLabel}</span><span class="trends-open-hint" aria-label="${t('trends.open')}">↗</span></div>`
@@ -1874,7 +1927,7 @@ index 6d066c14..f59fe183 100644
    Array.from(next.querySelectorAll('.spark-bar')).forEach((bar, index) => {
      bar.dataset.key = String(finalPoints[index]?.[labelKey] || index);
      bar.dataset.motionKey = String(finalPoints[index]?.[labelKey] || index);
-@@ -14040,7 +14092,7 @@ els.breakdown.addEventListener('click', (event) => {
+@@ -14737,7 +14797,7 @@ els.breakdown.addEventListener('click', (event) => {
    }
    const key = rowEl.dataset.key || '';            // "session:<client>:<sessionId>"
    const client = rowEl.dataset.client || '';
@@ -1940,7 +1993,7 @@ index 59961f43..2a2c8396 100644
  els.closeBtn.addEventListener('click', () => window.tokenMonitor.dashboard.close());
  
 diff --git a/src/electron/renderer/edgeDock/dock.js b/src/electron/renderer/edgeDock/dock.js
-index 76bcc3b9..b0bddc3e 100644
+index c6d06652..387db569 100644
 --- a/src/electron/renderer/edgeDock/dock.js
 +++ b/src/electron/renderer/edgeDock/dock.js
 @@ -5,6 +5,12 @@
@@ -1957,10 +2010,10 @@ index 76bcc3b9..b0bddc3e 100644
  // The running reading is derived from the projected rows at paint time rather than
  // frozen into the cell, so the rail and the card answer at the same clock (see
 diff --git a/src/electron/renderer/i18n.js b/src/electron/renderer/i18n.js
-index a7729b92..63fccac9 100644
+index 41aeaf7f..8df2ccd8 100644
 --- a/src/electron/renderer/i18n.js
 +++ b/src/electron/renderer/i18n.js
-@@ -956,6 +956,8 @@
+@@ -1026,6 +1026,8 @@
        'home.liveTokenRate.burnTitle': 'Live token burn ({scope}): {value}. Click to show live tok/s.',
        'home.liveTokenRate.speedIdleTitle': 'Last observed generation speed ({scope}): {value}. Click to show TPM.',
        'home.liveTokenRate.burnIdleTitle': 'Last observed token burn ({scope}): {value}. Click to show tok/s.',
@@ -1969,7 +2022,7 @@ index a7729b92..63fccac9 100644
        'home.less': 'Less',
        'home.more': 'More',
        'home.used': 'used',
-@@ -1906,6 +1908,7 @@
+@@ -1983,6 +1985,7 @@
        'settings.windowBehavior.floating': 'Floating above apps',
        'settings.windowBehavior.normal': 'Normal window',
        'settings.windowBehavior.desktop': 'Desktop pinned',
@@ -1977,15 +2030,19 @@ index a7729b92..63fccac9 100644
        'settings.windowBehavior.buttonTitle': '{current}; click for {next}',
        'settings.display.floatingBubble': 'Floating Bubble',
        'settings.display.floatingBubbleNote': 'Collapse the widget into a slim draggable mini-window; click it to reopen.',
-@@ -2270,6 +2273,7 @@
+@@ -2347,6 +2350,11 @@
        'trayMenu.presentation.floating': 'Floating Above Apps',
        'trayMenu.presentation.normal': 'Normal Window',
        'trayMenu.presentation.desktop': 'Desktop Pinned',
 +      'trayMenu.presentation.edge': 'Edge auto-hide',
-       'settings.startup.title': 'Startup',
++      'settings.startup.title': 'Startup',
++      'settings.views.configureHome': 'Configure {name}',
++      'settings.views.configureLimits': 'Configure {name}',
++      'settings.views.configureTrend': 'Configure {name}',
        'settings.startup.startAtLogin': 'Start at login',
        "settings.startup.available": "Available in packaged builds.",
-@@ -3467,6 +3471,8 @@
+       "settings.startup.available@linux": "Available in packaged builds. Run the AppImage build to enable.",
+@@ -3622,6 +3630,8 @@
        'home.liveTokenRate.burnTitle': '即時 Token 消耗（{scope}）：{value}。點擊切換至即時 tok/s。',
        'home.liveTokenRate.speedIdleTitle': '最近一次生成速度（{scope}）：{value}。點擊切換至 TPM。',
        'home.liveTokenRate.burnIdleTitle': '最近一次 Token 消耗（{scope}）：{value}。點擊切換至 tok/s。',
@@ -1994,7 +2051,7 @@ index a7729b92..63fccac9 100644
        'home.less': '較少',
        'home.more': '較多',
        'home.used': '已用',
-@@ -4417,6 +4423,7 @@
+@@ -4579,6 +4589,7 @@
        'settings.windowBehavior.floating': '浮在其他 app 上方',
        'settings.windowBehavior.normal': '一般視窗',
        'settings.windowBehavior.desktop': '固定在桌面',
@@ -2002,15 +2059,21 @@ index a7729b92..63fccac9 100644
        'settings.windowBehavior.buttonTitle': '目前：{current}；點擊切換為 {next}',
        'settings.display.floatingBubble': '懸浮小窗',
        'settings.display.floatingBubbleNote': '將 widget 收成可拖曳的窄長小窗，點擊即可重新展開。',
-@@ -4781,6 +4788,7 @@
+@@ -4943,6 +4954,13 @@
        'trayMenu.presentation.floating': '浮動於其他 App 上方',
        'trayMenu.presentation.normal': '一般視窗',
        'trayMenu.presentation.desktop': '固定於桌面',
++      'settings.views.configureHome': '設定 {name}',
++      'settings.views.configureLimits': '設定 {name}',
++      'settings.views.configureProject': '設定 {name}',
++      'settings.views.configureSession': '設定 {name}',
++      'settings.views.configureTrend': '設定 {name}',
 +      'trayMenu.presentation.edge': '貼邊自動隱藏',
-       'settings.startup.title': '啟動',
++      'settings.startup.title': '啟動',
        'settings.startup.startAtLogin': '登入時啟動',
        "settings.startup.available": "僅在打包後的版本可用。",
-@@ -5978,6 +5986,8 @@
+       "settings.startup.available@linux": "僅在打包後的版本可用；需以 AppImage 執行。",
+@@ -6218,6 +6236,8 @@
        'home.liveTokenRate.burnTitle': '实时 Token 消耗（{scope}）：{value}。点击切换至实时 tok/s。',
        'home.liveTokenRate.speedIdleTitle': '最近一次生成速度（{scope}）：{value}。点击切换至 TPM。',
        'home.liveTokenRate.burnIdleTitle': '最近一次 Token 消耗（{scope}）：{value}。点击切换至 tok/s。',
@@ -2019,7 +2082,7 @@ index a7729b92..63fccac9 100644
        'home.less': '较少',
        'home.more': '较多',
        'home.used': '已用',
-@@ -6928,6 +6938,7 @@
+@@ -7175,6 +7195,7 @@
        'settings.windowBehavior.floating': '浮在其他 app 上方',
        'settings.windowBehavior.normal': '普通窗口',
        'settings.windowBehavior.desktop': '固定在桌面',
@@ -2027,15 +2090,21 @@ index a7729b92..63fccac9 100644
        'settings.windowBehavior.buttonTitle': '当前：{current}；点击切换为 {next}',
        'settings.display.floatingBubble': '悬浮小窗',
        'settings.display.floatingBubbleNote': '将组件收成可拖动的窄长小窗，点击即可重新展开。',
-@@ -7292,6 +7303,7 @@
+@@ -7539,6 +7560,13 @@
        'trayMenu.presentation.floating': '浮动于其他 App 上方',
        'trayMenu.presentation.normal': '普通窗口',
        'trayMenu.presentation.desktop': '固定到桌面',
++      'settings.views.configureHome': '设置 {name}',
++      'settings.views.configureLimits': '设置 {name}',
++      'settings.views.configureProject': '设置 {name}',
++      'settings.views.configureSession': '设置 {name}',
++      'settings.views.configureTrend': '设置 {name}',
 +      'trayMenu.presentation.edge': '贴边自动隐藏',
-       'settings.startup.title': '启动',
++      'settings.startup.title': '启动',
        'settings.startup.startAtLogin': '登录时启动',
        "settings.startup.available": "仅在打包后的版本可用。",
-@@ -8049,6 +8061,8 @@
+       "settings.startup.available@linux": "仅在打包后的版本可用；需以 AppImage 运行。",
+@@ -8374,6 +8402,8 @@
        'home.liveTokenRate.burnTitle': '실시간 토큰 소모량({scope}): {value}. 클릭하여 실시간 tok/s로 전환합니다.',
        'home.liveTokenRate.speedIdleTitle': '마지막으로 관찰된 생성 속도({scope}): {value}. 클릭하여 TPM으로 전환합니다.',
        'home.liveTokenRate.burnIdleTitle': '마지막으로 관찰된 토큰 소모량({scope}): {value}. 클릭하여 tok/s로 전환합니다.',
@@ -2044,15 +2113,26 @@ index a7729b92..63fccac9 100644
        'home.reset': '{value} 초기화',
        'home.staleDevice': '오프라인',
        'home.tools': '도구',
-@@ -9998,6 +10012,7 @@
+@@ -9873,6 +9903,7 @@
+       "settings.startup.available@linux": "패키지된 빌드에서 사용 가능합니다. AppImage로 실행해야 합니다.",
+       'settings.startup.launchAtSignIn': '로그인 시 Token Monitor를 시작합니다.',
+       "settings.startup.launchAtSignIn@linux": "로그인 시 Token Monitor를 시작합니다. 자동 시작은 AppImage의 현재 위치를 가리키므로 파일을 이동하거나 이름을 변경하면 작동하지 않습니다.",
++      'settings.startup.title': '시작',
+       'settings.startup.startAtLogin': '로그인 시 시작',
+       'settings.summary.appearance': '{theme} · {vendors}개 사용자 지정',
+       'settings.summary.autoUpdate': '자동 업데이트',
+@@ -10341,6 +10372,10 @@
        'trayMenu.presentation.floating': '다른 앱 위에 띄우기',
        'trayMenu.presentation.normal': '일반 창',
        'trayMenu.presentation.desktop': '데스크톱에 고정',
 +      'trayMenu.presentation.edge': '가장자리 자동 숨김',
-       'settings.views.configureHome': '{name} 설정',
-       'settings.views.configureLimits': '{name} 설정',
-       'settings.views.configureTrend': '{name} 설정',
-@@ -10022,6 +10037,7 @@
++      'settings.views.configureHome': '{name} 설정',
++      'settings.views.configureLimits': '{name} 설정',
++      'settings.views.configureTrend': '{name} 설정',
+       'settings.views.enableTrend': '추이 활성화',
+       'settings.session.showTitles': '세션 제목 표시',
+       'settings.session.showTitlesNote': '모든 화면에서 세션 제목을 숨깁니다.',
+@@ -10362,6 +10397,7 @@
        'settings.views.trendIntervalMinutes': '{n}분',
        'settings.windowBehavior.buttonTitle': '{current}; {next}로 전환하려면 클릭',
        'settings.windowBehavior.desktop': '데스크톱 고정',
@@ -2060,7 +2140,7 @@ index a7729b92..63fccac9 100644
        'settings.windowBehavior.floating': '앱 위에 플로팅',
        'settings.windowBehavior.normal': '일반 창',
        'sortMostTokens': '↕ 토큰 많은 순',
-@@ -10560,6 +10576,8 @@
+@@ -10970,6 +11006,8 @@
        'home.liveTokenRate.burnTitle': 'ライブ Token 消費（{scope}）：{value}。クリックするとライブ tok/s に切り替わります。',
        'home.liveTokenRate.speedIdleTitle': '直近の生成速度（{scope}）：{value}。クリックすると TPM に切り替わります。',
        'home.liveTokenRate.burnIdleTitle': '直近の Token 消費（{scope}）：{value}。クリックすると tok/s に切り替わります。',
@@ -2069,15 +2149,26 @@ index a7729b92..63fccac9 100644
        'home.reset': '{value}をリセット',
        'home.staleDevice': 'オフライン',
        'home.tools': 'ツール',
-@@ -12509,6 +12527,7 @@
+@@ -12469,6 +12507,7 @@
+       "settings.startup.available@linux": "パッケージ化されたビルドで利用可能です。AppImageとして実行してください。",
+       'settings.startup.launchAtSignIn': 'サインイン時にToken Monitorを起動します。',
+       "settings.startup.launchAtSignIn@linux": "サインイン時にToken Monitorを起動します。自動起動はAppImageの現在の場所を参照するため、ファイルを移動または名前変更すると無効になります。",
++      'settings.startup.title': 'スタートアップ',
+       'settings.startup.startAtLogin': 'ログイン時に起動',
+       'settings.summary.appearance': '{theme} · {vendors}個カスタム',
+       'settings.summary.autoUpdate': '自動アップデート',
+@@ -12937,6 +12976,10 @@
        'trayMenu.presentation.floating': '他のアプリの前面に表示',
        'trayMenu.presentation.normal': '通常ウィンドウ',
        'trayMenu.presentation.desktop': 'デスクトップに固定',
 +      'trayMenu.presentation.edge': '端で自動的に隠す',
-       'settings.views.configureHome': '{name}を設定',
-       'settings.views.configureLimits': '{name}を設定',
-       'settings.views.configureTrend': '{name}を設定',
-@@ -12533,6 +12552,7 @@
++      'settings.views.configureHome': '{name}を設定',
++      'settings.views.configureLimits': '{name}を設定',
++      'settings.views.configureTrend': '{name}を設定',
+       'settings.views.enableTrend': 'トレンドを有効化',
+       'settings.session.showTitles': 'セッションタイトルを表示',
+       'settings.session.showTitlesNote': 'すべての画面でセッションタイトルを非表示にします。',
+@@ -12958,6 +13001,7 @@
        'settings.views.trendIntervalMinutes': '{n}分',
        'settings.windowBehavior.buttonTitle': '{current}; {next}に切り替えるにはクリック',
        'settings.windowBehavior.desktop': 'デスクトップに固定',
@@ -2085,7 +2176,7 @@ index a7729b92..63fccac9 100644
        'settings.windowBehavior.floating': 'アプリの上にフローティング',
        'settings.windowBehavior.normal': '通常ウィンドウ',
        'sortMostTokens': '↕ トークン数順',
-@@ -13607,6 +13627,8 @@
+@@ -14103,6 +14147,8 @@
        "home.liveTokenRate.burnTitle": "Consumo de tokens en tiempo real ({scope}): {value}. Haz clic para mostrar los tok/s en tiempo real.",
        "home.liveTokenRate.speedIdleTitle": "Última velocidad de generación observada ({scope}): {value}. Haz clic para mostrar los TPM.",
        "home.liveTokenRate.burnIdleTitle": "Último consumo de tokens observado ({scope}): {value}. Haz clic para mostrar los tok/s.",
@@ -2094,7 +2185,7 @@ index a7729b92..63fccac9 100644
        "home.less": "Menos",
        "home.more": "Más",
        "home.used": "usado",
-@@ -14489,6 +14511,7 @@
+@@ -14991,6 +15037,7 @@
        "settings.windowBehavior.floating": "Flotante sobre las aplicaciones",
        "settings.windowBehavior.normal": "Ventana normal",
        "settings.windowBehavior.desktop": "Anclado al escritorio",
@@ -2102,15 +2193,19 @@ index a7729b92..63fccac9 100644
        "settings.windowBehavior.buttonTitle": "{current}; haz clic para {next}",
        "settings.display.floatingBubble": "Burbuja flotante",
        "settings.display.floatingBubbleNote": "Contrae el widget en una miniventana estrecha que puedes arrastrar; haz clic para volver a abrirlo.",
-@@ -14844,6 +14867,7 @@
+@@ -15346,6 +15393,11 @@
        "trayMenu.presentation.floating": "Flotante sobre las aplicaciones",
        "trayMenu.presentation.normal": "Ventana normal",
        "trayMenu.presentation.desktop": "Anclado al escritorio",
 +      'trayMenu.presentation.edge': 'Ocultar automáticamente en el borde',
-       "settings.startup.title": "Inicio",
++      "settings.startup.title": "Inicio",
++      "settings.views.configureHome": "Configurar {name}",
++      "settings.views.configureLimits": "Configurar {name}",
++      "settings.views.configureTrend": "Configurar {name}",
        "settings.startup.startAtLogin": "Iniciar al iniciar sesión",
        "settings.startup.available": "Disponible en versiones empaquetadas.",
-@@ -15988,6 +16012,8 @@
+       "settings.startup.available@linux": "Disponible en versiones empaquetadas. Ejecuta la versión AppImage para activarlo.",
+@@ -16568,6 +16620,8 @@
        'home.limit.session': 'Sessão',
        'home.limit.daily': 'Diária',
        'home.limit.weekly': 'Semanal',
@@ -2119,7 +2214,7 @@ index a7729b92..63fccac9 100644
        'home.limit.billing': 'Cobrança',
        'home.limit.monthly': 'Mensal',
        'home.reset': 'Redefinir {value}',
-@@ -16968,6 +16994,7 @@
+@@ -17555,6 +17609,7 @@
        'settings.windowBehavior.normal': 'Janela normal',
        'settings.windowBehavior.desktop': 'Fixado na área de trabalho',
        'settings.windowBehavior.buttonTitle': '{current}; clique para {next}',
@@ -2127,19 +2222,26 @@ index a7729b92..63fccac9 100644
        'settings.display.floatingBubble': 'Bolha flutuante',
        'settings.display.floatingBubbleNote': 'Reduz o widget a uma mini-janela slim e arrastável; clique nela para reabrir.',
        'edgeDock.period.today': 'Hoje',
-@@ -17331,6 +17358,7 @@
+@@ -17918,6 +17973,14 @@
        'trayMenu.presentation.floating': 'Flutuante sobre os aplicativos',
        'trayMenu.presentation.normal': 'Janela normal',
        'trayMenu.presentation.desktop': 'Fixado na área de trabalho',
++      'settings.views.configureHome': 'Configurar {name}',
++      'settings.views.configureLimits': 'Configurar {name}',
++      'settings.views.configureProject': 'Configurar {name}',
++      'settings.views.configureSession': 'Configurar {name}',
++      'settings.views.configureTrend': 'Configurar {name}',
++      'settings.startup.title': 'Inicialização',
 +      'trayMenu.presentation.edge': 'Ocultar automaticamente na borda',
-       'settings.startup.title': 'Inicialização',
++      'settings.startup.title': 'Inicialização',
        'settings.startup.startAtLogin': 'Iniciar ao entrar no sistema',
        "settings.startup.available": "Disponível nas versões empacotadas.",
+       "settings.startup.available@linux": "Disponível nas versões empacotadas. Execute a versão AppImage para ativar.",
 diff --git a/src/electron/renderer/index.html b/src/electron/renderer/index.html
-index cee1f8bc..122fd9a5 100644
+index ad643d88..db44a968 100644
 --- a/src/electron/renderer/index.html
 +++ b/src/electron/renderer/index.html
-@@ -262,6 +262,7 @@
+@@ -279,6 +279,7 @@
                    <option value="floating" data-i18n="settings.windowBehavior.floating">Floating above apps</option>
                    <option value="normal" data-i18n="settings.windowBehavior.normal">Normal window</option>
                    <option value="desktop" data-i18n="settings.windowBehavior.desktop" data-select-description="settings.display.windowBehaviorNote">Desktop pinned</option>
@@ -2147,7 +2249,7 @@ index cee1f8bc..122fd9a5 100644
                  </select>
                </label>
                <label id="keepAboveTaskbarRow" class="checkbox-label settings-item hidden">
-@@ -1769,6 +1770,10 @@
+@@ -1623,6 +1624,10 @@
        <div id="sessionPagerHost" class="session-pager-host hidden"></div>
        <footer class="footer">
          <div id="viewSwitcher" class="view-switcher"></div>
@@ -2207,7 +2309,7 @@ index 00000000..63fc4423
 +  return { createManualRefreshController, delay };
 +});
 diff --git a/src/electron/renderer/sessionRows.js b/src/electron/renderer/sessionRows.js
-index da544987..51bb4330 100644
+index 9e5e6843..ffba304b 100644
 --- a/src/electron/renderer/sessionRows.js
 +++ b/src/electron/renderer/sessionRows.js
 @@ -474,7 +474,7 @@
@@ -2219,8 +2321,8 @@ index da544987..51bb4330 100644
        || (row?.client === 'reasonix' && row?.sessionDetailAvailable === true);
    }
  
-@@ -580,6 +580,20 @@
-     };
+@@ -612,6 +612,20 @@
+     return data;
    }
  
 +  function normalizeSessionSortMode(mode) {
@@ -2238,9 +2340,9 @@ index da544987..51bb4330 100644
 +  }
 +
    function sessionRowsForPeriod(period, options = {}) {
-     const labels = options.clientLabels || {};
-     const colors = options.clientColors || {};
-@@ -691,7 +705,7 @@
+     const previousLabels = options.rowLabelCache?.entries;
+     const nextLabels = options.rowLabelCache && new Map();
+@@ -724,7 +738,7 @@
        const row = nativeSessionRow(session, key, options, now);
        if (row) rows.push(row);
      }
@@ -2249,7 +2351,24 @@ index da544987..51bb4330 100644
    }
  
    function groupBackgroundReviewRows(rows, options = {}) {
-@@ -962,6 +976,7 @@
+@@ -960,9 +974,13 @@
+       ...options.grokBot, id: 'cursor-grok-bot', client: 'cursor',
+       label: options.grokBot?.label || 'Grok Bot'
+     }));
+-    return grouped.sort((a, b) => finiteNumber(b.sortTime) - finiteNumber(a.sortTime)
+-      || finiteNumber(b.value) - finiteNumber(a.value) || finiteNumber(b.cost) - finiteNumber(a.cost)
+-      || a.name.localeCompare(b.name));
++    // Honor the caller's sort mode for the final top-level ordering. This used
++    // to be a hardcoded recency sort, which silently discarded the token sort
++    // the flat row list had just been given: the toggle showed "tokens" while
++    // every grouped list rendered recency-first (2026-11-18 user report).
++    // Without options.sortMode this normalizes to 'recent' - identical to the
++    // old behavior for every caller that does not pass one.
++    return grouped.sort((a, b) => compareSessionRows(a, b, options.sortMode));
+   }
+ 
+   function sessionBreakdownIncomplete(stats, periodName) {
+@@ -995,6 +1013,7 @@
      applyBreakdownRowSemantics,
      archivedSessionCount,
      compactSessionTime,
@@ -2257,7 +2376,7 @@ index da544987..51bb4330 100644
      filterSessionRows,
      groupBackgroundReviewRows,
      groupSessionRows,
-@@ -970,6 +985,7 @@
+@@ -1003,6 +1022,7 @@
      isGrokBotSession,
      sessionRowDetailAvailable,
      handleBreakdownRowKeydown,
@@ -2266,18 +2385,21 @@ index da544987..51bb4330 100644
      sessionCacheHitPercent,
      cacheHitLabel,
 diff --git a/src/electron/renderer/styles.css b/src/electron/renderer/styles.css
-index 2ee828ba..ebd0c2c5 100644
+index 87aff638..d4f19cfb 100644
 --- a/src/electron/renderer/styles.css
 +++ b/src/electron/renderer/styles.css
-@@ -7278,6 +7278,7 @@ html.native-liquid-glass .view-switcher-menu-item { border-radius: 9px; }
+@@ -7864,6 +7864,10 @@ html.native-liquid-glass .view-switcher-menu-item { border-radius: 9px; }
  .detail-session-id-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: text; }
  .detail-session-id-copy { flex-shrink: 0; padding: 0 2px; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; opacity: 0.72; }
  .detail-session-id-copy:hover, .detail-session-id-copy:focus-visible { color: var(--text); opacity: 1; }
 +.row.session-row[data-client="reasonix"][data-detail-unavailable="true"] { cursor: default; }
- .view-preference-row.has-subgroup {
-   grid-template-columns: minmax(0, 1fr) repeat(3, 22px);
- }
-@@ -7472,9 +7473,20 @@ html.native-liquid-glass .view-switcher-menu-item { border-radius: 9px; }
++.view-preference-row.has-subgroup {
++  grid-template-columns: minmax(0, 1fr) repeat(3, 22px);
++}
+ .view-subgroup-toggle {
+   display: inline-grid;
+   place-items: center;
+@@ -8316,9 +8320,20 @@ html.native-liquid-glass .view-switcher-menu-item { border-radius: 9px; }
  .trends-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; padding-right: 2px; overflow: hidden; }
  .trends-cap { flex: none; display: flex; align-items: center; justify-content: space-between; font-size: 0.6875rem; letter-spacing: 0.04em; text-transform: uppercase; opacity: 0.6; }
  .trends-open-hint { opacity: 0.75; cursor: pointer; font-size: 0.8125rem; }
@@ -2405,7 +2527,7 @@ index 45d9f84e..11ad80f2 100644
  };
  
 diff --git a/src/shared/providers/zai/limits.js b/src/shared/providers/zai/limits.js
-index 767443fd..b043cc48 100644
+index 11292e6f..a4a763ee 100644
 --- a/src/shared/providers/zai/limits.js
 +++ b/src/shared/providers/zai/limits.js
 @@ -302,6 +302,27 @@ async function fetchJson(url, key, deps = {}) {
@@ -2471,7 +2593,7 @@ index 767443fd..b043cc48 100644
        };
      })()
      : Promise.resolve(emptyLane());
-@@ -479,7 +517,7 @@ async function fetchZaiLimits(options = {}, deps = {}) {
+@@ -480,7 +518,7 @@ async function fetchZaiLimits(options = {}, deps = {}) {
    const [keyResult, planResult] = await Promise.allSettled([keyLane, planLane]);
  
    const lanes = [keyResult, planResult].filter((result) => result.status === 'fulfilled');
@@ -2480,7 +2602,7 @@ index 767443fd..b043cc48 100644
    const accountKey = lanes.map((result) => result.value.accountKey).filter(Boolean)[0] || '';
    const accountLabel = lanes.map((result) => result.value.plan).filter(Boolean)[0] || '';
    // Errors affect status, never the data from a healthy request. The user's
-@@ -843,6 +881,7 @@ module.exports = {
+@@ -863,6 +901,7 @@ module.exports = {
    zaiDashboardUrl,
    parseZaiUsage,
    parseZcodeStartPlanBalances,
@@ -3638,10 +3760,10 @@ index 00000000..0861f76c
 +  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
 +}
 diff --git a/tests/electron/linuxDisplayServer.test.js b/tests/electron/linuxDisplayServer.test.js
-index 07a5eea2..d668139e 100644
+index edc96f22..ac563d0f 100644
 --- a/tests/electron/linuxDisplayServer.test.js
 +++ b/tests/electron/linuxDisplayServer.test.js
-@@ -108,6 +108,9 @@ test('native Wayland resizes preserve saved coordinates in the actual persistenc
+@@ -113,6 +113,9 @@ test('native Wayland resizes preserve saved coordinates in the actual persistenc
        shouldPersistWindowBounds: () => true, stopPersistBoundsTimer: () => {},
        setTimeout: (fn) => { pending = fn; }, persistBoundsTimer: null,
        canPositionWindow: () => positionable, floatingBubbleState: { collapsed: false },
@@ -3727,7 +3849,7 @@ index 00000000..1dfb36f3
 +  assert.deepEqual(events, ['on', 'pull', 'off']);
 +});
 diff --git a/tests/electron/sessionRows.test.js b/tests/electron/sessionRows.test.js
-index 1a33fe49..94900489 100644
+index db247572..405f154e 100644
 --- a/tests/electron/sessionRows.test.js
 +++ b/tests/electron/sessionRows.test.js
 @@ -10,9 +10,11 @@ const test = require('node:test');
@@ -3742,7 +3864,7 @@ index 1a33fe49..94900489 100644
    sessionBreakdownIncomplete,
    sessionIdLabel,
    sessionDetailIdLabel,
-@@ -1352,3 +1354,83 @@ test('group sections keep main continuations above children without changing usa
+@@ -1380,3 +1382,100 @@ test('group sections keep main continuations above children without changing usa
    assert.deepEqual(content.filter(item => item.row).map(item => item.row), rows, 'review/bot groups keep their order');
    assert.equal(content.filter(item => item.className === 'session-group-section-heading').length, 0);
  });
@@ -3812,6 +3934,23 @@ index 1a33fe49..94900489 100644
 +    5000,
 +    'tokens mode puts the larger session first'
 +  );
++});
++
++test('groupSessionRows honors the sort mode for the final top-level ordering', () => {
++  // The group-stage sort used to hardcode recency, silently discarding the
++  // token sort the flat list had just been given (2026-11-18 user report: the
++  // toggle read "tokens" while every grouped list rendered recency-first).
++  const rows = [
++    { key: 's:new-small', kind: 'session', name: 'new-small', sortTime: 300, value: 50, cost: 0.1 },
++    { key: 's:old-big', kind: 'session', name: 'old-big', sortTime: 100, value: 5000, cost: 2 },
++    { key: 's:mid', kind: 'session', name: 'mid', sortTime: 200, value: 500, cost: 0.5 }
++  ];
++  const tokenOrder = groupSessionRows(rows, { sortMode: 'tokens' }).map((r) => r.name);
++  assert.deepEqual(tokenOrder, ['old-big', 'mid', 'new-small'],
++    'tokens mode must survive the grouping stage');
++  const recentOrder = groupSessionRows(rows).map((r) => r.name);
++  assert.deepEqual(recentOrder, ['new-small', 'mid', 'old-big'],
++    'missing sortMode keeps the legacy recency order');
 +});
 +
 +test('sort toggle is wired in the renderer sources and localized', () => {
@@ -3956,7 +4095,7 @@ index 3bdcbf11..cb44037f 100644
    for (const call of calls) {
      assert.match(call, /floatingAlwaysOnTopLevel\(\)/);
 diff --git a/tests/shared/zaiLimits.test.js b/tests/shared/zaiLimits.test.js
-index 55c3a28f..04b456c2 100644
+index 4b94c256..b9b08de4 100644
 --- a/tests/shared/zaiLimits.test.js
 +++ b/tests/shared/zaiLimits.test.js
 @@ -13,6 +13,7 @@ const {

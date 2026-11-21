@@ -1,39 +1,44 @@
-cfb17cb9 docs(trends): fix CSSOM-survival comment per Oracle round 16 (patch-in-place, not re-parent)
-423a31d5 fix(v0.91.0 rebase fallout): keep upstream's filterSessionRows export
-3d848be3 test: sessionSort keys now span 7 locales (pt-BR + es after the parity fix)
-00de38d5 fix(v0.90.0 rebase fallout): vm-test stub for the edge controller, Spanish locale keys
-1b374720 refactor: remove the dead MA-probe chain and extract the edge auto-hide state machine
-dd07ab84 test: stub scheduleEdgeAutoHide in the popover blur vm context
-51e3f152 fix(zcode): keep the session-detail event reader alongside upstream's resolver
-03791c12 fix: settle v0.69.0 rebase fallout
-413c5ef9 fix(edge): stop Windows 11 from winning a top-edge drag with its own maximize
-ea47e9b9 test: expect six locales for the session sort keys (pt-BR added)
-e8661c14 fix: settle v0.67.0 rebase fallout
-386ba32c fix(sessions): restore the sort toggle wiring lost in the v0.64.0 rebase
-a7a5f3b1 Arm ack-gated press replay unconditionally; MA probe is logging only
-5a881de0 Fix dock input death: probe WM_MOUSEACTIVATE, self-heal, replay fallback
-e0dbf8ae fix(edge-dock): restore input on shown surfaces - WS_EX_TRANSPARENT was stuck
-66d4c4b8 fix(edge-dock): drop the pid filter - the koffi _Out_ fill silently filtered every match
-31b75d8d fix(edge-dock): enforce TOPMOST via FindWindowExW on the live native windows
-0f0cb2ce fix(edge-dock): enforce the topmost band natively - Electron 43 stops landing it
-b88f52ce fix(edge-dock): re-assert topmost in the poll when Windows strips the flag
-e2572b74 fix(limits): dedupe zai windows merged from the console-key and ZCode mirror lanes
-20df1a92 fix(trends): set tick label positions via CSSOM - CSP drops inline styles
-88a9b325 feat(trends): y-axis ticks for the main-window trends chart
-8cf5333e feat(dashboard): refresh button forces a fresh collection with busy feedback
-249dc178 feat(dashboard): put the by-tool column before by-model in the overview
-66eac78c feat(sessions): sort-mode toggle for the home session list
-cd1c8e34 fix(sessions): zcode session rows get the pointer cursor and drill-in chevron
-06cdd15a feat(sessions): zcode session detail drill-down
-42347a46 fix(edge): exempt persistent app windows (dashboard) from the popup guard
-034dbb06 fix(edge): convert cursor to physical pixels before the popup guard (completes 2f8f634)
-6b3b7128 fix(edge): pass currentPid into the popup guard (probe caught it undefined)
-f020a296 fix(edge): keep the dock open while the user interacts with our native popups
-88217462 fix(zai): hide the idle cash row behind an active coding plan
-2f57b26d fix(edge): keep a docked window revealed while the user resizes it
-8787e8e4 fix(edge): finalize edge auto-hide (startup, strip width, resize sync, opt-in debug)
-0eac19a2 fix(edge): contain a native setPosition rejection instead of crashing
-81839898 fix(edge): guard geometry, expire the in-flight marker, single reconciler
-8fb3cfed fix(edge): add a slow watchdog so the window can always re-hide
-a4a2d2ca fix(edge): keep the cursor poll alive so the window can re-hide
-d19a5696 feat(edge): add edge auto-hide window mode (rebased onto v0.57.0)
+4dc6f24c fix(v0.95.0 rebase fallout): restore locale keys dropped by the replay
+da800f92 fix(sessions): the grouped list must keep the caller's sort mode
+f2b6f12b fix(edge): reconcile now verifies state flags against the physical position
+aece139a chore(edge): drop the dead edgeAutoHide:expand/collapse IPC, stop the non-finite animation guard trip
+f154c259 fix(edge): wire the sort toggle into the footer render, resync hidden-strip drags, stop the healthy-rail log spam
+6eb7b962 docs(trends): fix CSSOM-survival comment per Oracle round 16 (patch-in-place, not re-parent)
+af1fc0d8 fix(v0.91.0 rebase fallout): keep upstream's filterSessionRows export
+96264879 test: sessionSort keys now span 7 locales (pt-BR + es after the parity fix)
+3051c980 fix(v0.90.0 rebase fallout): vm-test stub for the edge controller, Spanish locale keys
+dd31cd08 refactor: remove the dead MA-probe chain and extract the edge auto-hide state machine
+b03e0243 test: stub scheduleEdgeAutoHide in the popover blur vm context
+fc07c178 fix(zcode): keep the session-detail event reader alongside upstream's resolver
+f31a72b2 fix: settle v0.69.0 rebase fallout
+d87a97e3 fix(edge): stop Windows 11 from winning a top-edge drag with its own maximize
+aaa377cf test: expect six locales for the session sort keys (pt-BR added)
+65e371b2 fix: settle v0.67.0 rebase fallout
+1a064c24 fix(sessions): restore the sort toggle wiring lost in the v0.64.0 rebase
+f3a03a27 Arm ack-gated press replay unconditionally; MA probe is logging only
+8aea7cad Fix dock input death: probe WM_MOUSEACTIVATE, self-heal, replay fallback
+5a2eda6f fix(edge-dock): restore input on shown surfaces - WS_EX_TRANSPARENT was stuck
+ab9411f6 fix(edge-dock): drop the pid filter - the koffi _Out_ fill silently filtered every match
+db385fda fix(edge-dock): enforce TOPMOST via FindWindowExW on the live native windows
+4a726e8f fix(edge-dock): enforce the topmost band natively - Electron 43 stops landing it
+a968dc30 fix(edge-dock): re-assert topmost in the poll when Windows strips the flag
+a9d9a5fe fix(limits): dedupe zai windows merged from the console-key and ZCode mirror lanes
+832c7e12 fix(trends): set tick label positions via CSSOM - CSP drops inline styles
+b350a93d feat(trends): y-axis ticks for the main-window trends chart
+08598afe feat(dashboard): refresh button forces a fresh collection with busy feedback
+1a531daa feat(dashboard): put the by-tool column before by-model in the overview
+fa2dd7be feat(sessions): sort-mode toggle for the home session list
+0e141ea6 fix(sessions): zcode session rows get the pointer cursor and drill-in chevron
+ac2e8b56 feat(sessions): zcode session detail drill-down
+eebb307d fix(edge): exempt persistent app windows (dashboard) from the popup guard
+ac98ff71 fix(edge): convert cursor to physical pixels before the popup guard (completes 2f8f634)
+0d7fa863 fix(edge): pass currentPid into the popup guard (probe caught it undefined)
+135507cf fix(edge): keep the dock open while the user interacts with our native popups
+0fd6e78a fix(zai): hide the idle cash row behind an active coding plan
+674f7dfa fix(edge): keep a docked window revealed while the user resizes it
+fb794246 fix(edge): finalize edge auto-hide (startup, strip width, resize sync, opt-in debug)
+b4163c2a fix(edge): contain a native setPosition rejection instead of crashing
+3e1b72cf fix(edge): guard geometry, expire the in-flight marker, single reconciler
+a9847ce3 fix(edge): add a slow watchdog so the window can always re-hide
+86025295 fix(edge): keep the cursor poll alive so the window can re-hide
+e17cdb30 feat(edge): add edge auto-hide window mode (rebased onto v0.57.0)
