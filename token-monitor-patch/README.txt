@@ -1275,3 +1275,28 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
      **~650MB**（瘦身省的 48MB 被上游新功能吃回还倒贴——不开 dock 约 698；626→657→650 三
      采样定平台）。交付物再生：patch 4423 行 / commits 44 行（含 i18n fallout 提交）。
   6) 推送：feat --force-with-lease（rebase 重写）、master docs 提交。
+
+【升级记录（2026-11-22，v0.95.0 → v0.95.1，round 19，13 上游提交）】
+  1) 安装包 135,517,552 B，SHA 15226dd6… MATCH。**首跑 fetch.sh 死在 gh api 单发查询瞬断**
+     （asset 查询 2>/dev/null 单发无重试环，与下载环不同步）——重跑即过；已知小坑，未改工具链。
+     v0.95.1 内容：qoder/zaiteam 配额分离、Windows 中文区域字体、inspector 头部视图开关、
+     idle heap 收集、collector 空 watch 目标免全客户端重扫、widget 内存/可见统计churn削减。
+  2) rebase 44 补丁提交重放，**2 处冲突全解且都是 union 型**：①main.js——上游
+     focusedAppWindow/appIsIdleForHeapCollection（idle heap perf）与我方 edge uncaughtException
+     崩溃护栏同点插入→两段全保；②tests/electron/trayPopoverToggle.test.js vm 桩——上游
+     scheduleMainWindowShowSync 与我方 scheduleEdgeAutoHide 并排。**两个自动解器都 NO-MATCH**
+     （形状不是已知两模式）=第三种冲突形状靠手解，轻松。app.js/i18n/styles 本轮被上游大改
+     （590/137/148 行 diff）但与我们的 hunk 完全错开零冲突；sessionRows.js /
+     edgeAutoHideController.js 上游未碰。
+  3) verify **0 NEW**（回退用 v0.95.0 基线即可）：11588 用例 / 11519 过 / 12 红全在基线内 /
+     0 flaky。套件 11495→11588（+93）。
+  4) pack+assert：asar 25,307,848 B / unpacked 2 native；换装断言 16/16 ours、
+     upstreamMissing=[]。探针首轮 exit 3 = **已知冷启动 visibilityState 滞后模式**（README 规则 8），
+     不是回归。**新踩坑：手动重启漏带 --remote-debugging-port=9222 → 探针 ECONNREFUSED**
+     （pack.sh 只在 --debug-port 参数下带该 flag）——带参重启后三探针全绿：health
+     （tokscale 4.23.0、DOM 交叉核对 50,536,795 逐位一致、anchor age 3min）、panel（hero
+     332,933,823 / 4 kpi / 14 bars / 5 会话 / segActive month）、reveal（物理展开 sx=46，
+     verdict visible）。**今日无楔死复发，自愈器零触发**（挂案维持：vm 测试追因仍是 Known debt 首项）。
+  5) settings 瘦身存活：edgeDockEnabled=false 过升级无损。
+  6) 推送：feat --force-with-lease（先 git fetch fork 对齐，round 18 教训复用一次过）、
+     master docs 提交。
