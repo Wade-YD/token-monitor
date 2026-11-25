@@ -347,6 +347,16 @@ function readControllerSource() {
   return fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'edgeAutoHideController.js'), 'utf8');
 }
 
+test('main.js never touches the controller-private edge state', () => {
+  // The state machine moved into edgeAutoHideController.js; main.js has no
+  // edgeAutoHideState binding, so any direct reference there is a ReferenceError
+  // at window creation (the v0.97.0 rebase resurrected one such line by unioning
+  // a refactor's before/after sides - the app started with a blank renderer).
+  const code = stripComments(readMainSource());
+  assert.doesNotMatch(code, /\bedgeAutoHideState\b/,
+    'main.js must reach the state machine only through the edgeAutoHide facade');
+});
+
 
 test('the geometry guard is the only writer and rejects non-finite coordinates', () => {
   const controllerSource = readControllerSource();
@@ -491,7 +501,7 @@ test('guarded geometry writes are gated until the window is first shown', () => 
   // upstream's material-lifecycle test owns the line right after `mainWindow = win;`,
   // so only insist the gate reset stays within the same creation neighborhood.
   // (attachWindow carries the reset now that the wiring lives in the controller.)
-  assert.match(mainSource, /mainWindow = win;[\s\S]{0,200}?edgeAutoHide\.attachWindow\(win\);/, 'a recreated window must re-earn readiness');
+  assert.match(mainSource, /mainWindow = win;[\s\S]{0,400}?edgeAutoHide\.attachWindow\(win\);/, 'a recreated window must re-earn readiness');
   const attachFn = controllerSource.match(/function attachWindow\(win\) \{[\s\S]*?\n  \}/);
   assert.ok(attachFn, 'attachWindow exists');
   assert.match(attachFn[0], /edgeAutoHideState\.geometryReady = false;/, 'attaching resets readiness');

@@ -7514,7 +7514,8 @@ function createWindow(boundsOverride, options = {}) {
   mainWindowHibernated = false;
   const popoverReveal = options.popoverReveal;
   mainWindowPopoverReveal = popoverReveal || null;
-  edgeAutoHideState.geometryReady = false;
+  // attachWindow owns the geometryReady reset (the state machine lives in
+  // edgeAutoHideController.js; main.js has no edgeAutoHideState binding).
   edgeAutoHide.attachWindow(win);
   mainWindowChrome = { collapsedFloatingBubble };
   applyMacSpaceBehavior();
