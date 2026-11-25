@@ -1339,3 +1339,23 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
      5,742,768 → 4,572,947 → 2,810,367 → 701,123；点击写 settings.sessionSortMode
      （tokens↔recent 双向验证），启动时恢复（首屏即「Token 最多」）。
   8) 交付：feat 分支 a71d6ef9（fallout）+ 7e22a280（白屏修复）+ 38006bdf（i18n 清理）。
+
+【zai 重复账号修复（2026-11-26，v0.97.0 之上）】
+  现象：GLM 显示「2 个账号」，OAuth/API 两条卡片窗口逐位相同（resetsAt 精确到毫秒一致）。
+  勘察：settings.providers.zai 空、env 6 个常见 key 名全 absent → 两条都来自自动发现。
+  根因三层：
+   ① 上游 accountKey = hashKey('zai', 凭据)，两条 lane（console coding key / account JWT）各算一个。
+   ② **用户 ZCode 已升级到 enc:v2: 加密格式**（`enc:v2:os:`，密钥在 OS keyring），而上游
+      zcodeDiscovery.js 只认 `enc:v1:`（ZCODE_CREDENTIAL_ENVELOPE='enc:v1:'）→ store 里
+      zcodejwttoken / oauth:zai_cn:user_info / account-provider:* 全部解不开 → identity 与
+      coding key 全丢失，discovery 整体退化到 config.json 的两个明文 mirror
+      （builtin:bigmodel-coding-plan enabled=true + builtin:bigmodel-start-plan enabled=false）。
+   ③ 上游文档 zai.md:59 明示「Different credentials are not assumed to be the same account」，
+      故 v2 场景下它把自己的两个 mirror 当成两个账号——这是集成失效的副作用，不是有意设计。
+  已实施（提交 57453078）：把 discovery 已解出但从未上报的 storedProfileIdentity(user_id) 提升为
+  稳定 accountKey（zaiServerAccountKey），两个 lane 在凭据「确属该登录」时共用它，旧 hash 进
+  accountKeyAliases（历史/label 自动迁移）；config.json mirror 与用户手输 key 保持各自 hash——
+  不靠窗口值猜身份（accountKey 是历史主键，误合并不可逆）。**v1 环境生效，v2 环境因解不开而无效。**
+  待办：①上游 issue：enc:v2 兼容（keyring 读取）+ v2 下重复账号；②用户侧缓解=删
+  config.json 里 disabled 的 start-plan mirror key（需用户同意改 ZCode 配置）；
+  ③不采纳「按窗口值/同 config family 合并」= Oracle 判 P0 风险。
