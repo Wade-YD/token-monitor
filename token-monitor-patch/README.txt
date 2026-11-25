@@ -1300,3 +1300,42 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
   5) settings 瘦身存活：edgeDockEnabled=false 过升级无损。
   6) 推送：feat --force-with-lease（先 git fetch fork 对齐，round 18 教训复用一次过）、
      master docs 提交。
+
+【升级记录（2026-11-25，v0.95.1 → v0.97.0，round 20，35 上游提交跨 v0.96.0/v0.96.1）】
+  1) 安装包 135,558,544 B，SHA 7b927208… MATCH。v0.97.0 内容：**会话按 token 排序（#1615）**、
+     单设置项恢复按钮、Antigravity 本机额度、Zed 用量、双屏侧边栏 overshoot 修复、插件图标、
+     **主窗休眠（hibernate，Windows 不支持 = darwin/linux only）**、idle heap 收集等。
+  2) **用户预判命中**：上游 #1615 与我们的排序改造同功能。rebase 43 提交（跳 1）**5 处冲突**：
+     main.js×3（suspendScreenUi/resumeScreenUi 与崩溃护栏 union、mainWindowHibernated/popoverReveal
+     与 attachWindow union、attachWindow 与 geometryReady 错误 union）、app.js×1（sortBy vs sortMode
+     →取上游）、sessionRows.js×1（compareSessionRows vs 上游等价实现 → **--skip 整个 da800f92**）。
+     **resolve-main-bounds/resolve-exports 两个自动解器均 NO-MATCH**（第三种形状）。
+  3) **补丁面瘦身（用户令「包含了一些之前我们做的改造」）**：删我方私有排序整套——footer 按钮、
+     sessionSortMode()、updateSessionSortToggle()、sessionSize 线程、i18n 死键 14 行；改吃上游
+     state.sessionSort + sortBy。**唯一保留的增强=持久化**（3 行：settings.sessionSortMode 复用
+     main.js 既有归一化链 639/2225/8216 + setRendererSettings 恢复）。**抓到真 bug：index.html 里
+     sessionSortToggle 出现两次（上游 1614 + 我方 1656），getElementById 把两个 listener 都绑到上游
+     元素，我方 settings 写入成了幽灵状态**。测试改写为「上游接线+持久化+恰好一个按钮 id」。
+  4) **两条真回归，测试挡不住、靠运行时抓到**：①上游新 mainWindowHibernate.test.js vm 夹具切走
+     `section('function suspendScreenUi(', 'app.whenReady().then(')` 区段，我方 process.on 崩溃护栏
+     在其中 → 19 红 `TypeError: process.on is not a function` → 加 `typeof process.on` 守卫 +
+     夹具补 edgeAutoHide/edgeAutoHideState stub；②**rebase 二次 union 复活已废弃代码**：
+     `4f11695b` 曾加 `edgeAutoHideState.geometryReady = false`、`6b4a5c92` 抽走状态机时删掉它，
+     我两次 union 把新旧两侧都保住 → 生产启动 ReferenceError（main.js 无该绑定）→ 主窗
+     url='' 白屏。**stderr 抓到（UnhandledPromiseRejectionWarning），测试因 stub 掩盖而全绿**。
+     修=删该行（attachWindow 首行已重置 geometryReady）+ 加断言「main.js 不得出现 edgeAutoHideState」。
+     **教训入库：重构类提交是「替换」不是「叠加」，union 前先看两侧提交的先后意图。**
+  5) verify：**v0.97.0 pristine 基线新建**（pristine worktree 11649 用例 13 红=12 旧名+smart
+     collection；`startCollector` flaky 在 pristine 上绿故不入基线）→ 对 patched **0 NEW / 1 GONE**
+     （`smart collection ... manual refresh` 在 patched 上绿=我方刷新补丁效果）。套件 11588→11649。
+  6) pack+assert 16/16、asar 25,356,785 B。探针：**新坑=pack 重启后立刻跑探针会误判**——poll 尚未
+     arm 时 SetCursorPos 不触发展开（verdict hidden/sy=-574），实际窗口稍后自己展开；**渲染器
+     window.screenX/screenY 在节流状态下不更新，不能当物理判据**（主进程 collapse 日志 from=y:0
+     才是真相）；Electron 的 CDP 无 Browser.getWindowForTarget。等 vis 自行翻转后
+     health（tokscale 4.23.1、DOM=内存 154,729,294 逐位一致）/panel（hero 408,509,976、4 kpi、
+     14 bars、5 会话）双 ok。
+  7) **排序功能实机验证**：按钮「Token 最多」↔「最新」双语正常且只剩 1 个元素；tokens 模式
+     严格降序 56,863,398 → 34,572,867 → 17,939,469 → 15,916,038 → 8,936,121 → 6,674,196 →
+     5,742,768 → 4,572,947 → 2,810,367 → 701,123；点击写 settings.sessionSortMode
+     （tokens↔recent 双向验证），启动时恢复（首屏即「Token 最多」）。
+  8) 交付：feat 分支 a71d6ef9（fallout）+ 7e22a280（白屏修复）+ 38006bdf（i18n 清理）。
