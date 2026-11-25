@@ -14,7 +14,10 @@ const {
   zaiSubscriptionUrl,
   parseZaiUsage,
   dedupeZaiWindows,
-  fetchZaiLimits
+  zaiServerAccountKey,
+  fetchZaiLimits,
+  discoverZcodeConnection,
+  discoverAccountSlots
 } = require('../../src/shared/providers/zai/limits');
 
 test('zaiToken accepts Z.ai and GLM compatible API key env names', () => {
@@ -1298,4 +1301,117 @@ for (const savedKey of [null, 'other-key', 'mirror-jwt']) test(`ZCode slot keeps
     assert.ok(saved.windows.some(window => window.metric === 'credits'));
     assert.ok(!saved.windows.some(window => window.limitId));
   }
+});
+
+// --- one ZCode login, two credential shapes, one account (2026-11-26) ------
+
+// Placeholder credential values for the fixture below, built so they never read
+// as a real secret (this file ships in the repo).
+const FIXTURE_MIRROR_KEY = ['coding', 'fixture'].join('-');
+const FIXTURE_FOREIGN_KEY = ['typed', 'fixture'].join('-');
+
+// The store names the signed-in account and carries the billing JWT; config.json
+// mirrors the coding key of that same login. Two different credentials, one
+// account — the shape a real ZCode install produces, and the one that used to
+// render two GLM cards with identical windows.
+function identityLoginFiles() {
+  return {
+    'setting.json': JSON.stringify({
+      providerFamilyDomain: 'zai',
+      providerFamilyConnectionSelections: { zai: { kind: 'individual-coding-plan' } }
+    }),
+    'config.json': JSON.stringify({ provider: {
+      'builtin:zai-coding-plan': { enabled: true, options: { apiKey: FIXTURE_MIRROR_KEY } }
+    } }),
+    'credentials.json': JSON.stringify({
+      zcodejwttoken: encryptStoreValue('billing-jwt'),
+      'oauth:zai:user_info': encryptStoreValue(JSON.stringify({ user_id: 'account-42' })),
+      // ZCode's own entry name for the account's coding key (mirrors
+      // accountProviderCredentialKey: family-selectionKind + encoded identity).
+      'account-provider:coding-plan:account:zai-individual-coding-plan:account:account-42:api-key':
+        encryptStoreValue(FIXTURE_MIRROR_KEY)
+    }),
+    'telemetry-state.json': JSON.stringify({ deviceMid: 'dm' })
+  };
+}
+
+function identityLoginDeps(files) {
+  return {
+    env: { ZCODE_CREDENTIAL_SECRET: FIXTURE_CREDENTIAL_SECRET },
+    now: () => Date.parse('2026-09-05T12:00:00Z'),
+    readFileSync: (filePath) => {
+      const name = path.basename(String(filePath));
+      if (Object.hasOwn(files, name)) return files[name];
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    },
+    fetch: async (url) => {
+      const target = String(url);
+      if (target.includes('/quota/limit')) {
+        return { ok: true, status: 200, json: async () => ({ data: {
+          planName: 'GLM Coding Lite',
+          limits: [{ type: 'TOKENS_LIMIT', unit: 3, number: 5, percentage: 86.35, nextResetTime: '2026-09-05T16:08:05.601Z' }]
+        } }) };
+      }
+      if (target.includes('subscription/list')) {
+        return { ok: true, status: 200, json: async () => ({ data: [{ product_name: 'GLM Coding Lite' }] }) };
+      }
+      if (target.includes('/billing/balance')) {
+        return { ok: true, status: 200, json: async () => ({ data: {
+          balances: [{ balance: '0', unit: 'CNY' }],
+          plans: [{ name: 'GLM Coding Lite', limitMinutes: 10080, usedMinutes: 3740, nextResetTime: '2026-09-12T02:18:30.983Z' }]
+        } }) };
+      }
+      throw new Error(`unexpected url ${url}`);
+    }
+  };
+}
+
+test('discoverZcodeConnection reports the profile identity of the signed-in account', () => {
+  const deps = identityLoginDeps(identityLoginFiles());
+  const discovery = discoverZcodeConnection({}, deps);
+  assert.equal(discovery.identity, 'account-42');
+});
+
+test('discoverZcodeConnection omits identity when the profile cannot be read', () => {
+  const files = identityLoginFiles();
+  delete files['credentials.json'];
+  const discovery = discoverZcodeConnection({}, identityLoginDeps(files));
+  assert.equal('identity' in discovery, false);
+});
+
+test('one ZCode login keys both credential lanes by identity, not by credential', async () => {
+  const deps = identityLoginDeps(identityLoginFiles());
+  const discovery = discoverZcodeConnection({}, deps);
+  const expected = zaiServerAccountKey('account-42');
+
+  // The plain fetch: no slot context, the plan lane discovers on its own.
+  const plain = await fetchZaiLimits({}, deps);
+  // The combined fetch: the discovered coding key arrives as the explicit key.
+  const combined = await fetchZaiLimits(
+    { zaiApiKey: discovery.credential.token },
+    { ...deps, accountSlotDiscovery: discovery, accountSlotDiscovered: false }
+  );
+
+  assert.equal(plain.accountKey, expected, 'the ZCode lane keys by identity');
+  assert.equal(combined.accountKey, expected, 'the console lane keys by the same identity');
+  assert.equal(plain.accountKey, combined.accountKey, 'one login is one account');
+});
+
+test('a credential the ZCode login does not own keeps its own account key', async () => {
+  // A key typed into settings (or exported as an env var) proves nothing about
+  // which server account it belongs to, so identity must not absorb it.
+  const deps = identityLoginDeps(identityLoginFiles());
+  const discovery = discoverZcodeConnection({}, deps);
+  const foreign = await fetchZaiLimits(
+    { zaiApiKey: FIXTURE_FOREIGN_KEY },
+    { ...deps, accountSlotDiscovery: discovery, accountSlotDiscovered: false }
+  );
+  assert.notEqual(foreign.accountKey, zaiServerAccountKey('account-42'));
+});
+
+test('discoverAccountSlots keys the ZCode row by identity and keeps the token hash as an alias', () => {
+  const deps = identityLoginDeps(identityLoginFiles());
+  const [slot] = discoverAccountSlots({ ...deps });
+  assert.equal(slot.accountKey, zaiServerAccountKey('account-42'));
+  assert.ok(slot.accountKeyAliases && slot.accountKeyAliases.length, 'the credential hash stays as an alias');
 });

@@ -333,10 +333,45 @@ function dedupeZaiWindows(windows) {
 // row reports unavailable rather than contradicting the detected-login pill.
 const emptyLane = (attempted = false) => ({ windows: [], plan: '', accountKey: '', hasAnything: false, attempted });
 
+// A stable account key for a ZCode login, namespaced apart from the credential
+// hashes so the two can never collide. ZCode's store names the signed-in
+// account (a server-issued user id), and both credential shapes of that login —
+// the coding key and the billing JWT — belong to it. Keying the row by this
+// identity lets the two lanes of ONE login resolve to one account, while a key
+// the user typed into settings (or exported as an env var) is never assumed to
+// be that account and keeps its own credential hash.
+function zaiServerAccountKey(identity) {
+  const value = String(identity || '').trim();
+  return value ? hashKey('zai', 'account', value) : '';
+}
+
 // Maps a lane error onto a provider status: timeouts degrade to unavailable,
 // every other classified status (unauthorized, sourceRateLimited, …) passes
 // through so the pill can say what actually happened.
 const laneErrorStatus = (error) => (error?.status === 'timeout' ? 'unavailable' : error?.status || 'unavailable');
+
+// Resolves the account key for one credential shape. A credential the local
+// ZCode login itself produced proves nothing about the account by itself, but
+// combined with the identity the same store reports it does: it belongs to the
+// signed-in account, so the row keys by identity and the credential hash stays
+// as an alias. Anything else (a key typed into settings, an env export, a
+// mirror of unknown origin) keeps its own hash — different credentials are
+// still not assumed to be the same account.
+function zaiLaneAccountKey(credential, discovery) {
+  const identity = String(discovery?.identity || '').trim();
+  const key = String(credential || '');
+  if (!key) return '';
+  if (identity) {
+    // Only credentials the store itself named for this account are attributable
+    // to it; a config.json mirror is not (see discovery's `owned` flags).
+    const owned = [
+      discovery?.credentialOwned === true ? discovery.credential?.token : '',
+      discovery?.billing?.owned === true ? discovery.billing?.credential?.token : ''
+    ].filter(Boolean);
+    if (owned.includes(key)) return zaiServerAccountKey(identity);
+  }
+  return hashKey('zai', key);
+}
 
 async function fetchZaiLimits(options = {}, deps = {}) {
   const env = deps.env || process.env;
@@ -344,9 +379,26 @@ async function fetchZaiLimits(options = {}, deps = {}) {
   const updatedAt = new Date(now).toISOString();
   const key = deps.accountSlotDiscovered ? '' : zaiToken(env, options.zaiApiKey);
   const region = zaiRegion(options, env);
+  // Resolved once and lazily: a slot-driven fetch already carries it, a plain
+  // fetch lets the plan lane discover on demand, and the lane keying below
+  // reads whichever one ended up resolving.
+  let discovery = deps.accountSlotDiscovery || null;
+  const resolveDiscovery = () => {
+    if (!discovery) {
+      discovery = discoverZcodeConnection(options, {
+        readFileSync: deps.readFileSync || fs.readFileSync,
+        env,
+        homeDir: deps.homeDir || options.homeDir || os.homedir()
+      });
+    }
+    return discovery;
+  };
 
   const keyLane = key
     ? (async () => {
+      // This lane starts before the plan lane, so the lazy discovery has not
+      // run yet; resolve it here to key the row by the account ZCode names.
+      const laneDiscovery = resolveDiscovery();
       const [quotaResult, balanceResult] = await Promise.allSettled([
         fetchJson(zaiQuotaUrl(region), key, deps),
         fetchJson(zaiBalanceUrl(region), key, deps)
@@ -405,7 +457,7 @@ async function fetchZaiLimits(options = {}, deps = {}) {
       return {
         windows: keyWindows,
         plan: usage.plan,
-        accountKey: hashKey('zai', key),
+        accountKey: zaiLaneAccountKey(key, laneDiscovery),
         balance: cashRowHidden ? null : balance,
         error: quotaResult.status === 'rejected' ? quotaResult.reason : null,
         hasAnything: keyWindows.length > 0
@@ -442,7 +494,7 @@ async function fetchZaiLimits(options = {}, deps = {}) {
     return {
       windows: usage.windows,
       plan: usage.plan,
-      accountKey: hashKey('zai', token),
+      accountKey: zaiLaneAccountKey(token, discovery),
       hasAnything: usage.windows.length > 0,
       attempted: true
     };
@@ -450,11 +502,7 @@ async function fetchZaiLimits(options = {}, deps = {}) {
 
   const planLane = (async () => {
     if (deps.accountSlotSaved) return emptyLane();
-    const discovery = deps.accountSlotDiscovery || discoverZcodeConnection(options, {
-      readFileSync: deps.readFileSync || fs.readFileSync,
-      env,
-      homeDir: deps.homeDir || options.homeDir || os.homedir()
-    });
+    const discovery = resolveDiscovery();
     // Mirror-key quota on the console-key endpoint; classified errors (429,
     // auth) propagate, empty results keep the lane attempted, not unconfigured.
     // `entitled` now means discovery found a usable auto credential — since
@@ -486,7 +534,7 @@ async function fetchZaiLimits(options = {}, deps = {}) {
         return {
           windows: [...usage.windows, ...(billing ? billing.windows : [])],
           plan: usage.plan || (billing ? billing.plan : ''),
-          accountKey: mirrorKey === key && mirrorRegion === region ? '' : hashKey('zai', mirrorKey),
+          accountKey: mirrorKey === key && mirrorRegion === region ? '' : zaiLaneAccountKey(mirrorKey, discovery),
           hasAnything: usage.windows.length > 0 || Boolean(billing?.hasAnything),
           attempted: true,
           error: quotaResult.status === 'rejected' ? quotaResult.reason : null
@@ -882,8 +930,16 @@ function discoverAccountSlots(deps = {}) {
     return [];
   }
   const token = discovery.credential?.token || discovery.billing.credential.token;
+  // The row is the account ZCode is signed into, so it keys by that identity
+  // when the store names it; the credential hash stays as an alias so history
+  // and the persisted slot metadata follow a token rotation instead of
+  // starting over. Without an identity the hash remains the key.
+  const tokenHash = hashKey('zai', token);
+  const identityKey = zaiServerAccountKey(discovery.identity);
   return [{ values: { zaiApiKey: token, zaiApiRegion: discovery.family === 'bigmodel' ? 'bigmodel-cn' : 'global' },
-    accountKey: hashKey('zai', token), sourceName: 'ZCode',
+    accountKey: identityKey || tokenHash,
+    ...(identityKey ? { accountKeyAliases: [tokenHash] } : {}),
+    sourceName: 'ZCode',
     combineMatchingCredential: discovery.kind === 'coding-quota',
     combinedFetchDeps: { accountSlotDiscovery: discovery, accountSlotDiscovered: false, accountSlotSaved: false },
     fetchDeps: { accountSlotDiscovery: discovery, accountSlotDiscovered: true, accountSlotSaved: false } }];
@@ -902,6 +958,7 @@ module.exports = {
   parseZaiUsage,
   parseZcodeStartPlanBalances,
   dedupeZaiWindows,
+  zaiServerAccountKey,
   fetchZaiLimits,
   // Shared with the team provider: the same BigModel gateways answer with the
   // same HTTP 200 body envelopes, so the classification lives in one place.

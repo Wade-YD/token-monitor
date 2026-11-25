@@ -272,6 +272,17 @@ function discoverZcodeConnection(options = {}, deps = {}) {
       return storeCache;
     };
     const liveBillingCredential = () => storedZcodeJwtCredential(readStore(), env);
+    // The profile identity (a server-issued user id) is the only binding this
+    // discovery can offer across credential shapes: the coding key and the
+    // billing JWT both belong to whichever account ZCode is signed into, and
+    // the store names it. Read once per discovery call and reported to
+    // callers, so a provider row can key the account by identity instead of by
+    // whichever credential happened to answer.
+    let identityCache;
+    const profileIdentity = () => {
+      if (identityCache === undefined) identityCache = storedProfileIdentity(readStore(), env, family) || '';
+      return identityCache;
+    };
     // Billing is an account-level endpoint: ZCode queries it even while the
     // coding-plan provider is selected, because its family pass validates every
     // plan provider the family has (validateFamilyAccountProviders) and the
@@ -286,10 +297,13 @@ function discoverZcodeConnection(options = {}, deps = {}) {
     // nothing there.
     const codingBillingLeg = () => {
       const live = liveBillingCredential();
-      if (live) return { credential: live };
+      // `owned` marks a credential the store itself named for this account: it
+      // can be attributed to the signed-in identity. A config.json mirror
+      // cannot (3.11.x may have written it under a previous account).
+      if (live) return { credential: live, owned: true };
       const mirror = billingCredential(registry.provider?.[ZCODE_PROVIDER_IDS.startPlan[family]] || null);
-      if (!mirror || storedProfileIdentity(readStore(), env, family)) return null;
-      return { credential: mirror };
+      if (!mirror || profileIdentity()) return null;
+      return { credential: mirror, owned: false };
     };
     // The account key is looked up only for the quota lane: a start-plan
     // selection needs the account-level JWT alone, so it must not touch the
@@ -303,13 +317,17 @@ function discoverZcodeConnection(options = {}, deps = {}) {
     // means the lane has no credential, because a mirror there cannot be shown
     // to belong to that account.
     let credential;
+    // Whether the store itself named this credential for the signed-in account.
+    // A config.json mirror never counts: it may carry whoever wrote it before a
+    // switch.
+    let credentialOwned = false;
     if (kind === 'start-billing') {
       const live = liveBillingCredential();
       const mirror = billingCredential(provider);
       // The identity alone decides this branch: a mirror's presence changes
       // nothing, because neither it nor its absence can supply a credential the
       // account can be shown to own.
-      if (!live && storedProfileIdentity(readStore(), env, family)) {
+      if (!live && profileIdentity()) {
         // The live JWT is unreadable while the store names the account. Reported
         // rather than resolved: the lane runs and finds nothing it can vouch for,
         // which reads as unavailable instead of "not configured" beside a stored
@@ -317,6 +335,7 @@ function discoverZcodeConnection(options = {}, deps = {}) {
         return { kind, family, providerId, entitled: false, reason: 'billing_jwt_unavailable' };
       }
       credential = live || mirror;
+      credentialOwned = Boolean(live);
     } else {
       const accountKey = storedAccountKeyCredential(readStore(), env, { family, selectionKind });
       if (accountKey?.identityWithoutKey) {
@@ -328,17 +347,20 @@ function discoverZcodeConnection(options = {}, deps = {}) {
         const billing = codingBillingLeg();
         return {
           kind, family, providerId, entitled: false, reason: 'coding_plan_key_missing',
-          ...(billing ? { billing } : {})
+          ...(billing ? { billing } : {}),
+          ...(profileIdentity() ? { identity: profileIdentity() } : {})
         };
       }
       credential = accountKey || billingCredential(provider);
+      credentialOwned = Boolean(accountKey);
     }
     // `entitled` marks a result the lane can actually query. Since 3.12.3
     // stopped writing the entitlement cache, a readable credential is the
     // only local signal; the query itself answers entitlement.
     if (!credential) return { kind, family, providerId, entitled: false, reason: 'coding_plan_not_authenticated' };
     const billing = kind === 'coding-quota' ? codingBillingLeg() : null;
-    return { kind, family, providerId, entitled: true, credential, ...(billing ? { billing } : {}) };
+    return { kind, family, providerId, entitled: true, credential, credentialOwned, ...(billing ? { billing } : {}),
+      ...(profileIdentity() ? { identity: profileIdentity() } : {}) };
   }
 
   const baseUrl = String(provider?.options?.baseURL || '').trim();
