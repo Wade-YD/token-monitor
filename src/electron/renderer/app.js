@@ -444,8 +444,6 @@ Object.assign(els, {
   projectBreakdownFooter: document.getElementById('projectBreakdownFooter'),
   projectBreakdownFooterTools: document.getElementById('projectBreakdownFooterTools'),
   projectBreakdownFooterModels: document.getElementById('projectBreakdownFooterModels'),
-  sessionSortToggle: document.getElementById('sessionSortToggle'),
-  sessionSortToggleLabel: document.getElementById('sessionSortToggleLabel'),
   monthPeriodMenu: document.getElementById('monthPeriodMenu'),
   monthPeriodTab: document.getElementById('monthPeriodTab'),
   periodMonthModeInput: document.getElementById('periodMonthModeInput')
@@ -738,14 +736,6 @@ els.toolDetailFooterTokens.addEventListener('click', () => setActiveToolDetailMo
 els.toolDetailFooterModels.addEventListener('click', () => setActiveToolDetailMode('models'));
 els.projectBreakdownFooterTools.addEventListener('click', () => { void saveSettings({ projectBreakdownMode: 'tool' }).catch(() => {}); });
 els.projectBreakdownFooterModels.addEventListener('click', () => { void saveSettings({ projectBreakdownMode: 'model' }).catch(() => {}); });
-
-els.sessionSortToggle?.addEventListener('click', () => {
-  const next = sessionSortMode() === 'tokens' ? 'recent' : 'tokens';
-  if (state.settings) state.settings.sessionSortMode = next;
-  updateSessionSortToggle();
-  render();
-  saveSettings({ sessionSortMode: next }).catch(() => {});
-});
 
 document.addEventListener('pointerdown', (event) => {
   if (state.viewSwitcherOpen && !event.target.closest('#viewSwitcher')) {
@@ -2856,12 +2846,6 @@ function renderToolDetailFooter() {
   const active = activeToolDetail();
   els.toolDetailFooter.classList.toggle('hidden', !active);
   syncLiveTokenRateFooterState();
-  // The sort toggle only shows for the session breakdown. This footer render
-  // is the hook that runs on every render of the surface hosting the button;
-  // its only other trigger was the live-token-rate expiry timer, which never
-  // schedules when no tracker exists - the button (and with it the whole sort
-  // feature) stayed unreachable on idle starts (Oracle round 17 review P1).
-  updateSessionSortToggle();
   if (!active) return;
   const mode = state.toolDetailMode;
   els.toolDetailFooter.setAttribute('aria-label', active.detail.name);
@@ -3681,21 +3665,6 @@ function modelRowsForPeriod(period, rankingMetric = state.settings?.modelRanking
   return toolRowsForPeriod(period);
 }
 
-function sessionSortMode() {
-  return state.settings?.sessionSortMode === 'tokens' ? 'tokens' : 'recent';
-}
-
-function updateSessionSortToggle() {
-  if (!els.sessionSortToggle) return;
-  const visible = state.breakdown === 'session';
-  els.sessionSortToggle.classList.toggle('hidden', !visible);
-  const mode = sessionSortMode();
-  els.sessionSortToggleLabel.textContent = mode === 'tokens'
-    ? t('home.sessionSort.tokens')
-    : t('home.sessionSort.recent');
-  els.sessionSortToggle.setAttribute('aria-pressed', String(mode === 'tokens'));
-}
-
 function sessionPresentationOptions() {
   const localDevice = state.stats?.devices?.find(device => device.deviceId === state.settings?.deviceId);
   return {
@@ -3715,9 +3684,6 @@ function sessionPresentationOptions() {
     localSourceDevice: localDevice ? { deviceId: localDevice.deviceId,
       name: deviceBreakdownApi.deviceLabel(localDevice), platform: localDevice.platform || '', deviceKind: localDevice.deviceKind || 'computer' } : undefined,
 
-    // Inlined rather than calling sessionSortMode(): source-slicing tests
-    // evaluate this function body in isolation, where only its own locals exist.
-    sortMode: state.settings?.sessionSortMode === 'tokens' ? 'tokens' : 'recent',
     subagents: {
       countLabel: (count) => t('sessions.subagentCount', { count }),
       latestModelLabel: t('session.latestModel'),
@@ -8886,6 +8852,9 @@ function setRendererSettings(next) {
     const defaultPeriod = fixedPeriodRangesApi.normalizeMonthMode(next.periodMonthMode);
     if (state.period !== defaultPeriod && setPeriod(defaultPeriod)) followOpenSessionToPeriod();
   }
+  // Restore the persisted session sort choice onto upstream's in-memory
+  // state.sessionSort (main normalizes the value to 'tokens' | 'recent').
+  state.sessionSort = next.sessionSortMode === 'tokens' ? 'tokens' : 'recent';
   if (animationChanged) {
     pluginViewHost?.refreshMotion();
     cancelNumberAnimation();
@@ -16652,6 +16621,11 @@ els.sessionSortToggle.addEventListener('click', () => {
   state.sessionSort = state.sessionSort === 'tokens' ? 'recent' : 'tokens';
   state.sessionPage = 0;
   els.breakdown.scrollTop = 0;
+  // Persist the choice under the pre-existing settings key so the selection
+  // survives a restart (upstream #1615 keeps it in memory only). The main
+  // process already normalizes and stores this key.
+  if (state.settings) state.settings.sessionSortMode = state.sessionSort;
+  saveSettings({ sessionSortMode: state.sessionSort }).catch(() => {});
   render();
 });
 els.sessionSearchToggle?.addEventListener('click', () => {

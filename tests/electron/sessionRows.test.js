@@ -1490,15 +1490,18 @@ test('sessionRowsForPeriod honors the sortMode option', () => {
   );
 });
 
-test('sort toggle is wired in the renderer sources and localized', () => {
+test('session sort rides upstream #1615 and persists the choice', () => {
   const app = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'renderer', 'app.js'), 'utf8');
-  assert.match(app, /sessionRowsApi\.compareSessionRows\(a, b, sortMode\)/);
-  assert.match(app, /function sessionSortMode\(\)/);
-  assert.match(app, /sessionSortMode: next/);
+  // Upstream owns the toggle state and the grouped-list wiring.
+  assert.match(app, /sortBy: state\.sessionSort/);
+  // The fork's only addition: the choice survives a restart via the settings
+  // key the main process already normalizes ('sessionSortMode').
+  assert.match(app, /state\.sessionSort = next\.sessionSortMode === 'tokens' \? 'tokens' : 'recent'/);
+  assert.match(app, /saveSettings\(\{ sessionSortMode: state\.sessionSort \}\)/);
+  // The old fork-private toggle must stay gone: it duplicated the button id,
+  // so getElementById bound both listeners to upstream's element.
+  assert.doesNotMatch(app, /function sessionSortMode\(\)/);
+  assert.doesNotMatch(app, /updateSessionSortToggle/);
   const html = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'renderer', 'index.html'), 'utf8');
-  assert.match(html, /id="sessionSortToggle"/);
-  const i18n = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'renderer', 'i18n.js'), 'utf8');
-  assert.equal((i18n.match(/'home\.sessionSort\.recent'/g) || []).length, 7, 'every bundled locale carries the key');
-  assert.equal((i18n.match(/'home\.sessionSort\.tokens'/g) || []).length, 7);
-
+  assert.equal((html.match(/id="sessionSortToggle"/g) || []).length, 1, 'exactly one sort toggle element');
 });

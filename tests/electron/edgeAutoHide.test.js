@@ -432,7 +432,10 @@ test('an uncaught main-process exception is logged instead of raising a modal di
   const mainSource = readMainSource();
   const controllerSource = readControllerSource();
   assert.match(mainSource, /process\.on\('uncaughtException'/, 'the main process must install an uncaught handler');
-  const handler = mainSource.match(/process\.on\('uncaughtException',[\s\S]*?\n\}\);/);
+  // The registration sits inside a `typeof process.on === 'function'` guard so
+  // the hibernation vm fixtures (which slice this region into a sandbox whose
+  // `process` stub lacks `.on`) can load the section; allow the indented block.
+  const handler = mainSource.match(/process\.on\('uncaughtException',[\s\S]*?\n\s*\}\);/);
   assert.ok(handler, 'the handler must be a single block');
   assert.match(handler[0], /edgeAutoHide\.handleUncaught\(err\)/, 'the handler must forward to the controller');
   const handlerCode = stripComments(handler[0]);

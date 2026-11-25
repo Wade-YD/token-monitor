@@ -7927,9 +7927,13 @@ function resumeScreenUi() {
 // because the error is written to disk rather than discarded, so it stays
 // diagnosable. Tweening is additionally disabled for the session, since an
 // animation frame we could not trust is worse than no animation.
-process.on('uncaughtException', (err) => {
-  edgeAutoHide.handleUncaught(err);
-});
+// Guarded: the hibernation vm fixtures slice this region and hand the sandbox a
+// `process` stub without `.on`. Electron itself always provides it.
+if (typeof process.on === 'function') {
+  process.on('uncaughtException', (err) => {
+    edgeAutoHide.handleUncaught(err);
+  });
+}
 
 app.whenReady().then(() => {
   ensureSettingsLoaded();

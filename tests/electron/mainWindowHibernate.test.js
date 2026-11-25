@@ -91,6 +91,11 @@ function fixture(platform = 'linux') {
     suspendWindowMaximized() {}, setWindowMaximizable() {},
     ensureEdgeDockController: () => edgeDockController,
     ensureNotchController: () => notchController,
+    // The edge auto-hide state machine lives in src/electron/edgeAutoHideController.js
+    // in this fork; createMainWindow only resets its geometry flag and attaches
+    // the window, so a plain stub covers the sliced call sites.
+    edgeAutoHideState: { geometryReady: false },
+    edgeAutoHide: { attachWindow() {}, handleUncaught() {} },
     canUseEdgeDock: () => true, edgeDockAppearance() {}, edgeDockStats() {}, scheduleSessionExpiry() {},
     syncPluginQuotaSurfaceDemand() {}, dockAppearancePreview: null,
     ipcMain: new EventEmitter(),
