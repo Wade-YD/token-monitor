@@ -1359,3 +1359,56 @@ token-monitor 贴边自动隐藏补丁 — 说明与回退
   待办：①上游 issue：enc:v2 兼容（keyring 读取）+ v2 下重复账号；②用户侧缓解=删
   config.json 里 disabled 的 start-plan mirror key（需用户同意改 ZCode 配置）；
   ③不采纳「按窗口值/同 config family 合并」= Oracle 判 P0 风险。
+
+【升级记录（2026-11-27，v0.97.0 → v0.99.0，round 21，36 上游提交跨 v0.98.0/v0.99.0）】
+  1) 安装包 SHA cdd7557c… MATCH，v0.99.0。跨两版本 36 上游提交（v0.98.0 23 + v0.99.0 13）。
+     v0.98.0 内容：**#1466 Home limits 全新 Default 布局 + 每窗口展示**、Home 中性调色板、
+     **#1644 Compact/Detailed 会话行切换**、**#1668 可自定义 usage range 按钮**、#1655/#1659/#1667
+     Yesterday 与跨设备 fixed-range 同步、#1658 Antigravity T3 Code ACP 发现、**#1444 Windows/Linux
+     换 chokidar 6**、#1665 vendor 更快的 Codex watch 扫描、#1666 WSL UTF-8 发行版发现、
+     #1651 单次 windowed tokscale 扫描读全 tick、#1645 重排设置保账号身份。
+     v0.99.0 内容：**#1688 无窗口聚焦时更早回收主进程堆**、**#1676 快速重启不产生重复主窗**、
+     #1689/#1693/#1695 Antigravity turn 状态与 ACP 会话、#1675 Kiro 会话分组、
+     #1683 本地 Codex Work 设置改名、#1681/#1682/#1685 T3 分组与 Hub 上传限长详情。
+     全量 diff 209 文件 +12,399/-1,320。
+  2) **冲突面预判准但只炸 3 处，全是 union 形状**（12 文件交集里 app.js/index.html/i18n.js/
+     sessionRows.js 被点名为高风险，实际 rebase 47 提交只在这 3 个文件停）：
+     ① src/electron/main.js:9738 区——上游 v0.98.0 新增 `ipcMain.handle('stats:fixedPeriod',
+        ...getSyncedFixedPeriod)` vs 我方 `dashboard:forceRefresh` → 两段并存（互不引用）；
+     ② src/electron/preload.js:50 区——`getSyncedFixedPeriod` vs `forceDashboardRefresh` → 两行并存；
+     ③ src/electron/renderer/app.js:8850 区 setRendererSettings 内——上游 `periodTabOrder` 恢复
+        （配合新模块 fixedPeriodRanges.js 的 slotForSelection/normalizeMonthMode）vs 我方
+        `state.sessionSort = next.sessionSortMode === 'tokens' ? 'tokens' : 'recent'` → 两段并存。
+     **rebase 分两阶段**：第一次 --continue 解完 main.js/preload.js 后继续到 44/47 又在 a71d6ef9
+     处炸 app.js，二次解冲突再 continue —— 正常行为非故障。最终 `Successfully rebased`，47 提交全重放。
+     验证：`grep -c '^<<<<<<<' src/` = 0；两侧符号各 1 次（dashboard:forceRefresh / stats:fixedPeriod）。
+  3) **我方 showLimitUsed（剩余口径）补丁全量存活**：上游 #1466 把 Home limits 整块重写，但 12+ 处
+     引用完好——main.js:793/850/894/4946/5687/8495、app.js:7533/7752/11630/17692/17714/17741、
+     notch/data.js:53。**#1466 没有打掉剩余/已用口径**，无需重做。
+     sessionSort 持久化三行也在：main.js:648（默认 recent）/2257（normalize）/8374（patch 归一化）。
+  4) **v0.99.0 pristine 基线新建**（此前最新是 v0.97.0，跨两版本直接用会产出假 NEW）。
+     建 worktree `../pristine-v0990` detached at 49831523 + 复制 node_modules（308 entries 省安装时间）。
+     全量 `node --test`：**38 红**。相对 v0.97.0 基线新增 4 条 = 'the Worker stream matches the Node
+     Hub freshness and coalescing behavior'、'the cursor poll speeds up in the approach zone...'、
+     'the handle grows through intermediate silhouettes...'（UI motion/silhouette 全量并发下失败）
+     + 整套 scripts\*.cjs(19) 与 site\test-docs.mjs（Electron/CDP 夹具本机不可用，pristine 与
+     patched 同样红）。'startCollector does not subtract a stale Dots view' 照例排除（单跑绿）。
+     写入 `upkit/baseline/tests-baseline-v0.99.0.json`。
+  5) **verify：0 NEW / 12 baseline-stable / 0 flaky-alone / 24 GONE**，exit 0。套件 11,832 用例
+     （11,763 pass / 12 fail，1m）。24 GONE 是**范围差异不是修复**——verify.sh 只跑
+     `tests/**/*.test.js`，不跑 `scripts/` + `site/`，那 24 条正是基线里收录的脚本夹具名。
+     全量测试期间唯一 NEW = 'an urgent account queues behind a different account on the same lane'
+     （limitsRuntime.test.js:1263，`actual:['b']` vs `expected:[]`），**单跑 `node --test
+     tests/shared/limitsRuntime.test.js` 54/54 全绿 → flaky，非回归**。
+  6) **pack 成功**：asar **25,788,615 B**、unpacked 2 native、post-install 断言 **16/16**
+     （`{"version":"0.99.0","ours":"16/16","upstreamMissing":[],"failed":0}`）。CDP try 1 就绪。
+  7) **三探针全 ok**（本轮没踩 round 20 的 poll-未-arm 坑）：
+     health = `{"edgeX":457,"vis":"visible","memory":{today:127,846,541/month:4,464,993,162/
+     allTime:10,475,610,124},"tokscale":{"version":"4.23.1"},"dom":{"total":"127,846,541","rows":8},
+     "problems":[],"verdict":"ok"}` —— **DOM 与内存逐位一致**；
+     panel = `{"structure":{"panels":1,"hero":"570,833,277","badge":"ok","kpis":4,"bars":14,
+     "models":4,"sessions":5,"titledSessions":5,"segActive":"month","headerActionsButton":true},
+     "problems":[],"verdict":"ok"}`；
+     shot = 97,189 B PNG，目检**中文无方块、文字无溢出、进度条不压字、无白屏**，
+     上游 #1466 Home 重设计后布局完好。
+  8) 交付：rebase 后 HEAD = c1a911c3（zai profile identity）。feat/edge-auto-hide + master 双推。
